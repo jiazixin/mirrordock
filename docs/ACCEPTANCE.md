@@ -494,3 +494,33 @@ OCR 沿用项目已记录的外部审批限制，使用 `open-code-review` / `op
 OCR 沿用项目已经记录的外部 LLM 自动审批限制，使用 `open-code-review` / `open-code-review-delegate` 本地 preview/rule，由当前 Codex 逐文件审查；本轮未调用外部 OCR LLM、未发送源码。全部 **13/13 新增或修改源码**（9 个生产文件、4 个测试）及 4 份文档核对，总计 **17/17、跳过 0、覆盖 100%**。OCR 的 4 个 `default_path` 测试排除项已补充审查，4 个 `unsupported_ext` 文档另行核对。审查聚合与窗口一致性、结果口径、SQL 参数化、只读池/事务与关闭、上下文超时、凭证投影、路由鉴权、Vue 文本转义/请求竞态/卸载、SVG 轴/手机可读性、测试隔离。已修复午夜小数秒边界、分析占用写连接和手机坐标过小，无遗留确认的高/中严重度正确性、安全或性能问题。清单、规则、覆盖与最终 SHA256 见 [preview](../test-results/analytics-ocr-preview.json)、[rules](../test-results/analytics-ocr-rules.json)、[审查报告](../test-results/analytics-ocr-review.json)。
 
 未验证：Linux 实机/sendfile syscall、真实发行版同步/签名验收、生产吞吐、真实 GitHub/代理历史数据、Safari/Firefox，以及用户部署服务重启后的显示。本轮未执行新下载性能基准；没有修改用户配置/镜像/凭证，未创建子代理、推送、发布或发送外部消息。
+
+
+## 2026-10-01：Release分析名称精简
+
+本轮开始工作区干净。按用户要求将侧栏、页面标题和路由标题统一为“Release分析”，同步 README 与既有分析 E2E 断言；路由仍为 `/admin/analytics/github`，API 类型和统计口径未改。Reposync 分析本轮仅评估，尚未新增：现有运行事实支持次数、成功率、累计耗时、失败原因和重试指标，但 DNF 输出处理尚无可靠的包数、复用量或字节统计，后续实现不能将缺失值当作已测量的零。
+
+使用 `open-code-review` / `open-code-review-delegate` 本地流程，沿用此前已记录的外部 OCR 审批限制；本轮未执行外部 LLM、未发送源码。`ocr delegate preview --format json --background ...` 覆盖 3 个生产源码，`ocr delegate rule` 解析规则；默认排除的 E2E（default_path）另行按规则审查，README 和本节验收记录（unsupported_ext）另行核对。当前 Codex 审查全部 **4/4 修改源码、2/2 文档，跳过 0，覆盖 100%**：核对三个显示入口的一致性、原路径/API 保留、Vue 文本转义、既有页面切换与窄屏断言；未发现本次改动引入的正确性、安全性或性能问题。清单、排除原因及规则见 [preview](../test-results/release-label-ocr-preview.json)、[rules](../test-results/release-label-ocr-rules.json)、[审查报告](../test-results/release-label-ocr-review.json)。
+
+审查后检查：`npm --prefix web run build` 类型检查/Vite 构建通过（[日志](../test-results/release-label-build.txt)）；Go 1.27.1 darwin/arm64 在 Web 预构建后，`GOCACHE="$PWD/.cache/go-build" go build -trimpath -o /private/tmp/mirrordock-release-label ./cmd/mirrordock` 通过（[日志](../test-results/release-label-go-build.txt)）。`MIRRORDOCK_TEST_BINARY=/private/tmp/mirrordock-release-label npm --prefix web run test:e2e -- analytics.spec.ts --output=test-results/release-label-final` **1 passed（4.4s）**（[日志](../test-results/release-label-e2e-final.txt)），覆盖新导航/标题、图表、筛选、请求竞态、空/错误状态及 1024/736/375/320px 无整页横向溢出。首次 Chromium 因沙箱 MachPort 权限启动失败，测试未执行（[初次日志](../test-results/release-label-e2e.txt)），经自动审批允许隔离 Chromium 和随机本机端口后重跑通过；不把首次失败计为通过。`git diff --check` 通过。
+
+性能数据仅为构建大小：CSS 47.30 kB / gzip 9.96 kB，JS 211.16 kB / gzip 75.81 kB；本轮未测运行时性能、Linux/sendfile 或实际发行版同步。未运行无关的全量 Go 测试、Safari/Firefox 或用户部署服务重启检查。测试仅用临时配置/数据/镜像目录与合成聚合数据；未修改用户配置、镜像或凭证，未重启用户服务、创建子代理、推送或发布。
+
+
+## 2026-10-01：Reposync分析
+
+承接上轮尚未提交的 Release分析改名，在侧栏新增“Reposync分析”（`/admin/analytics/reposync`）。沿用 7/30/90 天、同步源筛选、手动刷新、运行次数/成功率/平均累计耗时、次数与耗时趋势、结果环图、失败原因和前 20 源排行。第四张卡展示自动重试任务；“执行与重试”展示执行/失败尝试及重试任务；排行增加自动重试任务数。处理量趋势、包数、复用量、字节和备用源成功指标不在 Reposync 页面展示，未知统计不推算；通用响应字段不作为该类型可用的传输度量。
+
+后端仅扩展 API 与 Analyze 的类型校验，复用现有参数化 SQL、独立只读连接、WAL 一致事务、5 秒请求超时和结果边界。按任务创建日期归入程序启动时区；成功率排除取消和未结束，耗时排除排队/暂停；重试任务多次重试仍计一次。没有更改 YAML、数据库结构、同步执行器、公开下载热路径或轮询。
+
+审查使用 `open-code-review` / `open-code-review-delegate` 本地 preview/rule 流程，沿用项目已记录的外部 OCR 审批限制，本轮未执行外部 LLM、未发送源码。当前 Codex 逐文件审查全部 **9/9 修改源码**（6 生产、3 测试）及 **5/5 文档**，合计 **14/14，跳过 0，覆盖 100%**，包含上轮改名。OCR 默认排除的 3 个测试（default_path）补充按解析规则审查，5 项 Markdown（unsupported_ext）另行核对。检查类型白名单/参数化、鉴权与超时、类型/源/窗口隔离、统计口径、指标隐藏与跨类型重置、过期请求保护、Vue 文本转义及测试隔离；未发现遗留的高/中严重度正确性、安全或性能问题。清单、排除原因、规则及 SHA256 见 [preview](../test-results/reposync-analytics-ocr-preview.json)、[rules](../test-results/reposync-analytics-ocr-rules.json)、[审查报告](../test-results/reposync-analytics-ocr-review.json)。
+
+审查后验证：
+
+- `npm --prefix web run build`：Vue 类型检查与 Vite 生产构建通过（[日志](../test-results/reposync-analytics-build.txt)），唯一输出 `web/dist/`。
+- Go **1.27.1 darwin/arm64**，已读取 Modern Go Guidelines 1.27 全部版本指南；新增 JSON 测试使用 `encoding/json/v2`、查询使用 `t.Context()`。Web 预构建后，`GOCACHE="$PWD/.cache/go-build" go test -race ./internal/runs ./internal/app -run Analytics` 通过，runs 3.903s、app 7.306s（[日志](../test-results/reposync-analytics-go-race.txt)）；`go vet ./internal/runs ./internal/app` 通过（[日志](../test-results/reposync-analytics-vet.txt)）；临时二进制 `/private/tmp/mirrordock-reposync-analytics` 和 `bin/mirrordock` 的嵌入构建通过（[临时构建](../test-results/reposync-analytics-go-build.txt)、[本机构建](../test-results/reposync-analytics-bin-build.txt)）。未重启用户服务。
+- 新 Go 测试使用临时 SQLite，验证三种类型混合时隔离、7 个运行状态的成功率/耗时分母、重试任务去重、暂停/取消/中断尝试排除、日汇总、源筛选与历史名称、过旧/未来记录排除；API 验证 Reposync 未登录 401、未知类型 400、带筛选的历史响应。
+- `MIRRORDOCK_TEST_BINARY=/private/tmp/mirrordock-reposync-analytics npm --prefix web run test:e2e -- analytics.spec.ts --output=test-results/reposync-analytics`：**1 passed（4.8s）**（[日志](../test-results/reposync-analytics-e2e.txt)）。沿用已获准的隔离 Chromium/随机本机端口；验证真实临时服务的 Reposync 空响应、三页导航/图表回归、源选项类型隔离、筛选请求竞态、从处理量切换至 Reposync 时重置、传输/备用源指标隐藏、错误重试、1024/736/375/320px 无整页横向溢出。图表为拦截 API 后的合成数据（故意包含非零传输字段确认不会误展示），不是真实 DNF 同步验收。
+- 已查看最终 [桌面](../web/test-results/reposync-analytics/analytics-analytics-charts-c67ff-pty-error-and-mobile-states/reposync-desktop.png) 和 [320px 手机](../web/test-results/reposync-analytics/analytics-analytics-charts-c67ff-pty-error-and-mobile-states/reposync-320.png) 截图。`git diff --check` 通过。
+
+性能数据只有构建大小：CSS **47.30 kB / gzip 9.97 kB**，JS **212.88 kB / gzip 76.22 kB**；未新增依赖或轮询，未运行新的运行时性能基准。Linux DNF/实际发行版/签名、生产历史查询时延、sendfile/下载吞吐、Safari/Firefox 与部署服务重启后的页面未验证；无关全量 Go/E2E 未重跑。测试只使用临时配置、数据库、镜像目录和合成记录，没有启动完整发行版同步或修改用户镜像/凭证；未创建子代理、推送、发布或发送外部消息。

@@ -66,13 +66,67 @@ func TestAnalyticsCompleteHistoryAndSemantics(t *testing.T) {
 	if err != nil || empty.Summary.Runs != 0 || len(empty.Days) != 90 || empty.Sources == nil || empty.Errors == nil {
 		t.Fatal(empty, err)
 	}
-	for _, kind := range []string{"reposync", ""} {
+	for _, kind := range []string{"unknown", ""} {
 		if _, err := Analyze(t.Context(), store, kind, "", 7, now, loc); err == nil {
 			t.Fatal("invalid type accepted")
 		}
 	}
 	if _, err := Analyze(t.Context(), store, "rsync", "", 100, now, loc); err == nil {
 		t.Fatal("invalid days accepted")
+	}
+}
+
+func TestAnalyticsReposyncFactsAndTypeIsolation(t *testing.T) {
+	store, err := database.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	loc := time.FixedZone("fixture/+08", 8*3600)
+	now := time.Date(2026, 10, 1, 12, 0, 0, 0, loc)
+	put := func(r Run) {
+		t.Helper()
+		if _, err := store.CreateRun(r.SourceID, r.State, r.CreatedAt.UTC().Format(time.RFC3339Nano), &r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, state := range []string{"succeeded", "failed", "timed_out", "interrupted", "cancelled", "paused", "queued"} {
+		r := Run{SourceID: "repo", Name: "RPM 历史源", Type: "reposync", State: state, CreatedAt: now.Add(-time.Hour), ElapsedSeconds: 10}
+		if state != "queued" {
+			r.StartedAt = r.CreatedAt
+		}
+		switch state {
+		case "succeeded":
+			r.RetryCount = 2
+			r.Attempts = []Attempt{{ErrorCode: "UPSTREAM_ERROR"}, {ErrorCode: "UPSTREAM_ERROR"}, {}}
+		case "failed", "timed_out":
+			r.ErrorCode = "TASK_TIMEOUT"
+			r.Attempts = []Attempt{{ErrorCode: "TASK_TIMEOUT"}}
+		case "interrupted", "cancelled", "paused":
+			r.Attempts = []Attempt{{ErrorCode: strings.ToUpper(state)}}
+		}
+		put(r)
+	}
+	put(Run{SourceID: "other-repo", Name: "另一 RPM 源", Type: "reposync", State: "succeeded", CreatedAt: now.AddDate(0, 0, -1), StartedAt: now.AddDate(0, 0, -1), ElapsedSeconds: 20})
+	for _, kind := range []string{"rsync", "github_release"} {
+		put(Run{SourceID: "repo", Type: kind, State: "succeeded", CreatedAt: now})
+	}
+	put(Run{SourceID: "old", Type: "reposync", State: "succeeded", CreatedAt: now.AddDate(0, 0, -7)})
+	put(Run{SourceID: "future", Type: "reposync", State: "succeeded", CreatedAt: now.Add(time.Nanosecond)})
+	a, err := Analyze(t.Context(), store, "reposync", "", 7, now, loc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := a.Summary
+	if a.Type != "reposync" || s.Runs != 8 || s.Succeeded != 2 || s.Failed != 3 || s.Cancelled != 1 || s.Active != 2 || s.DurationSamples != 5 || s.ElapsedSeconds != 60 || s.RetriedRuns != 1 || s.Attempts != 8 || s.FailedAttempts != 4 {
+		t.Fatalf("reposync summary: %+v", a)
+	}
+	if len(a.Sources) != 2 || a.Sources[0].Name != "RPM 历史源" || len(a.Errors) != 2 || a.Errors[0].Code != "TASK_TIMEOUT" || a.Errors[0].Count != 2 || a.Days[5].Runs != 1 || a.Days[6].Runs != 7 {
+		t.Fatalf("reposync days/ranking/errors: %+v", a)
+	}
+	filtered, err := Analyze(t.Context(), store, "reposync", "repo", 7, now, loc)
+	if err != nil || filtered.Summary.Runs != 7 || filtered.Summary.ElapsedSeconds != 40 || len(filtered.Sources) != 1 {
+		t.Fatal(filtered, err)
 	}
 }
 func TestAnalyticsDSTAndBoundedRanking(t *testing.T) {

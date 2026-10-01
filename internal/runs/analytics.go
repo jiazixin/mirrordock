@@ -97,7 +97,7 @@ func (s *AnalyticsStats) add(v AnalyticsStats) {
 // Analyze includes every run created in the window. Retained Go memory is bounded by days
 // and the ranked SQL result limits; no run blobs or logs are retained in Go.
 func Analyze(ctx context.Context, store *database.Store, kind, source string, days int, now time.Time, location *time.Location) (*Analytics, error) {
-	if (kind != "rsync" && kind != "github_release") || (days != 7 && days != 30 && days != 90) {
+	if (kind != "rsync" && kind != "reposync" && kind != "github_release") || (days != 7 && days != 30 && days != 90) {
 		return nil, fmt.Errorf("无效分析范围")
 	}
 	local := now.In(location)

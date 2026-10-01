@@ -21,6 +21,6 @@ export interface AnalyticsStats {
 export interface AnalyticsDay extends AnalyticsStats { date: string }
 export interface AnalyticsSource extends AnalyticsStats { id: string; name: string }
 export interface Analytics {
-  type: 'rsync' | 'github_release'; from: string; until: string; timezone: string
+  type: SourceType; from: string; until: string; timezone: string
   summary: AnalyticsStats; days: AnalyticsDay[]; sources: AnalyticsSource[]; errors: { code: string; count: number }[]
 }

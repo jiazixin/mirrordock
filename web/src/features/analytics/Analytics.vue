@@ -6,13 +6,21 @@ import TrendChart from './TrendChart.vue'
 import { api } from '../../app/api'
 import { state } from '../../app/state'
 import { bytes, duration, time } from '../../app/format'
-import type { Analytics, AnalyticsStats } from '../../app/types'
-const props = defineProps<{ kind: 'rsync' | 'github_release' }>()
+import type { Analytics, AnalyticsStats, SourceType } from '../../app/types'
+const props = defineProps<{ kind: SourceType }>()
 const days = ref('30'), source = ref(''), metric = ref<'runs' | 'bytes' | 'duration'>('runs')
 const data = ref<Analytics | null>(null), loading = ref(false), error = ref('')
 let controller: AbortController | undefined, requestID = 0
 const github = computed(() => props.kind === 'github_release')
-const title = computed(() => github.value ? 'GitHub Release 分析' : 'Rsync 分析')
+const reposync = computed(() => props.kind === 'reposync')
+const kindInfo = computed(() => ({
+  rsync: { title: 'Rsync 分析', insight: '来源可靠性', icon: GitBranch },
+  reposync: { title: 'Reposync分析', insight: '执行与重试', icon: RefreshCw },
+  github_release: { title: 'Release分析', insight: '资产完成与复用', icon: ArrowDownToLine }
+})[props.kind])
+const trendMetrics = computed(() => reposync.value
+  ? [{ key: 'runs', label: '次数' }, { key: 'duration', label: '耗时' }] as const
+  : [{ key: 'runs', label: '次数' }, { key: 'bytes', label: '处理量' }, { key: 'duration', label: '耗时' }] as const)
 const sourceOptions = computed(() => {
   const names = new Map<string, string>()
   for (const item of data.value?.sources ?? []) names.set(item.id, item.name)
@@ -48,7 +56,7 @@ onBeforeUnmount(() => { ++requestID; controller?.abort() })
 </script>
 <template>
   <section class="analytics-page">
-    <header class="page-heading"><h1>{{title}}<span>.</span></h1><button class="button" :disabled="loading" @click="load"><RefreshCw :size="15" :class="{spinning:loading}"/>刷新</button></header>
+    <header class="page-heading"><h1>{{kindInfo.title}}<span>.</span></h1><button class="button" :disabled="loading" @click="load"><RefreshCw :size="15" :class="{spinning:loading}"/>刷新</button></header>
     <div class="analytics-filters">
       <SelectField v-model="days" aria-label="分析时间范围" :options="[{value:'7',label:'近 7 天'},{value:'30',label:'近 30 天'},{value:'90',label:'近 90 天'}]"/>
       <SelectField v-model="source" aria-label="分析同步源" :options="sourceOptions"/>
@@ -61,25 +69,27 @@ onBeforeUnmount(() => { ++requestID; controller?.abort() })
         <article><span>运行次数</span><Activity :size="18"/><strong>{{data.summary.runs.toLocaleString()}}</strong><small>{{data.summary.active}} 次未结束 · {{data.summary.cancelled}} 次取消</small></article>
         <article><span>运行成功率</span><CheckCircle2 :size="18"/><strong>{{rate(data.summary)}}</strong><small>{{data.summary.succeeded}} 成功 / {{evaluated(data.summary)}} 次有效结果</small></article>
         <article><span>平均执行耗时</span><Clock3 :size="18"/><strong>{{average(data.summary)}}</strong><small>{{data.summary.duration_samples}} 个样本 · 不含排队与暂停</small></article>
-        <article><span>成功任务处理量</span><ArrowDownToLine :size="18"/><strong class="bytes-stat">{{bytes(data.summary.bytes)}}</strong><small>{{github?'包含复用资产的有效字节':'rsync 报告的处理字节'}}</small></article>
+        <article v-if="reposync"><span>自动重试任务</span><RefreshCw :size="18"/><strong>{{data.summary.retried_runs.toLocaleString()}}</strong><small>期间发生过自动重试的任务数</small></article>
+        <article v-else><span>成功任务处理量</span><ArrowDownToLine :size="18"/><strong class="bytes-stat">{{bytes(data.summary.bytes)}}</strong><small>{{github?'包含复用资产的有效字节':'rsync 报告的处理字节'}}</small></article>
       </div>
       <div v-if="!data.summary.runs" class="analytics-empty"><ChartColumn :size="28"/><div><h3>这段时间暂无运行记录</h3><p>同步任务产生记录后，趋势和结果会显示在这里。可调整时间范围或同步源。</p></div><RouterLink class="button" to="/sources">查看同步源</RouterLink></div>
       <div class="analytics-grid">
         <article class="panel trend-panel">
-          <div class="analytics-panel-heading"><div><h3>运行趋势</h3><small>{{data.days[0]?.date}} — {{data.days.at(-1)?.date}}</small></div><div class="chart-tabs" role="group" aria-label="趋势指标"><button v-for="item in [{key:'runs',label:'次数'},{key:'bytes',label:'处理量'},{key:'duration',label:'耗时'}] as const" :key="item.key" :aria-pressed="metric===item.key" @click="metric=item.key">{{item.label}}</button></div></div>
+          <div class="analytics-panel-heading"><div><h3>运行趋势</h3><small>{{data.days[0]?.date}} — {{data.days.at(-1)?.date}}</small></div><div class="chart-tabs" role="group" aria-label="趋势指标"><button v-for="item in trendMetrics" :key="item.key" :aria-pressed="metric===item.key" @click="metric=item.key">{{item.label}}</button></div></div>
           <TrendChart :days="data.days" :metric="metric"/>
           <div v-if="metric==='runs'" class="chart-legend"><span v-for="part in resultParts" :key="part.label"><i :style="{background:part.color}"/>{{part.label}}</span></div>
           <p v-else class="chart-footnote">{{metric==='bytes'?'仅汇总成功任务的执行器字节快照，不代表实际网络流量。':'成功、失败、超时和中断任务的累计执行时间均值；无样本日期以 0 绘制。'}}</p>
         </article>
         <article class="panel result-panel"><div class="analytics-panel-heading"><h3>运行结果</h3><small>全部 {{data.summary.runs}} 次</small></div><div class="result-content"><div class="result-ring" :class="{empty:!data.summary.runs}" :style="data.summary.runs?{background:ring}:{}" role="img" :aria-label="resultParts.map(p=>`${p.label} ${p.count} 次`).join('，')"><div><strong>{{rate(data.summary)}}</strong><small>成功率</small></div></div><div class="result-legend"><div v-for="part in resultParts" :key="part.label"><i :style="{background:part.color}"/><span>{{part.label}}</span><strong>{{part.count}}</strong></div></div></div><p class="chart-footnote">成功率 = 成功 ÷（成功 + 失败 + 超时 + 中断）。取消及未结束任务不计入。</p></article>
-        <article class="panel insight-panel"><div class="analytics-panel-heading"><h3>{{github?'资产完成与复用':'来源可靠性'}}</h3><component :is="github?ArrowDownToLine:GitBranch" :size="18"/></div>
+        <article class="panel insight-panel"><div class="analytics-panel-heading"><h3>{{kindInfo.insight}}</h3><component :is="kindInfo.icon" :size="18"/></div>
           <template v-if="github"><div class="insight-total"><strong>{{data.summary.completed.toLocaleString()}}</strong><span>成功任务中已验证资产</span></div><div class="asset-track" role="img" :aria-label="`新增或续传 ${data.summary.completed-data.summary.reused} 项，完整复用 ${data.summary.reused} 项`"><span :style="{width:`${data.summary.completed?100*(data.summary.completed-data.summary.reused)/data.summary.completed:0}%`}"/><span :style="{width:`${data.summary.completed?100*data.summary.reused/data.summary.completed:0}%`}"/></div><div class="asset-labels"><span><i/>新增 / 续传 <strong>{{data.summary.completed-data.summary.reused}}</strong></span><span><i/>完整复用 <strong>{{data.summary.reused}}</strong></span></div><div class="insight-divider asset-retries"><span>发生自动重试的任务</span><strong>{{data.summary.retried_runs}} 次</strong></div><p class="chart-footnote">按运行累计，同一资产可在不同任务中重复计入；复用为已验证资产的子集，不推算节省流量。</p></template>
+          <template v-else-if="reposync"><div class="reliability-stats"><div><strong>{{data.summary.attempts}}</strong><span>执行尝试</span></div><div><strong>{{data.summary.failed_attempts}}</strong><span>失败尝试</span></div><div><strong>{{data.summary.retried_runs}}</strong><span>自动重试任务</span></div></div><p class="chart-footnote">尝试包含暂停后继续；失败尝试排除主动暂停、取消及服务中断。重试任务按任务计数，多次重试只计一次。</p></template>
           <template v-else><div class="reliability-stats"><div><strong>{{data.summary.attempts}}</strong><span>来源尝试</span></div><div><strong>{{data.summary.failed_attempts}}</strong><span>失败尝试</span></div><div><strong>{{data.summary.fallback_succeeded}}</strong><span>备用源成功任务</span></div></div><div class="insight-divider"><span>发生自动重试的任务</span><strong>{{data.summary.retried_runs}} 次</strong></div><p class="chart-footnote">尝试包含暂停后继续；失败尝试排除主动暂停、取消及服务中断。备用源成功指最终通过非首个来源完成的任务。</p></template>
         </article>
         <article class="panel errors-panel"><div class="analytics-panel-heading"><h3>失败原因</h3><small>按任务错误码 · 前 8 项</small></div><div v-if="!data.errors.length" class="chart-empty"><CheckCircle2 :size="23"/><span>当前范围没有失败记录</span></div><div v-else class="error-bars"><div v-for="item in data.errors" :key="item.code"><div><code>{{item.code}}</code><strong>{{item.count}} 次</strong></div><div class="error-track"><span :style="{width:`${100*item.count/largestError}%`}"/></div></div></div></article>
       </div>
-      <article class="panel source-ranking"><div class="analytics-panel-heading"><h3>同步源运行排行</h3><small>按运行次数 · 前 20 项</small></div><div class="table-scroll"><table><thead><tr><th class="text-left">同步源</th><th>运行次数</th><th>成功率</th><th>平均耗时</th><th>成功任务处理量</th><th>{{github?'已验证 / 复用资产':'传输文件数'}}</th></tr></thead><tbody><tr v-for="item in data.sources" :key="item.id"><td class="text-left"><strong>{{item.name}}</strong><small>{{item.id}}</small></td><td><div class="ranking-count"><strong>{{item.runs}}</strong><div><span :style="{width:`${100*item.runs/largestSource}%`}"/></div></div></td><td>{{rate(item)}}</td><td>{{average(item)}}</td><td>{{bytes(item.bytes)}}</td><td>{{item.completed.toLocaleString()}}<template v-if="github"> / {{item.reused.toLocaleString()}}</template></td></tr><tr v-if="!data.sources.length"><td colspan="6" class="ranking-empty">暂无同步源运行数据</td></tr></tbody></table></div></article>
-      <p class="analytics-note">按任务创建日期归入程序时区 {{data.timezone}}，范围含今天截至更新时间。历史源以运行记录保留；清理原始日志不会影响分析。文件与字节仅累计成功任务的最终快照，未知统计不推算，{{github?'资产数量':'传输文件数'}}为执行器报告值。</p>
+      <article class="panel source-ranking"><div class="analytics-panel-heading"><h3>同步源运行排行</h3><small>按运行次数 · 前 20 项</small></div><div class="table-scroll"><table><thead><tr><th class="text-left">同步源</th><th>运行次数</th><th>成功率</th><th>平均耗时</th><th v-if="reposync">自动重试任务</th><th v-if="!reposync">成功任务处理量</th><th v-if="!reposync">{{github?'已验证 / 复用资产':'传输文件数'}}</th></tr></thead><tbody><tr v-for="item in data.sources" :key="item.id"><td class="text-left"><strong>{{item.name}}</strong><small>{{item.id}}</small></td><td><div class="ranking-count"><strong>{{item.runs}}</strong><div><span :style="{width:`${100*item.runs/largestSource}%`}"/></div></div></td><td>{{rate(item)}}</td><td>{{average(item)}}</td><td v-if="reposync">{{item.retried_runs}}</td><td v-if="!reposync">{{bytes(item.bytes)}}</td><td v-if="!reposync">{{item.completed.toLocaleString()}}<template v-if="github"> / {{item.reused.toLocaleString()}}</template></td></tr><tr v-if="!data.sources.length"><td :colspan="reposync?5:6" class="ranking-empty">暂无同步源运行数据</td></tr></tbody></table></div></article>
+      <p class="analytics-note">按任务创建日期归入程序时区 {{data.timezone}}，范围含今天截至更新时间。历史源以运行记录保留；清理原始日志不会影响分析。<template v-if="reposync">包数、复用量和传输字节尚无可靠统计，暂不展示。</template><template v-else>文件与字节仅累计成功任务的最终快照，未知统计不推算，{{github?'资产数量':'传输文件数'}}为执行器报告值。</template></p>
     </template>
   </section>
 </template>

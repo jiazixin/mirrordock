@@ -3,11 +3,13 @@ package app
 import (
 	"context"
 	"encoding/json/v2"
+	"mirrordock/internal/runs"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestAnalyticsAuthenticationValidationAndEmptyResponse(t *testing.T) {
@@ -37,7 +39,7 @@ func TestAnalyticsAuthenticationValidationAndEmptyResponse(t *testing.T) {
 	if w := request("/api/analytics?type=rsync", false); w.Code != 401 {
 		t.Fatal(w.Code)
 	}
-	for _, path := range []string{"/api/analytics", "/api/analytics?type=reposync", "/api/analytics?type=rsync&days=0", "/api/analytics?type=rsync&days=abc", "/api/analytics?type=github_release&days=8"} {
+	for _, path := range []string{"/api/analytics", "/api/analytics?type=unknown", "/api/analytics?type=rsync&days=0", "/api/analytics?type=rsync&days=abc", "/api/analytics?type=github_release&days=8"} {
 		if w := request(path, true); w.Code != 400 {
 			t.Fatal(path, w.Code)
 		}
@@ -50,6 +52,21 @@ func TestAnalyticsAuthenticationValidationAndEmptyResponse(t *testing.T) {
 		} `json:"summary"`
 	}
 	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &payload) != nil || len(payload.Days) != 30 || payload.Summary.Runs != 0 || w.Header().Get("Cache-Control") != "no-store" {
+		t.Fatal(w.Code, w.Body.String())
+	}
+	if w := request("/api/analytics?type=reposync", false); w.Code != 401 {
+		t.Fatal(w.Code)
+	}
+	now := time.Now().UTC()
+	for _, kind := range []string{"rsync", "reposync", "github_release"} {
+		r := runs.Run{SourceID: "fixture", Name: "fixture", Type: kind, State: "succeeded", CreatedAt: now, StartedAt: now, ElapsedSeconds: 5, RetryCount: 2}
+		if _, err := a.Store.CreateRun(r.SourceID, r.State, now.Format(time.RFC3339Nano), &r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	w = request("/api/analytics?type=reposync&days=7&source=fixture", true)
+	var repo runs.Analytics
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &repo) != nil || repo.Type != "reposync" || len(repo.Days) != 7 || repo.Summary.Runs != 1 || repo.Summary.RetriedRuns != 1 || repo.Summary.ElapsedSeconds != 5 {
 		t.Fatal(w.Code, w.Body.String())
 	}
 }

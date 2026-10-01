@@ -7,7 +7,7 @@ import net from 'node:net'
 import type { Analytics, AnalyticsDay, AnalyticsStats } from '../src/app/types'
 
 const stats = (): AnalyticsStats => ({ runs: 0, succeeded: 0, failed: 0, cancelled: 0, active: 0, duration_samples: 0, elapsed_seconds: 0, bytes: 0, files: 0, completed: 0, reused: 0, attempts: 0, failed_attempts: 0, retried_runs: 0, fallback_succeeded: 0 })
-function fixture(kind: 'rsync' | 'github_release', count: number, source: string): Analytics {
+function fixture(kind: Analytics['type'], count: number, source: string): Analytics {
   const days: AnalyticsDay[] = Array.from({ length: count }, (_, i) => {
     const date = new Date(Date.UTC(2026, 9, 1 - count + i + 1)).toISOString().slice(0, 10)
     const succeeded = (i * 7 + 3) % 12 + 1, failed = i % 5 === 0 ? 2 : 0
@@ -15,7 +15,12 @@ function fixture(kind: 'rsync' | 'github_release', count: number, source: string
   })
   const summary = stats()
   for (const day of days) for (const key of Object.keys(summary) as (keyof AnalyticsStats)[]) summary[key] += day[key]
-  return { type: kind, from: `${days[0]!.date}T00:00:00+08:00`, until: '2026-10-01T12:00:00+08:00', timezone: 'Asia/Shanghai', summary, days, sources: [{ ...summary, id: source || 'fixture', name: source === 'slow' ? '较慢的上游' : '镜像测试源' }], errors: [{ code: kind === 'rsync' ? 'SOURCE_EXHAUSTED' : 'GITHUB_RATE_LIMIT', count: summary.failed }] }
+  const info = {
+    rsync: { id: 'fixture', name: source === 'slow' ? '较慢的上游' : '镜像测试源', error: 'SOURCE_EXHAUSTED' },
+    reposync: { id: 'repo-fixture', name: source === 'repo-slow' ? '较慢的 RPM 源' : 'RPM 测试源', error: 'UPSTREAM_ERROR' },
+    github_release: { id: 'fixture', name: '镜像测试源', error: 'GITHUB_RATE_LIMIT' }
+  }[kind]
+  return { type: kind, from: `${days[0]!.date}T00:00:00+08:00`, until: '2026-10-01T12:00:00+08:00', timezone: 'Asia/Shanghai', summary, days, sources: [{ ...summary, id: source || info.id, name: info.name }], errors: [{ code: info.error, count: summary.failed }] }
 }
 
 test('analytics charts, filtering, request races, empty/error and mobile states', async ({ page, request }, testInfo) => {
@@ -34,11 +39,16 @@ test('analytics charts, filtering, request races, empty/error and mobile states'
     await page.getByRole('link', { name: 'Rsync 分析', exact: true }).click()
     await expect(page.getByText('这段时间暂无运行记录', { exact: true })).toBeVisible()
     await expect(page.locator('.result-ring strong')).toHaveText('—')
+    await page.getByRole('link', { name: 'Reposync分析', exact: true }).click()
+    await expect(page.getByRole('heading', { name: 'Reposync分析.' })).toBeVisible()
+    await expect(page.getByText('这段时间暂无运行记录', { exact: true })).toBeVisible()
+    await expect(page.getByRole('alert')).toHaveCount(0)
+    await page.getByRole('link', { name: 'Rsync 分析', exact: true }).click()
     let fail = false, delayed = false
-    await page.route('**/api/config', async route => { const res = await route.fetch(), json = await res.json(); json.config.sources = [{ id: 'fixture', name: '镜像测试源', type: 'rsync' }, { id: 'slow', name: '较慢的上游', type: 'rsync' }]; await route.fulfill({ json }) })
+    await page.route('**/api/config', async route => { const res = await route.fetch(), json = await res.json(); json.config.sources = [{ id: 'fixture', name: '镜像测试源', type: 'rsync' }, { id: 'slow', name: '较慢的上游', type: 'rsync' }, { id: 'repo-fixture', name: 'RPM 测试源', type: 'reposync' }, { id: 'repo-slow', name: '较慢的 RPM 源', type: 'reposync' }]; await route.fulfill({ json }) })
     await page.route('**/api/analytics?*', async route => {
       const q = new URL(route.request().url()).searchParams
-      if (delayed && q.get('source') === 'slow') await new Promise(resolve => setTimeout(resolve, 350))
+      if (delayed && q.get('source')?.endsWith('slow')) await new Promise(resolve => setTimeout(resolve, 350))
       await route.fulfill({ status: fail ? 503 : 200, json: fail ? { error: '分析暂时不可用，请稍后重试' } : fixture(q.get('type') as Analytics['type'], Number(q.get('days')), q.get('source') || '') })
     })
     // Restore session to load the synthetic source options through the same API.
@@ -61,8 +71,8 @@ test('analytics charts, filtering, request races, empty/error and mobile states'
     await source.click(); await page.getByRole('option', { name: '镜像测试源', exact: true }).click()
     await expect(page.locator('.source-ranking tbody')).toContainText('镜像测试源')
     await page.waitForTimeout(450); await expect(page.locator('.source-ranking tbody')).not.toContainText('较慢的上游')
-    await page.getByRole('link', { name: 'GitHub Release 分析', exact: true }).click()
-    await expect(page.getByRole('heading', { name: 'GitHub Release 分析.' })).toBeVisible()
+    await page.getByRole('link', { name: 'Release分析', exact: true }).click()
+    await expect(page.getByRole('heading', { name: 'Release分析.' })).toBeVisible()
     await expect(source).toContainText('全部同步源')
     const gh = fixture('github_release', 90, '').summary
     await expect(page.locator('.asset-labels')).toContainText(String(gh.reused))
@@ -74,6 +84,42 @@ test('analytics charts, filtering, request races, empty/error and mobile states'
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
       await expect(page.locator('.asset-labels')).toBeVisible()
       await page.screenshot({ path: testInfo.outputPath(`github-${width}.png`), fullPage: true, animations: 'disabled' })
+    }
+    await page.setViewportSize({ width: 1440, height: 1000 })
+    await page.getByRole('link', { name: 'Rsync 分析', exact: true }).click()
+    await page.getByRole('button', { name: '处理量', exact: true }).click()
+    await page.getByRole('link', { name: 'Reposync分析', exact: true }).click()
+    await expect(page).toHaveURL(`${base}/admin/analytics/reposync`)
+    await expect(page.getByRole('heading', { name: 'Reposync分析.' })).toBeVisible()
+    await expect(page.getByRole('button', { name: '次数', exact: true })).toHaveAttribute('aria-pressed', 'true')
+    await expect(page.getByRole('button', { name: '处理量', exact: true })).toHaveCount(0)
+    await expect(page.locator('.analytics-stats article').last()).toContainText('自动重试任务')
+    await expect(page.locator('.analytics-stats article').last().locator('strong')).toHaveText(String(fixture('reposync', 90, '').summary.retried_runs))
+    await expect(page.locator('.insight-panel')).toContainText('执行与重试')
+    await expect(page.locator('.insight-panel')).not.toContainText('备用源')
+    await expect(page.getByRole('columnheader', { name: '成功任务处理量', exact: true })).toHaveCount(0)
+    await expect(page.getByRole('columnheader', { name: '传输文件数', exact: true })).toHaveCount(0)
+    await expect(page.getByRole('columnheader', { name: '自动重试任务', exact: true })).toBeVisible()
+    await expect(page.locator('.analytics-note')).toContainText('尚无可靠统计')
+    await expect(source).toContainText('全部同步源')
+    await chooseDays('近 7 天'); await expect(page.locator('.chart-hit')).toHaveCount(7)
+    await source.click()
+    await expect(page.getByRole('option', { name: '镜像测试源', exact: true })).toHaveCount(0)
+    await expect(page.getByRole('option', { name: '较慢的上游', exact: true })).toHaveCount(0)
+    await page.getByRole('option', { name: '较慢的 RPM 源', exact: true }).click()
+    await source.click(); await page.getByRole('option', { name: 'RPM 测试源', exact: true }).click()
+    await page.waitForTimeout(450)
+    await expect(page.locator('.source-ranking tbody')).toContainText('RPM 测试源')
+    await expect(page.locator('.source-ranking tbody')).not.toContainText('较慢的 RPM 源')
+    await expect(page.locator('.error-bars')).toContainText('UPSTREAM_ERROR')
+    await page.getByRole('button', { name: '耗时', exact: true }).click()
+    await expect(page.locator('.trend-panel path')).toHaveCount(2)
+    await page.screenshot({ path: testInfo.outputPath('reposync-desktop.png'), fullPage: true, animations: 'disabled' })
+    for (const width of [1024, 736, 375, 320]) {
+      await page.setViewportSize({ width, height: 900 })
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+      await expect(page.locator('.insight-panel')).toBeVisible()
+      await page.screenshot({ path: testInfo.outputPath(`reposync-${width}.png`), fullPage: true, animations: 'disabled' })
     }
     fail = true; await page.getByRole('button', { name: '刷新', exact: true }).click()
     await expect(page.getByRole('alert')).toContainText('分析暂时不可用')

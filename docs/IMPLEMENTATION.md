@@ -49,3 +49,5 @@ GitHub 的 `settings.github.proxy` 使用 Go 原生 HTTP/HTTPS/SOCKS5 代理，A
 GitHub API 与下载网络失败使用固定诊断消息，区分 DNS、TLS 证书、连接拒绝、EOF、代理认证及 GitHub 401/403/404/限流，不回显底层 URL 或上游任意正文。扫描和查询状态、失败摘要写入任务原始日志，未新增逐块日志；取消保留 context sentinel，SDK 单次请求超时作为网络错误可重试，任务累计截止仍由原 context 控制，避免包装的签名 URL 泄露。认证 API 客户端禁止跨 origin 重定向，因为 SDK 的 auth transport 会对重定向重新附加 token；附件继续使用不含 token 的客户端。Token 校验拒绝空白与控制字符，不回显值。
 
 同步策略包含 `settings.retry_count`（默认额外 3 次，0 关闭，0–10）。runs 在同一工作目录重试，Rsync 先完成备用来源切换；GitHub 网络/临时 HTTP 错误与 Reposync 可识别的 curl/HTTP 错误可重试。计数和等待期限写入运行 JSON，暂停/重启后继续沿用；退避 5/10/20 秒、封顶 80 秒，共用任务 context 与累计预算。每次尝试保存独立日志，成功后才校验发布，重试不进入公开下载热路径。
+
+运行分析提供 Rsync、Reposync 与 Release 三页，共享 `internal/runs/analytics.go` 的参数化 SQLite 只读聚合和 `Analytics.vue`。Reposync 统计次数、成功率、累计耗时、失败原因、执行尝试及重试任务，排行只显示运行层面的指标。通用响应结构中的文件/字节字段对 reposync 不作为可用度量，页面隐藏处理量、包数及复用量；未新增 DNF 进度解析或自动重试行为。
