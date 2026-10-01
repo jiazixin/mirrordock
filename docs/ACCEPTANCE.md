@@ -376,3 +376,25 @@ OCR 首次 `ocr review --audience agent ... --output` 在解析 endpoint 阶段�
 使用 use-modern-go 完整 Go 1.27 指南。OCR 沿用项目此前外部调用被审批阻止后允许的本地 delegate preview/rule 工作流，由当前 Codex 按解析规则审查，未尝试外部 LLM 调用、未发送源码。本轮 7 个默认可审查源码均审查；默认排除的 Go 测试和 E2E（default_path）补充审查，README/DESIGN/本节（unsupported_ext）核对；共 **12/12 项、9/9 新增修改源码、跳过 0、覆盖 100%**。审查确认鉴权、固定下载边界、锁内打开/锁外流式传输、文件关闭、日志脱敏、Vue 文本转义、请求取消与轮询清理、有界读取/显示和 fixture 隔离；没有遗留确认的高/中严重度问题。清单、规则和结构化覆盖报告为 `../test-results/ocr-log-refresh-preview.json`、`ocr-log-refresh-rules.json`、`ocr-log-refresh-review.json`。源码审查后执行最终相关测试，文档结果不冒充外部 OCR 审查。
 
 性能与未验证项：2 MiB 读取/显示上限及上述 E2E 耗时为功能验收数据，不是生产吞吐基准。本轮未新增下载性能测量；Linux 实机/sendfile、生产负载、真实发行版同步、Firefox/Safari、实际部署重启后的显示与外部 OCR LLM 审查未执行。未修改用户配置、镜像或凭证，未创建子代理、推送、发布或发送外部消息。
+
+## 日志跟随、刷新状态与源编辑顺序 · 2026-10-01
+
+运行详情新增向下箭头，默认按下并持续跟随最新日志；点击暂停后追加日志保持阅读位置，再次点击立即回到底部。切换尝试保留跟随选择，重新打开默认开启。刷新按钮原来的鼠标悬停蓝色改为中性反馈，仅请求期间高亮、旋转及禁用，成功/失败后恢复；旧尝试的取消请求不会清除新尝试的读取状态。保留每 3 秒游标追加、2 MiB 页面上限、日志下载和轮询取消行为。源编辑将运行计划置于同步来源之前，字段和保存协议未变。
+
+勾选项三套设计保存为 `previews/source-options.html`：A 双列开关卡片、B 分组设置行、C 可选标签块，实际表单等待用户选择后再应用。预览使用本地模拟内容，开关可交互，保存按钮禁用，不调用 API。截图为 `../test-results/source-options.png` 及 `source-options-{a,b,c}.png`；已检查视觉布局、交互和 375px 无整页横向溢出。
+
+检查结果：Vue 类型检查/Vite 生产构建、Go 1.27.1 临时测试二进制构建、`git diff --check` 均通过。最终 Chromium 运行 `log-controls.spec.ts mirrordock.spec.ts`，**2 passed（24.1s）**；新增测试覆盖默认跟随、追加、暂停/恢复、成功/失败释放读取状态、持续悬停颜色、切换尝试、重新打开、320/375px 弹窗无横向溢出。现有全流程覆盖隔离 rsync 来源切换、发布、2 MiB 截断、完整日志下载、过期尝试响应隔离、关闭后停止轮询以及其他管理页面。所有配置、端口、上游及同步目录均隔离，测试二进制为 `/tmp/mirrordock-log-ui`。
+
+首次 Chromium 在文件系统沙箱内启动失败（MachPort 权限）；获准运行本机隔离浏览器后成功。首次新增测试使用了批次页的详情按钮名称，在记录页超时，修正为实际“查看记录详情”后通过；没有将这两次失败写成通过。没有修改 Go 源码，本次未重跑 Go 单元/竞态/静态检查、Linux 性能或真实发行版同步，不沿用旧结果宣称本次执行。用户当前服务、镜像和凭证未修改或重启，现有服务需使用新 Web 构建嵌入的二进制后重启生效。
+
+按此前外部 OCR 调用被审批阻止的项目决定，继续使用 `open-code-review-delegate` 本地 preview/rule，由当前 Codex 逐个审查。本次 4 个可审查文件覆盖 **4/4，跳过 0**：RunDetail.vue、SourceEditor.vue、global.css、预览 HTML；默认排除的新增 E2E 测试另行完整检查。复核请求取消、状态复位、DOM 更新后滚动、有界日志、表单绑定、预览隔离、减少动态效果及键盘焦点。审查移除了与现有 Modal 焦点循环不兼容的新增 pre tabindex，未遗留确认的高/中严重度问题。外部 LLM 调用未执行。清单、规则和摘要在 `../test-results/ocr-log-controls-preview.json`、`ocr-log-controls-rules.json`、`ocr-log-controls-review.json`，临时审查目录只包含这五个文件，不包含用户数据或凭证。
+
+## A 方案开关卡片落地 · 2026-10-01
+
+用户选定 A，并要求尽量不让一个选项占一整行。源编辑的运行计划两项、rsync 五项、reposync 四项统一使用领域内的 `OptionCard.vue`：浅底细边框、名称/说明、右下开关，整卡点击及空格键可切换。桌面保持两个等宽列，最后一张奇数卡片也只占半行；480px 以下单列。GitHub 类型只显示通用运行计划卡片。原字段、默认值、配置保存及 YAML 协议保持原样，运行计划仍位于同步来源之前。
+
+Vue 类型检查/Vite 生产构建、Go 1.27.1 临时二进制构建、`git diff --check` 通过。审查后执行隔离 Chromium 实际表单验证：全部开关数量正确、整卡文字点击/空格键切换、明确 false 保存到真实临时 YAML/API、重新打开回填 false、注释保留、桌面卡片均为半行宽度、736/480/375/320px 无弹窗或整页横向溢出、零页面脚本错误。测试没有启动任何同步或自动计划；保存的测试源关闭，后续类型切换只查看并取消。最终现有日志及完整隔离 rsync 流程 **2 passed（22.6s）**。实际界面截图在 `../test-results/source-option-cards.png`、`source-option-cards-desktop.png`、`source-option-cards-reposync.png`、`source-option-cards-mobile.png`；与前节历史方案预览区分。
+
+OCR 本地 delegate preview/rule 检查工作区全部可审查源码/预览 **5/5，跳过 0**，新增 OptionCard.vue、修改 SourceEditor.vue，连同上一轮未提交的 RunDetail.vue、global.css 和历史预览一并覆盖。默认排除的日志 E2E 测试另行检查。核对 boolean/null 默认值与 v-model、原生 checkbox 的 switch 语义和焦点、组件作用域、无整行跨度、窄屏、减少动态效果及强制色彩回退，没有遗留确认的高/中严重度问题。外部 OCR LLM 调用未执行，沿用前次被审批阻止后的本地审查方式。报告为 `../test-results/ocr-option-cards-preview.json`、`ocr-option-cards-rules.json`、`ocr-option-cards-review.json`。
+
+本次未修改 Go 源码，未运行 Go 全套单元/竞态/静态检查、Linux 性能或真实发行版同步；所有浏览器检查使用临时配置、数据目录及隔离端口。用户正在运行的程序、配置和镜像未修改或重启，现有服务换用新 Web 构建嵌入的二进制并重启后生效。

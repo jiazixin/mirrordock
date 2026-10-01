@@ -406,3 +406,11 @@ td strong,.source-name strong{font-size:14px;font-weight:600;color:#30343b}
 .filter-toolbar .sync-method-filter .select-field{width:100%}
 .log-toolbar .select-field{width:130px;padding:0}
 @media(max-width:480px){.filter-toolbar .sync-method-filter{flex:1;width:auto;min-width:150px}h1{font-size:28px}.filter-toolbar .select-field{flex:1;width:auto;min-width:110px}.brand strong{font-size:21px}.page-heading p{font-size:13px}.run-counters,.run-subtitle,.run-title .type-pill{font-size:12px}}
+
+/* Log actions: transient refresh state and a persistent follow toggle. */
+.log-refresh:hover{color:#747d88;background:#f3f5f8;border-color:#cbd3df}
+.log-refresh.is-loading{color:var(--blue);background:var(--blue-light);border-color:#c4d2fa;opacity:1}
+.log-refresh.is-loading svg{animation:log-refresh-spin 1s linear infinite}
+.log-follow[aria-pressed="true"]{color:var(--blue);background:var(--blue-light);border-color:#c4d2fa}
+@keyframes log-refresh-spin{to{transform:rotate(360deg)}}
+@media(prefers-reduced-motion:reduce){.log-refresh.is-loading svg{animation:none}}
