@@ -3,7 +3,7 @@ import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { CircleHelp, Save, Send, RotateCcw } from '@lucide/vue'
 import Pagination from '../../components/Pagination.vue'
 import { api } from '../../app/api'
-import { state } from '../../app/state'
+import { state, notify } from '../../app/state'
 import type { ConfigView } from '../../app/types'
 
 interface Channel { kind: string; enabled: boolean; only_failure: boolean; has_endpoint: boolean; has_token: boolean; has_secret: boolean; chat_id: string; ready: boolean }
@@ -20,7 +20,6 @@ const definitions = [
 const saved = ref<Record<string, Channel>>({})
 const drafts = ref<Record<string, Draft>>({})
 const busy = ref<Record<string, 'save' | 'test' | undefined>>({})
-const feedback = ref<Record<string, { error: boolean; text: string }>>({})
 const revision = ref('')
 const timezone = ref('UTC')
 const records = ref<DeliveryRecord[]>([])
@@ -66,7 +65,7 @@ async function refreshRecords() {
 }
 async function act(kind: string, operation: 'save' | 'test') {
   if (busy.value[kind]) return
-  busy.value[kind] = operation; delete feedback.value[kind]
+  busy.value[kind] = operation
   try {
     if (operation === 'save') {
       const result = await api<View>(`/notifications/${kind}`, 'PUT', { ...drafts.value[kind], revision: revision.value })
@@ -74,15 +73,15 @@ async function act(kind: string, operation: 'save' | 'test') {
         updateView(result)
         const channel = result.channels.find(item => item.kind === kind)!
         drafts.value[kind] = { enabled: channel.enabled, only_failure: channel.only_failure, endpoint: '', token: '', secret: '', chat_id: channel.chat_id, clear_secret: false }
-        feedback.value[kind] = { error: false, text: '设置已保存' }
+        notify(`${channelName(kind)}设置已保存`)
       }
       state.config = await api<ConfigView>('/config')
     } else {
       await api(`/notifications/${kind}/test`, 'POST')
-      if (!disposed) feedback.value[kind] = { error: false, text: '测试通知发送成功' }
+      if (!disposed) notify(`${channelName(kind)}测试通知发送成功`)
     }
     await refreshRecords()
-  } catch (e) { if (!disposed) feedback.value[kind] = { error: true, text: e instanceof Error ? e.message : '操作失败' } }
+  } catch (e) { if (!disposed) notify(`${channelName(kind)}：${e instanceof Error ? e.message : '操作失败'}`, 'error') }
   finally { delete busy.value[kind] }
 }
 const labels: Record<string, string> = { waiting: '等待发送', sending: '正在发送', sent: '已发送', failed: '发送失败', stopped: '已停止' }
@@ -127,7 +126,6 @@ onBeforeUnmount(() => { disposed = true; clearInterval(timer) })
         <label class="check"><input v-model="drafts[channel.kind]!.only_failure" type="checkbox" :disabled="!!busy[channel.kind]"/>仅失败时通知</label>
         <small>包含部分失败、失败、服务中断和含失败条目的任务；无失败的完成或取消不发送。留空的敏感字段保留已保存值。</small>
         <div class="channel-actions"><button class="button primary" :disabled="!!busy[channel.kind]" type="submit"><Save :size="16"/>{{ busy[channel.kind] === 'save' ? '保存中…' : '保存设置' }}</button><button class="button" :disabled="!!busy[channel.kind] || !saved[channel.kind]?.ready" type="button" @click="act(channel.kind, 'test')"><Send :size="16"/>{{ busy[channel.kind] === 'test' ? '发送中…' : '发送测试' }}</button></div>
-        <div v-if="feedback[channel.kind]" class="alert channel-feedback" :class="{ error: feedback[channel.kind]!.error }" :role="feedback[channel.kind]!.error ? 'alert' : 'status'">{{ feedback[channel.kind]!.text }}</div>
       </form>
     </article>
     <section class="notification-records">
@@ -142,7 +140,6 @@ onBeforeUnmount(() => { disposed = true; clearInterval(timer) })
 <style scoped>
 .notification-settings { display: flex; flex-direction: column; gap: 20px; }
 .notification-settings > .alert { background: var(--blue-light); border-color: #dce4fc; color: #53637c; margin-bottom: 0; }
-.channel-feedback:not(.error) { background: #edf8f3; border-color: #d2eadc; color: #238569; margin-bottom: 0; }
 .notification-intro h2, .records-heading h2 { font-size: 18px; }
 .notification-intro p, .timezone-note, .channel-description p { color: var(--muted); font-size: 13px; line-height: 1.8; }
 .notification-intro p { margin-top: 10px; }

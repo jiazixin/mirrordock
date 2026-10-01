@@ -87,7 +87,7 @@ func (m *Manager) sourceListingInfo(id string) SourceListingInfo {
 	return SourceListingInfo{}
 }
 
-func projectItem(item listingItem, p Publication, release *ReleaseSummary, info SourceListingInfo) listingItem {
+func projectItem(item listingItem, p Publication, info SourceListingInfo) listingItem {
 	item.Project = true
 	item.Status, item.StatusClass = "已发布", "neutral"
 	switch info.State {
@@ -110,10 +110,7 @@ func projectItem(item listingItem, p Publication, release *ReleaseSummary, info 
 	case "cancelled":
 		item.Status, item.StatusClass = "已取消", "neutral"
 	}
-	if release != nil {
-		item.Bytes, item.Size = release.Bytes, fileSize(release.Bytes)
-		info.Last = release.SyncedAt
-	} else if p.Current.Summary != nil {
+	if p.Current.Summary != nil {
 		item.Bytes, item.Size = p.Current.Summary.Bytes, fileSize(p.Current.Summary.Bytes)
 	}
 	now := time.Now()

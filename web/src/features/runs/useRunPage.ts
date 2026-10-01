@@ -1,6 +1,6 @@
 import { ref, watch, onBeforeUnmount, type Ref } from 'vue'
 import { api } from '../../app/api'
-import { state } from '../../app/state'
+import { state, notify } from '../../app/state'
 import type { Run } from '../../app/types'
 
 export function useRunPage(filters: { state: Ref<string>; source: Ref<string>; age: Ref<string>; trigger?: Ref<string> }) {
@@ -19,7 +19,7 @@ export function useRunPage(filters: { state: Ref<string>; source: Ref<string>; a
       const last = Math.max(1, Math.ceil(payload.total / pageSize.value))
       if (page.value > last) { page.value = last; return }
       records.value = payload.items
-    } catch (error) { if (request === revision) state.error = error instanceof Error ? error.message : String(error) }
+    } catch (error) { if (request === revision) notify(error instanceof Error ? error.message : String(error), 'error') }
     finally { if (request === revision) loading.value = false }
   }
   watch([...Object.values(filters), pageSize], () => { page.value = 1; records.value = []; total.value = 0 }, { flush: 'sync' })

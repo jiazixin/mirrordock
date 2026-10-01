@@ -170,7 +170,7 @@ test('public directory layout, icons, search, sorting, unpaginated and safe file
 })
 
 
-test('GitHub metadata belongs to release rows and uses actual project schedules', async ({ page, request, browser }, testInfo) => {
+test('GitHub project shows sync metadata and release rows show sizes', async ({ page, request, browser }, testInfo) => {
  const root = path.resolve(import.meta.dirname, '../..')
  const dir = await mkdtemp(path.join(tmpdir(), 'mirrordock-release-list-'))
  const port = await freePort()
@@ -210,17 +210,30 @@ sources:
  try {
   await expect.poll(async () => { try { return (await request.get(base + '/api/auth/status')).status() } catch { return 0 } }).toBe(200)
   await page.goto(base + '/github/')
-  await expect(page.locator('.project-table')).toHaveCount(0)
-  await page.getByRole('link', { name: 'openlist', exact: true }).click()
   await expect(page.locator('.project-table')).toBeVisible()
+  const projectRow = page.locator('#file-rows tr').filter({ hasText: 'openlist' })
+  await expect(projectRow.locator('.size')).toHaveText('6.0 KiB')
+  await expect(projectRow.locator('.status-badge')).toHaveText('已发布')
+  await expect(projectRow.locator('.sync-time').first()).toHaveText('—')
+  const projectNext = await projectRow.locator('.sync-time').last().locator('time').getAttribute('datetime')
+  expect(projectNext).toMatch(/\+08:00$/)
+  for (const width of [1440, 375, 320]) {
+   await page.setViewportSize({ width, height: 900 })
+   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+   await expect(projectRow.locator('.status-badge')).toBeVisible()
+   await expectHeaderLayout(page)
+   await page.screenshot({ path: testInfo.outputPath(`github-project-${width}.png`), fullPage: true })
+  }
+  await page.setViewportSize({ width: 1440, height: 1000 })
+  await page.getByRole('link', { name: 'openlist', exact: true }).click()
+  await expect(page.locator('.project-table')).toHaveCount(0)
   const rows = page.locator('#file-rows tr:visible')
   await expect(rows).toHaveCount(2)
   await expect(rows.filter({ hasText: 'v1' })).toContainText('2.0 KiB')
   await expect(rows.filter({ hasText: 'v2' })).toContainText('4.0 KiB')
-  await expect(rows.filter({ hasText: 'v1' }).locator('.sync-time').first().locator('time')).toHaveAttribute('datetime', '2026-09-30T14:00:00+08:00')
-  await expect(rows.filter({ hasText: 'v2' }).locator('.sync-time').first()).toHaveText('—')
-  await expect(rows.first().locator('.sync-time').last().locator('time')).toHaveAttribute('datetime', /\+08:00$/)
-  await expect(page.getByRole('button', { name: '上次同步', exact: false })).toBeVisible()
+  await expect(page.locator('.sync-time, .status-badge')).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '上次同步', exact: false })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '下次同步', exact: false })).toHaveCount(0)
   const search = page.getByRole('searchbox', { name: '搜索当前目录' })
   await search.fill('v2')
   await expect(rows).toHaveCount(1)
@@ -231,7 +244,7 @@ sources:
   for (const width of [1440, 1024, 736, 375, 320]) {
    await page.setViewportSize({ width, height: 900 })
    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
-   await expect(rows.first().locator('.status-badge')).toBeVisible()
+   await expect(rows.first().locator('.size')).toBeVisible()
    await expectHeaderLayout(page)
    await page.screenshot({ path: testInfo.outputPath(`release-list-${width}.png`), fullPage: true })
   }

@@ -406,3 +406,31 @@ OCR 本地 delegate preview/rule 检查工作区全部可审查源码/预览 **5
 沿用项目已有的 OCR 本地 delegate preview/rule 流程，由当前 Codex 审查，外部 LLM 调用未执行。commit preview 共 9 项：完整审查 `web/src/features/runs/RunDetail.vue`、`web/src/styles/global.css` 与默认被 default_path 排除的 `web/e2e/log-controls.spec.ts`；核对 README、DESIGN、ACCEPTANCE 中相关说明（工具因 unsupported_ext 排除）。另外 3 项 `docs/previews/source-options.html`、`web/src/features/sources/OptionCard.vue`、`web/src/features/sources/SourceEditor.vue` 属于源编辑选项设计，超出本次刷新问题范围，未复审。覆盖汇总：total_files=9、reviewed_files=6、skipped_files=3、coverage_rate=66.7%；本次相关源码覆盖 3/3。未发现该范围内确认的高/中严重度正确性、安全或性能问题；不宣称整个提交已重新审查。
 
 复审后验证：`npm --prefix web run build`（vue-tsc / Vite）通过；Go 1.27.1 构建临时二进制 `/tmp/mirrordock-refresh-review` 通过；`MIRRORDOCK_TEST_BINARY=/tmp/mirrordock-refresh-review npm --prefix web run test:e2e -- log-controls.spec.ts` 最终 **1 passed（4.0s）**。覆盖成功/失败恢复按钮、持续悬停、跟随开关、尝试切换及重新打开。首次 Chromium 因沙箱 MachPort 权限未启动，获准在沙箱外运行隔离测试后通过。测试使用临时空源配置、随机本机端口和受控日志响应，没有执行同步或修改用户服务。未复现用户原浏览器环境，未新增慢请求取消时序测试，未运行全套 Go/E2E 或 Linux 性能检查。
+
+## GitHub 项目行同步信息与版本目录大小 · 2026-10-01
+
+按用户最终要求，`/github/` 中 OpenList 等实际 GitHub 项目行显示状态、当前发布文件总大小、项目上次同步及下次计划；进入项目后，各版本目录仅补充独立大小，沿用名称/类型/大小/修改时间，不再展示状态和上次/下次同步。虚拟父目录保持普通目录样式。版本目录从不可变发布摘要读取大小，不再查询运行元数据；历史私有版本同步标记保留，文件下载热路径没有变化。未知大小、未记录同步时间或未启用计划显示 `—`。
+
+验证：Web vue-tsc/Vite 构建通过，唯一输出 web/dist；Go 1.27.1 构建临时二进制 `/tmp/mirrordock-github-project` 和 `bin/mirrordock` 通过。审查后 `GOCACHE="$PWD/.cache/go-build" go test -race ./internal/mirrors` 通过（2.498s），`go vet ./internal/mirrors` 和 `git diff --check` 通过。Go 回归核对项目总大小/真实同步时间、版本独立大小、不查询版本运行元数据、发布/重启、私有标记隐藏及受限下载。定向 Chromium `public-directory.spec.ts --grep 'GitHub project'` **1 passed（2.5s）**，使用临时配置、临时镜像、随机本机端口；覆盖项目四项信息、版本无状态/同步列、大小搜索/排序、普通资产链接、隐藏标记、无脚本导航、1440/1024/736/375/320px 无整页横向溢出。已查看桌面项目行和版本目录截图。报告在 `../test-results/github-project-go-race-final.txt`、`github-project-vet.txt`、`github-project-e2e-final.txt`；截图在 `../web/test-results/public-directory-GitHub-pr-b99fd-and-release-rows-show-sizes/`。
+
+初次 Go 竞态测试被沙箱本机端口 bind 限制阻止，初次 Chromium 被 MachPort 权限阻止，均不计为通过；经自动审批允许隔离本机验收后重跑通过。初始失败记录 `github-project-go-race.txt`、`github-project-e2e.txt` 保留。
+
+沿用项目已记录的外部 OCR 审批限制，使用 open-code-review / open-code-review-delegate 本地 preview/rule 工作流，由当前 Codex 审查，外部 LLM 调用未执行，未发送源码。审查生产源码 `internal/mirrors/http.go`、`listing.go`，补充完整检查默认被 default_path 排除的 `listing_test.go`、`web/e2e/public-directory.spec.ts`，核对 unsupported_ext 排除的 README、DESIGN、公开目录设计与本验收记录：**8/8 文件、4/4 新增修改源码、跳过 0、覆盖 100%**。核对路由与发布摘要边界、未知数据、模板转义、运行查询范围、测试清理及受控上游；移除已经不用的版本元数据参数/分支，没有遗留确认的高/中严重度正确性、安全或性能问题。清单、规则及覆盖报告在 `../test-results/ocr-github-project-preview.json`、`ocr-github-project-rules.json`、`ocr-github-project-review.json`。
+
+性能与未验证项：上述耗时仅为 macOS 隔离功能检查数据，本轮未新增性能基准。未运行全套 Go/E2E、真实 GitHub 上游同步、Linux 实机/sendfile 系统调用、实际发行版同步、生产吞吐或 Firefox/Safari。没有修改用户配置、镜像或凭证，没有重启用户服务、创建子代理、推送、发布或发送外部消息。现有服务需要换用本次构建的二进制并重启后生效。
+
+## 2026-10-01：右侧浮动操作提示
+
+本轮将管理台全局操作反馈及通知渠道保存/测试反馈改为右侧浮动卡片：白底、细边框、状态图标、轻阴影，底部 3px 倒计时条在 5 秒内线性缩短，支持手动关闭和最多三条独立提示。相同文案也使用独立编号/计时，移除和卸载清理计时器，退出登录清空。桌面顶部 112px 避开标题按钮，手机 16px；主体允许点击穿透，关闭按钮可操作。页面内表单校验、运行错误详情和长期说明保留。公共组件不依赖 app，错误文案使用 Vue 文本转义。
+
+最终验证：
+
+- `npm --prefix web run build` 的 Vue 类型检查和 Vite 构建通过，唯一输出 `web/dist/`；报告 `../test-results/toast-build-final.txt`。Go 1.27.1 先嵌入新 Web 再构建 `/private/tmp/mirrordock-toast-test` 和 `bin/mirrordock` 通过。现有部署服务未重启，需运行新二进制后页面生效。
+- `MIRRORDOCK_TEST_BINARY=/private/tmp/mirrordock-toast-test MIRRORDOCK_TEST_RSYNC="$PWD/.cache/rsync/rsync-3.5.1/rsync" npm --prefix web run test:e2e -- toasts.spec.ts notifications.spec.ts` 最终 **2 passed（22.7s）**。报告 `../test-results/toast-e2e-final-3.txt`；使用临时 YAML/SQLite/镜像目录、随机本机端口和本机通知接收端。新增验收覆盖页面标题不移位、实际进度条持续缩短、五秒关闭、重复提示不受旧计时器影响、三条上限、点击/键盘关闭、错误语义与 HTML 文本转义、320/375px 不溢出、减少动态效果保留时间指示、退出清空。已有通知回归覆盖保存、敏感字段保留/清空、测试发送、任务通知、手机/help 与停止轮询。已查看最终桌面和 320px 截图；截图在 `../web/test-results/toasts-floating-feedback-s-ade65-dependently-and-fits-mobile/`。
+- `git diff --check` 通过。
+
+首次 Chromium 启动因沙箱 MachPort 权限失败，测试未执行，日志 `../test-results/toast-e2e.txt` 不计为通过；自动审批允许隔离浏览器/端口后重跑。第一轮真实验收发现提示覆盖保存按钮，已下移桌面位置并允许主体点击穿透；第二轮发现全局 reduced-motion 禁用时间指示，已为倒计时条补充明确覆盖。失败日志 `toast-e2e-final.txt`、`toast-e2e-final-2.txt` 保留，不计为通过。最终源码复核后运行上述最终测试。
+
+OCR 沿用项目已记录的外部审批限制，使用 `open-code-review` / `open-code-review-delegate` 本地 preview/rule，由当前 Codex 审查，未调用外部 LLM 或发送源码。本轮完整审查 6 个生产源码（ToastStack、state、App、Shell、useRunPage、Notifications）及默认 default_path 排除的 2 个 E2E；核对 README、DESIGN 和本节。原有公开目录的 4 个新增/修改源码及设计计划 SHA256 与 `ocr-github-project-review.json` 完全一致，继承已记录审查；总计 **16/16 项、12/12 新增/修改源码、跳过 0、覆盖 100%**。文档 unsupported_ext 排除和测试 default_path 排除均另行覆盖；检查独立计时/卸载、点击和布局、语义/转义、依赖边界、请求失败和测试隔离，已修正按钮遮挡与减少动态效果覆盖，没有遗留确认的高/中严重度正确性、安全或性能问题。清单、规则、哈希和覆盖报告在 `../test-results/ocr-toast-preview.json`、`ocr-toast-rules.json`、`ocr-toast-review.json`。
+
+性能与未验证项：使用 CSS transform 动画，不做逐帧 JavaScript 计时；队列和计时器最多三项。此为资源边界和功能验收，不是性能基准；本轮没有新增下载性能测量，后端下载热路径未改。Firefox/Safari、真实部署服务重启后的显示、Linux 实机/生产吞吐/发行版验收和外部 OCR LLM 未验证。未修改用户配置、镜像或凭证，未创建子代理、推送、发布或发送外部消息。

@@ -264,12 +264,14 @@ func TestProjectAndReleaseListingMetadata(t *testing.T) {
 		t.Fatal(pub.Current.Summary)
 	}
 	calls := 0
+	projectLast := time.Now().UTC().Add(-time.Minute).Truncate(time.Second)
+	projectNext := projectLast.Add(time.Hour)
 	m.ListingInfo = func(id string) SourceListingInfo {
 		calls++
 		if id != source.ID {
 			t.Fatal(id)
 		}
-		return SourceListingInfo{State: "failed", Last: time.Now(), Next: time.Now().Add(time.Hour)}
+		return SourceListingInfo{State: "failed", Last: projectLast, Next: projectNext}
 	}
 	read := func(p string) string {
 		t.Helper()
@@ -280,19 +282,28 @@ func TestProjectAndReleaseListingMetadata(t *testing.T) {
 		}
 		return html.UnescapeString(w.Body.String())
 	}
-	if html := read("/github/"); strings.Contains(html, `class="project-table"`) || calls != 0 {
-		t.Fatal("GitHub metadata must not appear on repository row")
+	if html := read("/"); strings.Contains(html, `class="project-table"`) || calls != 0 {
+		t.Fatal("virtual parent must retain ordinary directory metadata")
+	}
+	repositoryHTML := read("/github/")
+	for _, want := range []string{`class="project-table"`, "上次同步", "下次同步", "同步失败", "4.0 KiB", projectLast.In(time.Local).Format(time.RFC3339), projectNext.In(time.Local).Format(time.RFC3339)} {
+		if !strings.Contains(repositoryHTML, want) {
+			t.Errorf("repository row missing %s", want)
+		}
+	}
+	if calls != 1 {
+		t.Fatal("source metadata must be loaded once per repository listing", calls)
 	}
 	html := read("/github/openlist/")
-	for _, want := range []string{`class="project-table"`, "上次同步", "下次同步", "同步失败", "2.0 KiB", synced.In(time.Local).Format(time.RFC3339)} {
+	for _, want := range []string{"类型", "大小", "修改时间", "2.0 KiB"} {
 		if !strings.Contains(html, want) {
 			t.Errorf("missing %s", want)
 		}
 	}
 	if calls != 1 {
-		t.Fatal("source metadata must be loaded once per release listing", calls)
+		t.Fatal("release listing must not query project sync metadata", calls)
 	}
-	for _, removed := range []string{`class="filters"`, `class="page-footer"`, "浏览目录，获取", "软件镜像 · 公开文件服务"} {
+	for _, removed := range []string{`class="project-table"`, "上次同步", "下次同步", "同步失败", `class="filters"`, `class="page-footer"`, "浏览目录，获取", "软件镜像 · 公开文件服务"} {
 		if strings.Contains(html, removed) {
 			t.Errorf("obsolete UI: %s", removed)
 		}

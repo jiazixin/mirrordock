@@ -4,7 +4,7 @@ import { ArrowRight, ShieldCheck } from '@lucide/vue'
 import Shell from '../layouts/Shell.vue'
 import logo from '../assets/logo.svg'
 import { api } from './api'
-import { connectEvents, disconnectEvents, refresh, state } from './state'
+import { connectEvents, disconnectEvents, refresh, state, notify } from './state'
 
 const loading = ref(true)
 const authenticated = ref(false)
@@ -15,7 +15,7 @@ const busy = ref(false)
 
 async function syncNotificationTimezone() {
   try { await api('/notifications/timezone', 'POST', { timezone: Intl.DateTimeFormat().resolvedOptions().timeZone }) }
-  catch { state.error = '通知时区同步失败，继续使用服务端已保存的时区。' }
+  catch { notify('通知时区同步失败，继续使用服务端已保存的时区。', 'error') }
 }
 async function check() {
   try {
@@ -42,11 +42,12 @@ async function submit() {
 }
 async function logout() {
   try { await api('/auth/logout', 'POST'); expired() }
-  catch (e) { state.error = e instanceof Error ? e.message : String(e) }
+  catch (e) { notify(e instanceof Error ? e.message : String(e), 'error') }
 }
 function expired() {
   disconnectEvents()
   authenticated.value = false
+  state.toasts = []
   state.username = ''
   state.config = null
   state.runs = []
