@@ -87,7 +87,7 @@ sources:
     await page.getByRole('button', { name: 'Bark配置帮助' }).hover(); await expect(page.locator('#help-bark')).toBeVisible(); await page.locator('.notification-intro').hover(); await expect(page.locator('#help-bark')).toHaveCount(0)
     for (const width of [1440, 736, 375]) { await page.setViewportSize({ width, height: 1000 }); expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy(); await page.screenshot({ path: testInfo.outputPath(`notifications-${width}.png`), fullPage: true, animations: 'disabled' }) }
     let polls = 0; page.on('request', req => { if (req.url().includes('/api/notifications/records')) polls++ })
-    await page.getByRole('tab', { name: '同步执行', exact: true }).click(); const before = polls; await page.waitForTimeout(5200); expect(polls).toBe(before)
+    await page.getByRole('tab', { name: '同步策略', exact: true }).click(); const before = polls; await page.waitForTimeout(5200); expect(polls).toBe(before)
     expect(errors).toEqual([])
   } finally { await stop(app); await new Promise<void>(resolve => receiver.close(() => resolve())); await rm(dir, { recursive: true, force: true }) }
 })

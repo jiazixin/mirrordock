@@ -139,7 +139,67 @@ func TestRemotePermissionFailureCanSwitchButLocalCannot(t *testing.T) {
 	if !AsFailure(remote).Retryable || AsFailure(local).Retryable {
 		t.Fatal(remote, local)
 	}
-	if !AsFailure(Classify(5, "@ERROR: Unknown module")).Retryable {
-		t.Fatal("remote module failure did not switch")
+	if AsFailure(Classify(5, "@ERROR: Unknown module")).Retryable {
+		t.Fatal("invalid remote module was retried")
+	}
+}
+
+func TestReposyncTransientDiagnostics(t *testing.T) {
+	for _, line := range []string{"Curl error (6): Could not resolve host", "Curl error (28): Timeout", "Status code: 503", "Curl error (56): Connection reset"} {
+		if !reposyncNetworkLine(line) {
+			t.Fatal("transient error rejected", line)
+		}
+	}
+	for _, line := range []string{"Curl error (60): SSL certificate problem", "Status code: 401", "GPG signature verification failed", "No space left on device", "Permission denied"} {
+		if reposyncNetworkLine(line) {
+			t.Fatal("permanent error retried", line)
+		}
+	}
+}
+
+func TestRsyncAuthenticationIsNotRetryable(t *testing.T) {
+	for _, line := range []string{"@ERROR: auth failed on module repo", "@ERROR: access denied to repo", "@ERROR: Unknown module"} {
+		if AsFailure(Classify(5, line)).Retryable {
+			t.Fatal("invalid configuration retried", line)
+		}
+	}
+}
+
+func TestReposyncCommandKeepsNetworkDiagnosticsAndStopsOnPermanentErrors(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	for _, tc := range []struct {
+		diagnostic string
+		retry      bool
+	}{
+		{"Curl error (28): Timeout", true},
+		{"Curl error (28): Timeout\nGPG check FAILED", false},
+		{"Curl error (6): DNS failed\nPermission denied", false},
+		{"Curl error (6): DNS failed\nCurl error (60): SSL certificate problem", false},
+		{"Status code: 503", true},
+		{"Status code: 404", false},
+		{"invalid configuration", false},
+	} {
+		script := "#!/bin/sh\nprintf '%s\\n' '" + tc.diagnostic + "' 'Error: All mirrors were tried' >&2\nexit 1\n"
+		if err := os.WriteFile(filepath.Join(dir, "dnf"), []byte(script), 0700); err != nil {
+			t.Fatal(err)
+		}
+		err := command(t.Context(), "dnf", nil, func(Progress) {}, io.Discard)
+		if err == nil || AsFailure(err).Retryable != tc.retry {
+			t.Fatal(tc.diagnostic, err)
+		}
+	}
+}
+
+func TestRsyncCommandRetainsAuthenticationFailureBeforeExitSummary(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	script := "#!/bin/sh\nprintf '%s\\n' '@ERROR: auth failed on module repo' 'rsync error: error starting client-server protocol (code 5)' >&2\nexit 5\n"
+	if err := os.WriteFile(filepath.Join(dir, "rsync"), []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	err := command(t.Context(), "rsync", nil, func(Progress) {}, io.Discard)
+	if err == nil || AsFailure(err).Retryable || !strings.Contains(err.Error(), "auth failed") {
+		t.Fatal("lost auth diagnostic", err)
 	}
 }

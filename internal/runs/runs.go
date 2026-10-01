@@ -51,6 +51,8 @@ type Run struct {
 	EndedAt        time.Time       `json:"ended_at,omitzero"`
 	ElapsedSeconds float64         `json:"elapsed_seconds"`
 	BudgetSeconds  float64         `json:"budget_seconds"`
+	RetryCount     int             `json:"retry_count"`
+	RetryAt        time.Time       `json:"retry_at,omitzero"`
 	CandidateIndex int             `json:"candidate_index"`
 	Progress       syncer.Progress `json:"progress"`
 	Attempts       []Attempt       `json:"attempts"`
@@ -90,6 +92,7 @@ type Engine struct {
 	working         map[int64]*active
 	wake            chan struct{}
 	cron            *cron.Cron
+	retryDelay      time.Duration
 	location        *time.Location
 	scheduleIDs     map[string]cron.EntryID
 	ConfigValidator func(config.Config) error
@@ -98,7 +101,7 @@ type Engine struct {
 
 func New(cfg *config.Manager, store *database.Store, m *mirrors.Manager, runner syncer.Runner, location *time.Location) (*Engine, error) {
 	ctx, cancel := context.WithCancel(context.Background())
-	e := &Engine{cfg: cfg, store: store, mirror: m, runner: runner, data: config.Resolve(cfg.File(), cfg.Startup().Path), ctx: ctx, cancel: cancel, current: map[int64]*Run{}, working: map[int64]*active{}, wake: make(chan struct{}, 2), location: location, scheduleIDs: map[string]cron.EntryID{}}
+	e := &Engine{cfg: cfg, store: store, mirror: m, runner: runner, data: config.Resolve(cfg.File(), cfg.Startup().Path), ctx: ctx, cancel: cancel, current: map[int64]*Run{}, working: map[int64]*active{}, wake: make(chan struct{}, 2), location: location, retryDelay: 5 * time.Second, scheduleIDs: map[string]cron.EntryID{}}
 	for _, state := range []string{"queued", "running", "pausing", "paused", "interrupted"} {
 		records, _, err := store.ListRuns(state, "", 10000, 0)
 		if err != nil {
@@ -502,7 +505,13 @@ func (e *Engine) execute(ctx context.Context, id int64, snapshot Snapshot) error
 	if first >= len(candidates) {
 		first = 0
 	}
-	for index := first; index < len(candidates); index++ {
+	if len(candidates) == 0 {
+		return errors.New("没有可用来源")
+	}
+	for index := first; ; index++ {
+		if err = e.waitRetry(ctx, id); err != nil {
+			return err
+		}
 		if err = ctx.Err(); err != nil {
 			return err
 		}
@@ -583,14 +592,58 @@ func (e *Engine) execute(ctx context.Context, id int64, snapshot Snapshot) error
 		}
 		failure := syncer.AsFailure(err)
 		failure.Message = redact(failure.Message, secrets...)
-		if !failure.Retryable || s.Type != "rsync" {
+		if !failure.Retryable {
 			return failure
 		}
-		if index+1 == len(candidates) {
-			return &syncer.Failure{Code: "SOURCE_EXHAUSTED", Message: fmt.Sprintf("所有 %d 个来源均失败；最近原因: %s", len(candidates), failure.Message)}
+		// Try Rsync fallbacks before spending another retry round.
+		if s.Type == "rsync" && index+1 < len(candidates) {
+			continue
 		}
+		e.mu.Lock()
+		r = e.current[id]
+		if r.RetryCount >= int(snapshot.Settings.RetryCount) {
+			e.mu.Unlock()
+			if s.Type == "rsync" {
+				return &syncer.Failure{Code: "SOURCE_EXHAUSTED", Message: fmt.Sprintf("所有 %d 个来源均失败，重试次数已用尽；最近原因: %s", len(candidates), failure.Message)}
+			}
+			return failure
+		}
+		r.RetryCount++
+		delay := e.retryDelay * time.Duration(1<<min(r.RetryCount-1, 4))
+		r.RetryAt = time.Now().UTC().Add(delay)
+		r.CandidateIndex = 0
+		r.Progress = syncer.Progress{Phase: "retry"}
+		e.event(r, fmt.Sprintf("网络或上游临时失败，%s 后自动重试（%d/%d）", delay, r.RetryCount, snapshot.Settings.RetryCount))
+		err = e.save(r)
+		e.mu.Unlock()
+		if err != nil {
+			return err
+		}
+		index = -1
 	}
-	return errors.New("没有可用来源")
+}
+
+func (e *Engine) waitRetry(ctx context.Context, id int64) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	e.mu.Lock()
+	at := e.current[id].RetryAt
+	e.mu.Unlock()
+	if at.IsZero() {
+		return nil
+	}
+	timer := time.NewTimer(max(0, time.Until(at)))
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.current[id].RetryAt = time.Time{}
+	return e.save(e.current[id])
 }
 func proxySecrets(proxy string) []string {
 	secrets := []string{proxy}

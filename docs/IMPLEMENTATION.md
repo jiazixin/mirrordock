@@ -44,6 +44,8 @@ GitHub 的 `settings.github.proxy` 使用 Go 原生 HTTP/HTTPS/SOCKS5 代理，A
 
 参考图的布局已落实在 Vue 六个页面，采用钴蓝新 Logo 和本地 SVG 图标，不依赖远程字体/CDN。现版采用浅色主题。生产 Linux sendfile 系统调用、HTTPS/HTTP2 及完整 EL 包签名同步的实测边界以 `ACCEPTANCE.md` 为准。
 
-系统设置分为同步执行、rsync、GitHub Release 三个页签，采用左侧说明、右侧输入布局，窄屏上下排列。监听、端口、数据库/日志目录、镜像根及 TLS 无页面输入，Config.Manager.Save 保留当前 YAML 中这些固定值；外部编辑仍由 revision 冲突保护，重新载入后需要重启。Token 切换页签保留草稿，保存后清空输入，显式清空时禁用输入。代理直接回填当前地址，保存后继续显示，空字符串保存即直连。独立系统配置页 `/admin/system` 展示运行时字段和解析后的工具版本/权限状态，不显示 JSON；监听、存储、日志和 TLS 字段来自启动配置，重载后的待重启状态另行提示。
+系统设置分为 Rsync、GitHub Release、同步策略、系统配置和通知设置五个页签，采用左侧说明、右侧输入布局，窄屏上下排列。监听、端口、数据库/日志目录、镜像根及 TLS 无页面输入，Config.Manager.Save 保留当前 YAML 中这些固定值；外部编辑仍由 revision 冲突保护，重新载入后需要重启。Token 切换页签保留草稿，保存后清空输入，显式清空时禁用输入。代理直接回填当前地址，保存后继续显示，空字符串保存即直连。系统配置页签展示配置文件路径和解析后的工具版本/权限检查，不显示原始 JSON；部署字段修改后需要重启。
 
-GitHub API 与下载网络失败使用固定诊断消息，区分 DNS、TLS 证书、连接拒绝、EOF、代理认证及 GitHub 401/403/404/限流，不回显底层 URL 或上游任意正文。扫描和查询状态、失败摘要写入任务原始日志，未新增逐块日志；取消/截止错误保留 context sentinel，避免包装的签名 URL 泄露。认证 API 客户端禁止跨 origin 重定向，因为 SDK 的 auth transport 会对重定向重新附加 token；附件继续使用不含 token 的客户端。Token 校验拒绝空白与控制字符，不回显值。
+GitHub API 与下载网络失败使用固定诊断消息，区分 DNS、TLS 证书、连接拒绝、EOF、代理认证及 GitHub 401/403/404/限流，不回显底层 URL 或上游任意正文。扫描和查询状态、失败摘要写入任务原始日志，未新增逐块日志；取消保留 context sentinel，SDK 单次请求超时作为网络错误可重试，任务累计截止仍由原 context 控制，避免包装的签名 URL 泄露。认证 API 客户端禁止跨 origin 重定向，因为 SDK 的 auth transport 会对重定向重新附加 token；附件继续使用不含 token 的客户端。Token 校验拒绝空白与控制字符，不回显值。
+
+同步策略包含 `settings.retry_count`（默认额外 3 次，0 关闭，0–10）。runs 在同一工作目录重试，Rsync 先完成备用来源切换；GitHub 网络/临时 HTTP 错误与 Reposync 可识别的 curl/HTTP 错误可重试。计数和等待期限写入运行 JSON，暂停/重启后继续沿用；退避 5/10/20 秒、封顶 80 秒，共用任务 context 与累计预算。每次尝试保存独立日志，成功后才校验发布，重试不进入公开下载热路径。

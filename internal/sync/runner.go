@@ -102,7 +102,10 @@ func RsyncArgs(t Task) []string {
 }
 func Classify(code int, message string) error {
 	switch code {
-	case 5, 10, 12, 30, 35:
+	case 5:
+		permanent := rsyncPermanentLine(message) || strings.Contains(strings.ToLower(message), "permission denied")
+		return &Failure{Code: "UPSTREAM_ERROR", Message: message, Retryable: !permanent, ExitCode: code}
+	case 10, 12, 30, 35:
 		return &Failure{Code: "UPSTREAM_ERROR", Message: message, Retryable: true, ExitCode: code}
 	case 23, 24:
 		return &Failure{Code: "PARTIAL_TRANSFER", Message: message, Retryable: !localFailureLine(message), ExitCode: code}
@@ -162,4 +165,9 @@ func AsFailure(err error) *Failure {
 		return e
 	}
 	return &Failure{Code: "LOCAL_ERROR", Message: err.Error()}
+}
+
+func rsyncPermanentLine(message string) bool {
+	lower := strings.ToLower(message)
+	return strings.Contains(lower, "auth failed") || strings.Contains(lower, "unknown module") || strings.Contains(lower, "access denied") || (strings.Contains(lower, "@error:") && strings.Contains(lower, "permission denied"))
 }

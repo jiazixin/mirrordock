@@ -453,3 +453,21 @@ OCR 沿用项目已记录的外部审批限制，使用 `open-code-review` / `op
 审查沿用项目此前外部 OCR LLM 被自动审批阻止后允许的 `open-code-review` / `open-code-review-delegate` 本地流程；本次没有尝试外部 LLM、没有发送源码。`ocr delegate preview --format json --exclude 'a/**'` 覆盖六个变更生产文件，`ocr delegate rule` 解析规则，由当前 Codex 逐文件审查：**6/6 生产文件、另行审查 1/1 修改的 E2E、跳过 0、覆盖 100%**。检查 CSS 选择器范围、级联、按钮固有宽度、长文本、侧栏短视口滚动、窄屏列宽、时间线末项、凭证输入与现有请求/轮询边界；上述两项确认的 UI 正确性问题已修复，无遗留确认的高/中严重度问题。用户参考目录 `a/**` 全部排除，其生成物/依赖/二进制不是本次源码；OCR 默认 `default_path` 排除的 E2E 另行审查，三份 Markdown 文档因 `unsupported_ext` 另行核对。完整逐文件排除清单、规则和源码哈希报告为 [ocr-reference-ui-preview.json](../test-results/ocr-reference-ui-preview.json)、[ocr-reference-ui-rules.json](../test-results/ocr-reference-ui-rules.json)、[ocr-reference-ui-review.json](../test-results/ocr-reference-ui-review.json)。
 
 性能与未验证项：最终构建 CSS **38.06 kB / gzip 8.53 kB**，JS **193.48 kB / gzip 70.18 kB**；这是构建产物大小，不是渲染或吞吐基准。本次未添加运行时依赖、请求、轮询或逐帧 JS，下载热路径未改；没有新 Linux 实机/sendfile/发行版/生产吞吐测量。Safari/Firefox、实际部署服务重启后的显示和外部 OCR LLM 未验证。本机二进制已构建，未重启用户正在运行的服务、未修改用户配置/镜像/凭证，未创建子代理、推送、发布或发送外部消息。
+
+## 2026-10-01：同步策略与网络失败自动重试
+
+用户要求整体网络失败重试、默认 3 次，并替换系统设置“同步执行”名称。本轮开始工作区干净；页签现为“同步策略”，包含累计超时和失败重试次数。新增 YAML/API `settings.retry_count`，省略默认额外 3 次（首次 + 最多 3 轮重试），0 关闭，范围 0–10，YAML 严格拒绝小数。Rsync 每轮先按数字顺序尝试备用来源，耗尽后再重试整轮；Reposync / GitHub 同样在原工作目录重新执行，复用已下载文件与有效 partial/Range。等待 5/10/20 秒、后续封顶 80 秒，受同一个 context 与累计预算控制；暂停/取消立即中止等待，重试计数和等待期限随运行记录持久化，继续不重置。
+
+临时网络、GitHub HTTP 408/429/500/502/503/504 和 DNF 可识别的 curl/HTTP 网络诊断可重试；本地磁盘/权限、认证、配置、TLS 证书、签名和完整性错误停止。GitHub SDK 单次查询超时可以重试，任务累计截止由原 context 控制。Rsync 的认证/模块错误和 DNF 的永久错误保留完整诊断优先级，不被最后一行通用退出摘要或之前网络错误覆盖。Rsync 的既有远端部分传输失败切换语义保留。每次 attempt 有独立脱敏日志，失败不会替换现有发布代。
+
+检查与证据：
+
+- Vue 类型检查与 Vite 生产构建通过，输出仍只有 `web/dist/`。Go 1.27.1 的 `go vet ./...`、最终 `go build -trimpath -o bin/mirrordock ./cmd/mirrordock` 通过；未重启部署服务。
+- 隔离 Rsync 3.5.1 fixture 的 `go test -race ./...` 通过（`../test-results/retry-go-race-verified.txt`，runs 4.875s、sync 3.431s，其余包复用成功缓存）。最终 Rsync 认证诊断修正后 `go test -race ./internal/sync` 通过（3.314s，`retry-sync-race-verified.txt`），最终 vet/build 输出分别为 `retry-go-vet-final.txt`、`retry-build-final.txt`。
+- 新测试覆盖三种执行器的关闭/默认上限/失败恢复/永久错误停止、多源顺序、工作目录复用、脱敏、重试等待超时/暂停/取消/重启继续、严格 YAML 数字与注释写回、GitHub API 状态/超时/证书分类、资产断流后的 Range 续传、模拟 DNF/Rsync 真实子进程输出中的错误优先级。DNF 测试为受控输出夹具，不是生产 DNF 插件验收。
+- Chromium 管理与通知 E2E **2 passed（31.8s）**，`../test-results/retry-e2e.txt`；最终补充截图检查的管理 E2E **1 passed（21.1s）**，`retry-e2e-verified.txt`。验证默认 3、保存 0、刷新回填、再保存 3、YAML 持久化、通知页签离开停止轮询、原有真实隔离 Rsync 来源切换/发布/Range/记录回归；1440/1024/736/375px 无整页横向溢出或脚本错误。已查看重试设置桌面及 375px 手机截图（`../web/test-results/mirrordock-real-configurat-8d275-n-records-and-responsive-UI/settings-retry*.png`）。
+- 首轮定向 race 未通过：YAML 小数被截断、Reposync 成功夹具缺少仓库元数据及沙箱禁止本机 TCP 绑定；第二轮全量检查仍暴露夹具缺失元数据。严格数字解析与完整 RPM 索引夹具修复后，在获准的隔离测试环境重跑通过。初次失败输出保留在 `retry-go-race.txt`、`retry-go-race-final.txt`、`retry-go-extra.txt`，不记为通过。
+
+审查使用项目已有外部 OCR LLM 审批受阻后允许的本地 delegate preview/rule 工作流，由当前 Codex 按规则审查全部 **14/14 修改源码**（8 个生产文件、6 个测试文件），另核对 YAML 与 5 项 Markdown，总计 **20/20，跳过 0，覆盖 100%**。默认 preview 的 9 项均审查；默认排除的 6 项测试（default_path）补充审查，5 项文档（unsupported_ext）核对。已修复小数截断、单次请求超时误作为任务总超时、DNF 永久错误优先级和 Rsync 认证错误被退出摘要覆盖的问题；无遗留确认的高/中严重度问题。覆盖清单、排除原因、规则与最终文件 SHA256 见 `../test-results/retry-ocr-preview.json`、`retry-ocr-rules.json`、`retry-ocr-review.json`。本轮未执行外部 OCR LLM 调用，未向外部服务发送源码。
+
+本轮未新增性能测量：公开下载热路径、受限文件根及发布代实现未修改；既有合成吞吐不能当成本次结果。Linux 实机 DNF/发行版签名同步、真实 GitHub/代理长时间网络中断、生产吞吐与 sendfile syscall 未验证。本轮所有测试使用临时配置/数据库/镜像目录、随机本机端口和可控上游；没有修改用户配置、镜像或凭证，未启动完整发行版同步、创建子代理、推送或发布。

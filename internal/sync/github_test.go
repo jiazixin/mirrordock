@@ -182,7 +182,7 @@ func TestGitHubFailureDiagnosticsNeverEchoRequestSecrets(t *testing.T) {
 	}
 	for _, sentinel := range []error{context.Canceled, context.DeadlineExceeded} {
 		err := &url.Error{Op: "Get", URL: "https://download.invalid/?signed=private", Err: sentinel}
-		if got := githubError(err, proxy); got != sentinel {
+		if got := githubError(err, proxy); (sentinel == context.Canceled && got != sentinel) || (sentinel == context.DeadlineExceeded && !AsFailure(got).Retryable) {
 			t.Fatal("context identity lost or URL retained", got)
 		}
 	}
@@ -229,5 +229,58 @@ func TestGitHubAPIRedirectCannotLeakTokenToAnotherOrigin(t *testing.T) {
 	_, _, err = client.Repositories.ListReleases(t.Context(), "o", "r", nil)
 	if err == nil || leakedRequests.Load() != 0 {
 		t.Fatal("authenticated cross-origin redirect followed")
+	}
+}
+
+func TestGitHubRetryClassification(t *testing.T) {
+	for _, status := range []int{401, 403, 404, 407, 408, 429, 500, 502, 503, 504} {
+		f := AsFailure(githubError(&github.ErrorResponse{Response: &http.Response{StatusCode: status}}, ""))
+		if f.Retryable != transientHTTP(status) {
+			t.Fatal("API status classification", status, f)
+		}
+	}
+	for _, tc := range []struct {
+		err   error
+		retry bool
+	}{{io.EOF, true}, {io.ErrUnexpectedEOF, true}, {context.DeadlineExceeded, true}, {&net.OpError{Err: syscall.ECONNRESET}, true}, {&tls.CertificateVerificationError{Err: x509.UnknownAuthorityError{}}, false}, {errors.New("Proxy Authentication Required"), false}} {
+		if f := AsFailure(githubNetworkError(tc.err, "", "DOWNLOAD_FAILED", "download")); f.Retryable != tc.retry {
+			t.Fatal(tc.err, f)
+		}
+	}
+}
+
+func TestTruncatedAssetCanResumeAfterNetworkFailure(t *testing.T) {
+	var downloads atomic.Int32
+	var assetURL string
+	client, server := assetClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/repos/") {
+			http.Redirect(w, r, assetURL, 302)
+			return
+		}
+		if downloads.Add(1) == 1 {
+			w.Header().Set("Content-Length", "9")
+			io.WriteString(w, "012")
+			return
+		}
+		if r.Header.Get("Range") != "bytes=3-" {
+			t.Error("partial not reused", r.Header)
+		}
+		w.Header().Set("Content-Range", "bytes 3-8/9")
+		w.WriteHeader(206)
+		io.WriteString(w, "345678")
+	})
+	assetURL = server.URL + "/asset"
+	target := filepath.Join(t.TempDir(), "asset.bin")
+	id := AssetIdentity{ID: 1, Size: 9}
+	_, err := downloadAsset(t.Context(), client, server.Client(), "o", "r", 1, id, target, func(int64) {}, "")
+	if err == nil || !AsFailure(err).Retryable {
+		t.Fatal("truncation not retryable", err)
+	}
+	if _, err = downloadAsset(t.Context(), client, server.Client(), "o", "r", 1, id, target, func(int64) {}, ""); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(target)
+	if err != nil || string(b) != "012345678" || downloads.Load() != 2 {
+		t.Fatal("invalid resumed asset", err)
 	}
 }

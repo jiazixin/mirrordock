@@ -2,6 +2,7 @@ package runs
 
 import (
 	"context"
+	"encoding/json/v2"
 	"fmt"
 	"io"
 	"mirrordock/internal/config"
@@ -73,7 +74,7 @@ func TestLogSnapshotExcludesLaterWritesAndSurvivesCleanup(t *testing.T) {
 func (f runnerFunc) Run(ctx context.Context, task syncer.Task, emit func(syncer.Progress), log io.Writer) error {
 	return f(ctx, task, emit, log)
 }
-func testEngine(t *testing.T, timeout string, runner syncer.Runner) (*Engine, *config.Manager, *database.Store, *mirrors.Manager) {
+func testEngine(t *testing.T, timeout string, runner syncer.Runner, options ...func(*Engine)) (*Engine, *config.Manager, *database.Store, *mirrors.Manager) {
 	t.Helper()
 	dir := t.TempDir()
 	file := filepath.Join(dir, "config.yaml")
@@ -98,6 +99,9 @@ func testEngine(t *testing.T, timeout string, runner syncer.Runner) (*Engine, *c
 	e, err := New(cfg, store, m, runner, time.Local)
 	if err != nil {
 		t.Fatal(err)
+	}
+	for _, option := range options {
+		option(e)
 	}
 	e.Start()
 	t.Cleanup(e.Close)
@@ -267,5 +271,189 @@ func TestRestartKeepsInterruptedRun(t *testing.T) {
 	}
 	if err = restored.Action(r.ID, "cancel"); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestAutomaticRetryAcrossExecutors(t *testing.T) {
+	for _, kind := range []string{"rsync", "reposync", "github_release"} {
+		for _, count := range []int{0, 3} {
+			for _, outcome := range []string{"exhaust", "recover", "permanent"} {
+				recover := outcome == "recover"
+				retryable := outcome != "permanent"
+				t.Run(fmt.Sprintf("%s/%d/%s", kind, count, outcome), func(t *testing.T) {
+					var calls atomic.Int32
+					var candidates []string
+					e, cfg, _, m := testEngine(t, "2s", runnerFunc(func(ctx context.Context, task syncer.Task, emit func(syncer.Progress), log io.Writer) error {
+						n := calls.Add(1)
+						candidates = append(candidates, task.Candidate)
+						// The first two attempts must share the same work directory.
+						partial := filepath.Join(task.Directory, ".part")
+						if n == 1 {
+							if err := os.WriteFile(partial, []byte("partial"), 0600); err != nil {
+								return err
+							}
+						} else if b, err := os.ReadFile(partial); err != nil || string(b) != "partial" {
+							t.Error("retry discarded work", err)
+						}
+						if recover && n == 2 {
+							if kind == "reposync" {
+								if err := os.MkdirAll(filepath.Join(task.Directory, "repodata"), 0755); err != nil {
+									return err
+								}
+								primary := `<metadata><package><location href="package.rpm"/><size package="7"/></package></metadata>`
+								if err := os.WriteFile(filepath.Join(task.Directory, "repodata", "primary.xml"), []byte(primary), 0644); err != nil {
+									return err
+								}
+								repomd := fmt.Sprintf(`<repomd><data type="primary"><location href="repodata/primary.xml"/><size>%d</size></data></repomd>`, len(primary))
+								if err := os.WriteFile(filepath.Join(task.Directory, "repodata", "repomd.xml"), []byte(repomd), 0644); err != nil {
+									return err
+								}
+							}
+							return os.WriteFile(filepath.Join(task.Directory, "package.rpm"), []byte("package"), 0644)
+						}
+						return &syncer.Failure{Code: "NETWORK", Message: "top-secret proxy-secret failure", Retryable: retryable}
+					}), func(e *Engine) { e.retryDelay = time.Millisecond })
+					c := cfg.Current()
+					c.Settings.RetryCount = config.RetryCount(count)
+					c.Sources[0].Type = kind
+					if kind == "reposync" {
+						c.Sources[0].RepoSync = config.RepoSync{RepoID: "fixture", Releasever: "9", Basearch: "x86_64", GPGCheck: new(false)}
+						c.Sources[0].Upstreams = map[string]string{"src1": "http://localhost/repo/"}
+					}
+					if kind == "github_release" {
+						c.Sources[0].GitHubRelease.Repository = "o/r"
+						c.Sources[0].Upstreams = nil
+					}
+					if err := e.ApplyConfig(c, cfg.View().Revision, nil, nil); err != nil {
+						t.Fatal(err)
+					}
+					r, err := e.Enqueue("test", "manual")
+					if err != nil {
+						t.Fatal(err)
+					}
+					state := "failed"
+					want := count + 1
+					if kind == "rsync" {
+						want *= 2
+					}
+					if !retryable {
+						want = 1
+					}
+					if recover && want >= 2 {
+						state = "succeeded"
+						want = 2
+					}
+					r = waitState(t, e, r.ID, state)
+					if calls.Load() != int32(want) || len(r.Attempts) != want {
+						t.Fatalf("unexpected retry cap: %+v", r)
+					}
+					expectedRetries := count
+					if !retryable {
+						expectedRetries = 0
+					}
+					if state == "failed" && r.RetryCount != expectedRetries {
+						t.Fatal("retry count", r.RetryCount)
+					}
+					for i, candidate := range candidates {
+						if kind == "rsync" && candidate != c.Sources[0].Candidates()[i%2] {
+							t.Fatal("bad fallback order", candidates)
+						}
+					}
+					if state == "failed" && len(m.Publications()) != 0 {
+						t.Fatal("published failed work")
+					}
+					b, _ := json.Marshal(r)
+					if strings.Contains(string(b), "top-secret") || strings.Contains(string(b), "proxy-secret") {
+						t.Fatal("retry leaked credentials")
+					}
+				})
+			}
+		}
+	}
+}
+
+func waitRetryPhase(t *testing.T, e *Engine, id int64) *Run {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		r, err := e.Get(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if r.Progress.Phase == "retry" {
+			return r
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("did not enter retry wait")
+	return nil
+}
+
+func TestRetryWaitHonorsBudgetPauseCancelAndRestart(t *testing.T) {
+	for _, action := range []string{"timeout", "pause", "cancel", "restart"} {
+		t.Run(action, func(t *testing.T) {
+			var calls atomic.Int32
+			runner := runnerFunc(func(ctx context.Context, task syncer.Task, emit func(syncer.Progress), log io.Writer) error {
+				calls.Add(1)
+				return &syncer.Failure{Code: "NETWORK", Message: "temporary failure", Retryable: true}
+			})
+			e, cfg, store, m := testEngine(t, "180ms", runner)
+			r, err := e.Enqueue("test", "manual")
+			if err != nil {
+				t.Fatal(err)
+			}
+			waiting := waitRetryPhase(t, e, r.ID)
+			if waiting.RetryCount != 1 || waiting.RetryAt.IsZero() {
+				t.Fatal("retry not durable")
+			}
+			switch action {
+			case "timeout":
+				r = waitState(t, e, r.ID, "timed_out")
+				if r.ElapsedSeconds > .4 || calls.Load() != 2 {
+					t.Fatal("wait reset or exceeded budget", r)
+				}
+			case "cancel":
+				if err = e.Action(r.ID, "cancel"); err != nil {
+					t.Fatal(err)
+				}
+				r = waitState(t, e, r.ID, "cancelled")
+				if calls.Load() != 2 {
+					t.Fatal("cancel retried")
+				}
+			case "pause", "restart":
+				if action == "pause" {
+					if err = e.Action(r.ID, "pause"); err != nil {
+						t.Fatal(err)
+					}
+					r = waitState(t, e, r.ID, "paused")
+				} else {
+					e.Close()
+					e, err = New(cfg, store, m, runner, time.Local)
+					if err != nil {
+						t.Fatal(err)
+					}
+					e.Start()
+					t.Cleanup(e.Close)
+					r, err = e.Get(r.ID)
+					if err != nil || r.State != "interrupted" {
+						t.Fatal(r, err)
+					}
+				}
+				if r.RetryCount != 1 || !r.RetryAt.Equal(waiting.RetryAt) {
+					t.Fatal("pause/restart lost retry state")
+				}
+				e.mu.Lock()
+				e.current[r.ID].RetryAt = time.Now().Add(-time.Second)
+				e.mu.Unlock()
+				if err = e.Action(r.ID, "resume"); err != nil {
+					t.Fatal(err)
+				}
+				waitRetryPhase(t, e, r.ID)
+				r = waitState(t, e, r.ID, "timed_out")
+				if r.RetryCount != 2 || calls.Load() != 4 {
+					t.Fatal("resume reset retry budget", r)
+				}
+			}
+		})
 	}
 }

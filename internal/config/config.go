@@ -53,7 +53,24 @@ type GitHubSettings struct {
 	Token              string `yaml:"token" json:"token"`
 	Proxy              string `yaml:"proxy" json:"proxy"`
 }
+
+// RetryCount requires a YAML integer; yaml.v3 otherwise truncates decimals.
+type RetryCount int
+
+func (c *RetryCount) UnmarshalYAML(node *yaml.Node) error {
+	if node.Kind != yaml.ScalarNode || node.Tag != "!!int" {
+		return errors.New("retry_count 必须为 0–10 之间的整数")
+	}
+	var value int
+	if err := node.Decode(&value); err != nil {
+		return err
+	}
+	*c = RetryCount(value)
+	return nil
+}
+
 type Settings struct {
+	RetryCount    RetryCount              `yaml:"retry_count" json:"retry_count"`
 	TaskTimeout   string                  `yaml:"task_timeout" json:"task_timeout"`
 	Rsync         RsyncSettings           `yaml:"rsync" json:"rsync"`
 	GitHub        GitHubSettings          `yaml:"github" json:"github"`
@@ -155,7 +172,7 @@ func (s Source) MarshalYAML() (any, error) {
 	return &node, nil
 }
 func Defaults() Config {
-	return Config{Listen: "0.0.0.0", Port: 8080, Path: "../data", MirrorRoot: "/srv/mirrors", Log: Log{Level: "info", Format: "json"}, Settings: Settings{TaskTimeout: "8h", Rsync: RsyncSettings{IOTimeout: "5m", ConnectTimeout: "30s"}, GitHub: GitHubSettings{ReleaseCount: 5}}}
+	return Config{Listen: "0.0.0.0", Port: 8080, Path: "../data", MirrorRoot: "/srv/mirrors", Log: Log{Level: "info", Format: "json"}, Settings: Settings{RetryCount: 3, TaskTimeout: "8h", Rsync: RsyncSettings{IOTimeout: "5m", ConnectTimeout: "30s"}, GitHub: GitHubSettings{ReleaseCount: 5}}}
 }
 func Clone(c Config) Config {
 	b, _ := json.Marshal(c)
@@ -249,6 +266,9 @@ func (c Config) Validate(file string) error {
 		if err != nil || d <= 0 {
 			return fmt.Errorf("%s 必须为正时间长度", name)
 		}
+	}
+	if c.Settings.RetryCount < 0 || c.Settings.RetryCount > 10 {
+		return errors.New("retry_count 必须在 0–10 之间")
 	}
 	if math.IsNaN(c.Settings.Rsync.LimitMB) || math.IsInf(c.Settings.Rsync.LimitMB, 0) || c.Settings.Rsync.LimitMB < 0 {
 		return errors.New("limit_mb 必须为非负数")

@@ -10,7 +10,7 @@ import Notifications from './Notifications.vue'
 const tabs = [
   { id: 'rsync', label: 'Rsync', icon: ArrowDownUp },
   { id: 'github', label: 'GitHub Release', icon: ShieldCheck },
-  { id: 'execution', label: '同步执行', icon: Settings2 },
+  { id: 'execution', label: '同步策略', icon: Settings2 },
   { id: 'configuration', label: '系统配置', icon: FileText },
   { id: 'notifications', label: '通知设置', icon: Bell },
 ] as const
@@ -69,8 +69,12 @@ async function reload() {
 
     <div id="settings-panel-execution" v-show="activeTab === 'execution'" class="settings-sections" role="tabpanel" aria-labelledby="settings-tab-execution">
       <article class="panel setting-row">
-        <div class="setting-description"><span class="setting-index">01 · 执行预算</span><h3>任务累计超时</h3><p>设置一轮同步可使用的总执行时间。</p><small>切换来源与暂停后继续共享预算；排队和暂停不计时。修改对新任务生效。</small></div>
+        <div class="setting-description"><span class="setting-index">01 · 执行预算</span><h3>任务累计超时</h3><p>设置一轮同步可使用的总执行时间。</p><small>自动重试、切换来源与暂停后继续共享预算；排队和暂停不计时。修改对新任务生效。</small></div>
         <div class="setting-controls"><label>任务累计超时<input v-model="draft.settings.task_timeout" placeholder="8h"/><small>支持 30m、8h 等时间长度，默认 8h。</small></label></div>
+      </article>
+      <article class="panel setting-row">
+        <div class="setting-description"><span class="setting-index">02 · 重试</span><h3>失败自动重试</h3><p>网络断开或上游临时不可用时自动再试。</p><small>适用于 Rsync、Reposync 和 GitHub Release；Rsync 先尝试备用来源。等待从 5 秒开始逐次翻倍，最多 80 秒，共享累计超时。磁盘、权限和配置错误直接停止。</small></div>
+        <div class="setting-controls"><label>失败重试次数<input v-model.number="draft.settings.retry_count" type="number" min="0" max="10" step="1"/><small>0–10 次，默认额外重试 3 次；0 关闭。修改对新任务生效。</small></label></div>
       </article>
     </div>
 

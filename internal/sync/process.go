@@ -88,14 +88,17 @@ func splitCR(data []byte, atEOF bool) (int, []byte, error) {
 }
 
 type processOutput struct {
-	mu         sync.Mutex
-	log        io.Writer
-	last       string
-	emit       func(Progress)
-	localError string
-	err        error
-	cancel     context.CancelCauseFunc
-	progress   Progress
+	mu            sync.Mutex
+	log           io.Writer
+	last          string
+	emit          func(Progress)
+	name          string
+	upstreamError string
+	networkError  string
+	localError    string
+	err           error
+	cancel        context.CancelCauseFunc
+	progress      Progress
 }
 
 func (o *processOutput) scan(reader io.Reader) {
@@ -109,8 +112,14 @@ func (o *processOutput) scan(reader io.Reader) {
 			o.err = err
 			o.cancel(err)
 		}
-		if localFailureLine(line) {
+		if localFailureLine(line) || (o.name == "dnf" && reposyncPermanentLine(line)) {
 			o.localError = line
+		}
+		if o.name == "rsync" && rsyncPermanentLine(line) {
+			o.upstreamError = line
+		}
+		if o.name == "dnf" && reposyncNetworkLine(line) {
+			o.networkError = line
 		}
 		if line != "" {
 			o.last = line
@@ -172,7 +181,7 @@ func command(ctx context.Context, name string, args []string, emit func(Progress
 		return &Failure{Code: "DEPENDENCY_MISSING", Message: err.Error()}
 	}
 	lowerPriority(cmd.Process.Pid)
-	o := &processOutput{log: log, emit: emit, cancel: cancel}
+	o := &processOutput{log: log, emit: emit, cancel: cancel, name: name}
 	var wg sync.WaitGroup
 	wg.Go(func() { o.scan(out) })
 	wg.Go(func() { o.scan(errout) })
@@ -204,7 +213,40 @@ func command(ctx context.Context, name string, args []string, emit func(Progress
 		if o.localError != "" {
 			return &Failure{Code: "LOCAL_TRANSFER", Message: o.localError, ExitCode: code}
 		}
+		if o.upstreamError != "" {
+			return &Failure{Code: "UPSTREAM_ERROR", Message: o.upstreamError, ExitCode: code}
+		}
+		if name == "dnf" {
+			return &Failure{Code: "REPOSYNC_FAILED", Message: o.last, Retryable: o.networkError != "", ExitCode: code}
+		}
 		return Classify(code, o.last)
 	}
 	return nil
+}
+
+// DNF exits with a generic status; retain transient curl diagnostics even when
+// the final summary only says that all mirrors were tried.
+func reposyncNetworkLine(line string) bool {
+	lower := strings.ToLower(line)
+	for _, code := range []string{"5", "6", "7", "18", "28", "52", "55", "56", "92"} {
+		if strings.Contains(lower, "curl error ("+code+")") {
+			return true
+		}
+	}
+	for _, status := range []string{"408", "429", "500", "502", "503", "504"} {
+		if strings.Contains(lower, "status code: "+status) {
+			return true
+		}
+	}
+	return false
+}
+
+func reposyncPermanentLine(line string) bool {
+	lower := strings.ToLower(line)
+	for _, text := range []string{"no space left", "read-only file system", "permission denied", "gpg check failed", "gpg signature", "signature verification failed", "public key for", "curl error (3)", "curl error (60)", "curl error (77)", "status code: 401", "status code: 403", "status code: 404", "status code: 407"} {
+		if strings.Contains(lower, text) {
+			return true
+		}
+	}
+	return false
 }

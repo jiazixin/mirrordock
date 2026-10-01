@@ -38,6 +38,8 @@ settings:
   # 通知通过系统设置页面保存到 notifications，敏感字段为 enc:v1: 密文，禁止粘贴明文。
   # 五渠道默认关闭；必须一同备份数据目录 notification.key、SQLite 和本 YAML。
   notifications: {}
+  # 网络/上游临时失败后额外重试次数；默认 3，0 关闭，最多 10。共用累计预算。
+  retry_count: 3
   task_timeout: "8h"        # 每轮任务的累计执行预算；切换 src 不重置，排队/暂停不计入
   rsync:
     io_timeout: "5m"        # 连续无数据传输的等待上限，超时后可切换下一来源

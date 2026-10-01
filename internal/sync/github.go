@@ -240,14 +240,14 @@ func GitHubWithClient(ctx context.Context, client *github.Client, httpClient *ht
 	return nil
 }
 func githubError(err error, proxy string) error {
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-		return contextFailure(err)
+	if errors.Is(err, context.Canceled) {
+		return context.Canceled
 	}
 	if _, ok := errors.AsType[*github.RateLimitError](err); ok {
 		return &Failure{Code: "GITHUB_RATE_LIMIT", Message: "GitHub API 配额已用尽，请等待限流重置或检查 Token"}
 	}
 	if _, ok := errors.AsType[*github.AbuseRateLimitError](err); ok {
-		return &Failure{Code: "GITHUB_RATE_LIMIT", Message: "GitHub API 触发临时限流，请稍后重试"}
+		return &Failure{Code: "GITHUB_RATE_LIMIT", Message: "GitHub API 触发临时限流，请稍后重试", Retryable: true}
 	}
 	if e, ok := errors.AsType[*github.ErrorResponse](err); ok && e.Response != nil {
 		// Do not echo upstream messages: a proxy can return arbitrary text or credentials.
@@ -262,39 +262,38 @@ func githubError(err error, proxy string) error {
 		case http.StatusProxyAuthRequired:
 			detail = "代理要求认证，请检查代理用户名和密码"
 		}
-		return &Failure{Code: "GITHUB_API", Message: fmt.Sprintf("GitHub API HTTP %d：%s", e.Response.StatusCode, detail)}
+		return &Failure{Code: "GITHUB_API", Message: fmt.Sprintf("GitHub API HTTP %d：%s", e.Response.StatusCode, detail), Retryable: transientHTTP(e.Response.StatusCode)}
 	}
 	return githubNetworkError(err, proxy, "GITHUB_API", "GitHub API 查询")
 }
 
-// Return only the sentinel, since wrapped request errors can contain signed URLs.
-func contextFailure(err error) error {
+// Classify failures without emitting URLs, signed query strings, credentials or raw upstream text.
+func githubNetworkError(err error, proxy, code, operation string) error {
 	if errors.Is(err, context.Canceled) {
 		return context.Canceled
 	}
-	return context.DeadlineExceeded
-}
-
-// Classify failures without emitting URLs, signed query strings, credentials or raw upstream text.
-func githubNetworkError(err error, proxy, code, operation string) error {
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-		return contextFailure(err)
-	}
 	detail := "网络连接失败，请检查网络"
+	retryable := false
 	if _, ok := errors.AsType[*net.DNSError](err); ok {
 		detail = "DNS 解析失败，请检查目标或代理的域名解析"
+		retryable = true
 	} else if _, ok := errors.AsType[*tls.CertificateVerificationError](err); ok {
 		detail = "TLS 证书校验失败，请检查目标或 HTTPS 代理的证书"
 	} else if _, ok := errors.AsType[x509.UnknownAuthorityError](err); ok {
 		detail = "TLS 证书不受信任，请检查目标或 HTTPS 代理的证书"
 	} else if n, ok := errors.AsType[net.Error](err); ok && n.Timeout() {
 		detail = "网络等待超时，请检查目标或代理的连接"
+		retryable = true
 	} else if errors.Is(err, syscall.ECONNREFUSED) {
 		detail = "连接被拒绝，请检查目标或代理的监听地址与端口"
+		retryable = true
 	} else if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
 		detail = "连接被提前关闭（EOF）"
+		retryable = true
 	} else if strings.Contains(err.Error(), "Proxy Authentication Required") {
 		detail = "代理要求认证（HTTP 407），请检查代理用户名和密码"
+	} else if _, ok := errors.AsType[*net.OpError](err); ok {
+		retryable = true
 	}
 	if proxy != "" {
 		code = "GITHUB_PROXY"
@@ -312,7 +311,7 @@ func githubNetworkError(err error, proxy, code, operation string) error {
 	} else {
 		operation += "直连失败"
 	}
-	return &Failure{Code: code, Message: operation + "：" + detail}
+	return &Failure{Code: code, Message: operation + "：" + detail, Retryable: retryable}
 }
 func identityFile(target string) string {
 	return filepath.Join(filepath.Dir(target), ".mirrordock-asset-"+filepath.Base(target)+".json")
@@ -439,7 +438,7 @@ func downloadAsset(ctx context.Context, client *github.Client, httpClient *http.
 			offset = 0
 		} else {
 			res.Body.Close()
-			return false, &Failure{Code: "DOWNLOAD_HTTP", Message: fmt.Sprintf("资产下载 HTTP %d", res.StatusCode)}
+			return false, &Failure{Code: "DOWNLOAD_HTTP", Message: fmt.Sprintf("资产下载 HTTP %d", res.StatusCode), Retryable: transientHTTP(res.StatusCode)}
 		}
 		stream = res.Body
 	}
@@ -489,8 +488,11 @@ func downloadAsset(ctx context.Context, client *github.Client, httpClient *http.
 			if ctx.Err() != nil {
 				return false, ctx.Err()
 			}
-			return false, &Failure{Code: "DOWNLOAD_FAILED", Message: "资产响应流中断，已保存暂存文件"}
+			return false, githubNetworkError(readErr, proxy, "DOWNLOAD_FAILED", "资产响应流中断，已保存暂存文件")
 		}
+	}
+	if n < id.Size {
+		return false, &Failure{Code: "DOWNLOAD_FAILED", Message: "资产响应流提前结束，已保存暂存文件", Retryable: true}
 	}
 	if err = out.Sync(); err != nil {
 		return false, err
@@ -517,4 +519,9 @@ func validRange(value string, offset, total int64) bool {
 	var suffix string
 	n, _ := fmt.Sscanf(value, "bytes %d-%d/%d%s", &start, &end, &size, &suffix)
 	return n == 3 && start == offset && end == total-1 && size == total && start <= end
+}
+
+// Retry only statuses that describe a transient upstream condition.
+func transientHTTP(status int) bool {
+	return status == 408 || status == 429 || status == 500 || status == 502 || status == 503 || status == 504
 }

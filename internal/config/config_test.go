@@ -255,3 +255,41 @@ func TestGitHubTokenRejectsWhitespaceWithoutExposingValue(t *testing.T) {
 		}
 	}
 }
+
+func TestRetryConfigurationDefaultsValidationAndWriteback(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "config.yaml")
+	base := "listen: 127.0.0.1\npath: ./data\nmirror_root: ./mirror\nauth:\n  username: operator\n  password: test-secret\nsources: []\n"
+	for _, tc := range []struct {
+		section string
+		want    int
+	}{{"", 3}, {"settings: {}\n", 3}, {"settings:\n  retry_count: 0\n", 0}, {"settings:\n  retry_count: 10\n", 10}} {
+		c, err := Parse([]byte(base+tc.section), file)
+		if err != nil || int(c.Settings.RetryCount) != tc.want {
+			t.Fatal(c.Settings.RetryCount, err)
+		}
+	}
+	for _, v := range []string{"-1", "11", "1.5", "invalid"} {
+		if _, err := Parse([]byte(base+"settings:\n  retry_count: "+v+"\n"), file); err == nil {
+			t.Fatal("invalid retry accepted", v)
+		}
+	}
+	if err := os.WriteFile(file, []byte(base+"settings:\n  retry_count: 3 # keep retry comment\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	m, err := Open(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := m.Current()
+	c.Settings.RetryCount = 0
+	if err = m.Save(c, m.View().Revision, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err = m.Reload(); err != nil || m.View().Config.Settings.RetryCount != 0 {
+		t.Fatal("zero did not persist", err)
+	}
+	b, err := os.ReadFile(file)
+	if err != nil || !strings.Contains(string(b), "retry_count: 0 # keep retry comment") {
+		t.Fatal("comment lost", err)
+	}
+}
