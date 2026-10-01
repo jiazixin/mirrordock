@@ -434,3 +434,22 @@ OCR 本地 delegate preview/rule 检查工作区全部可审查源码/预览 **5
 OCR 沿用项目已记录的外部审批限制，使用 `open-code-review` / `open-code-review-delegate` 本地 preview/rule，由当前 Codex 审查，未调用外部 LLM 或发送源码。本轮完整审查 6 个生产源码（ToastStack、state、App、Shell、useRunPage、Notifications）及默认 default_path 排除的 2 个 E2E；核对 README、DESIGN 和本节。原有公开目录的 4 个新增/修改源码及设计计划 SHA256 与 `ocr-github-project-review.json` 完全一致，继承已记录审查；总计 **16/16 项、12/12 新增/修改源码、跳过 0、覆盖 100%**。文档 unsupported_ext 排除和测试 default_path 排除均另行覆盖；检查独立计时/卸载、点击和布局、语义/转义、依赖边界、请求失败和测试隔离，已修正按钮遮挡与减少动态效果覆盖，没有遗留确认的高/中严重度正确性、安全或性能问题。清单、规则、哈希和覆盖报告在 `../test-results/ocr-toast-preview.json`、`ocr-toast-rules.json`、`ocr-toast-review.json`。
 
 性能与未验证项：使用 CSS transform 动画，不做逐帧 JavaScript 计时；队列和计时器最多三项。此为资源边界和功能验收，不是性能基准；本轮没有新增下载性能测量，后端下载热路径未改。Firefox/Safari、真实部署服务重启后的显示、Linux 实机/生产吞吐/发行版验收和外部 OCR LLM 未验证。未修改用户配置、镜像或凭证，未创建子代理、推送、发布或发送外部消息。
+
+## 旧项目 UI 参考调整 · 2026-10-01
+
+范围：按用户提供的 `a/web` 参考管理台视觉，修改六个生产文件：`web/src/styles/global.css`、`web/src/layouts/Shell.vue`、`web/src/features/runs/Batches.vue`、`web/src/features/settings/Settings.vue`、`web/src/features/settings/Notifications.vue`、`web/src/features/sources/OptionCard.vue`。旧项目只读，不复制其业务代码、依赖或构建产物；本次没有 Go/API/配置协议变更。现有 E2E 标题字重断言从 700 调整为本次明确采用的 600；其他行为断言保留。
+
+视觉：浅灰侧栏、白色内容区、轻边框和统一较小字号；40px 导航、38px 筛选控件、36px 页面按钮、30px 行内操作/分页。统计卡及表格内边距收紧，大屏不额外加高；保留类型蓝/橙/紫、状态标签 6px 圆角及列对齐。时间线按日期收束末条竖线，设置/通知卡片统一双列间距，手机保持抽屉导航和容器内表格滚动。检查最终桌面源表格、批次时间线、系统配置与通知卡片，以及 375px 手机源/批次/通知截图。
+
+验证命令与结果：
+
+- `npm --prefix web run build`：Vue 类型检查和 Vite 构建通过，唯一输出 `web/dist/`。
+- `GOCACHE="$PWD/.cache/go-build" go build -trimpath -o /tmp/mirrordock-ui-check-final ./cmd/mirrordock`：Go **1.27.1 darwin/arm64** 嵌入构建通过；随后按同一源码重建 `bin/mirrordock`。
+- `MIRRORDOCK_TEST_BINARY=/tmp/mirrordock-ui-check-final MIRRORDOCK_TEST_RSYNC="$PWD/.cache/rsync/rsync-3.5.1/rsync" npm --prefix web run test:e2e -- --output=test-results/reference-ui-final`：**7 passed（54.6s）**。覆盖真实隔离 rsync 失败切换与发布、五页 1440/1024/736/375px 布局、源/批次 320px 无整页横向溢出、分页 736/375/320px、表单/下拉键盘操作、日志刷新/跟随、通知保存/帮助/本地接收器、提示倒计时及公开目录回归；未发起真实外部通知或完整发行版同步。
+- `git diff --check`：通过。最终日志为 [reference-ui-e2e-final.txt](../test-results/reference-ui-e2e-final.txt)；截图在 `web/test-results/reference-ui-final/`，同步源总览另存 [reference-ui-sources.png](../web/test-results/reference-ui-sources.png)。
+
+初次 Go 构建因默认缓存目录写权限被沙箱限制，改用项目缓存后通过。首次 Chromium 启动因 MachPort 权限限制，三个测试未执行，不计为通过；经自动审批允许隔离浏览器和本地端口后执行。第一轮完整 E2E 通过，但源码与截图复核仍发现通用按钮误受输入框宽度规则影响、固定表格长源名换行丢失，已修复并重建，然后重新执行上述最终 7 项测试；第一轮截图不作为最终视觉交付。
+
+审查沿用项目此前外部 OCR LLM 被自动审批阻止后允许的 `open-code-review` / `open-code-review-delegate` 本地流程；本次没有尝试外部 LLM、没有发送源码。`ocr delegate preview --format json --exclude 'a/**'` 覆盖六个变更生产文件，`ocr delegate rule` 解析规则，由当前 Codex 逐文件审查：**6/6 生产文件、另行审查 1/1 修改的 E2E、跳过 0、覆盖 100%**。检查 CSS 选择器范围、级联、按钮固有宽度、长文本、侧栏短视口滚动、窄屏列宽、时间线末项、凭证输入与现有请求/轮询边界；上述两项确认的 UI 正确性问题已修复，无遗留确认的高/中严重度问题。用户参考目录 `a/**` 全部排除，其生成物/依赖/二进制不是本次源码；OCR 默认 `default_path` 排除的 E2E 另行审查，三份 Markdown 文档因 `unsupported_ext` 另行核对。完整逐文件排除清单、规则和源码哈希报告为 [ocr-reference-ui-preview.json](../test-results/ocr-reference-ui-preview.json)、[ocr-reference-ui-rules.json](../test-results/ocr-reference-ui-rules.json)、[ocr-reference-ui-review.json](../test-results/ocr-reference-ui-review.json)。
+
+性能与未验证项：最终构建 CSS **38.06 kB / gzip 8.53 kB**，JS **193.48 kB / gzip 70.18 kB**；这是构建产物大小，不是渲染或吞吐基准。本次未添加运行时依赖、请求、轮询或逐帧 JS，下载热路径未改；没有新 Linux 实机/sendfile/发行版/生产吞吐测量。Safari/Firefox、实际部署服务重启后的显示和外部 OCR LLM 未验证。本机二进制已构建，未重启用户正在运行的服务、未修改用户配置/镜像/凭证，未创建子代理、推送、发布或发送外部消息。

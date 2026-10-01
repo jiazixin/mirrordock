@@ -11,8 +11,8 @@ const enabled = defineModel<boolean | null>({ required: true })
 </template>
 
 <style scoped>
-.source-option-card{position:relative;display:flex;flex-direction:column;gap:0;min-width:0;min-height:94px;padding:14px 14px 38px;border:1px solid var(--line);border-radius:8px;background:#fafbfe;cursor:pointer;transition:border-color .15s,background .15s}
-.source-option-card:hover{border-color:#c4d2fa;background:#f6f8ff}
+.source-option-card{position:relative;display:flex;flex-direction:column;gap:0;min-width:0;min-height:94px;padding:14px 14px 38px;border:1px solid var(--line);border-radius:8px;background:#fafbfc;cursor:pointer;transition:border-color .15s,background .15s}
+.source-option-card:hover{border-color:#c4d2fa;background:#f5f7fc}
 .option-copy{display:flex;flex-direction:column;gap:4px;overflow-wrap:anywhere}
 .option-copy strong{font-size:13px;font-weight:500;color:#424a56;line-height:1.5}
 .option-copy small{font-size:12px;line-height:1.6;color:var(--muted)}

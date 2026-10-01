@@ -113,22 +113,22 @@ async function reload() {
 </template>
 
 <style scoped>
-.settings-tabs { gap: 28px; overflow-x: auto; }
+.settings-tabs { gap: 24px; overflow-x: auto; }
 .active-config { padding: 26px 28px; }
 .active-config h2 { font-size: 17px; }
 .active-config code { display: block; margin-top: 14px; overflow-wrap: anywhere; color: var(--dark); font-size: 13px; }
 .settings-tabs button { white-space: nowrap; }
 .settings-sections { display: flex; flex-direction: column; gap: 20px; }
-.setting-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 48px; padding: 30px 28px; }
+.setting-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 36px; padding: 26px; }
 .setting-description { max-width: 530px; }
-.setting-index { display: block; font-size: 11px; font-weight: 500; letter-spacing: 1.4px; color: var(--muted); margin-bottom: 10px; }
-.setting-description h3 { font-size: 18px; margin-bottom: 12px; }
-.setting-description p { color: var(--muted); font-size: 13px; line-height: 1.8; margin-bottom: 12px; }
+.setting-index { display: block; font-size: 11px; font-weight: 500; letter-spacing: .6px; color: var(--muted); margin-bottom: 10px; }
+.setting-description h3 { font-size: 16px; margin-bottom: 10px; }
+.setting-description p { color: var(--muted); font-size: 12px; line-height: 1.8; margin-bottom: 12px; }
 .setting-description small { display: block; }
 .setting-controls { display: flex; flex-direction: column; gap: 18px; min-width: 0; }
 .setting-controls.form-grid { display: grid; align-content: start; }
 .setting-controls label { font-size: 13px; }
-.setting-controls input:not([type=checkbox]) { max-width: 420px; }
+.setting-controls input:not([type=checkbox]) { max-width: none; }
 .setting-controls .check { font-weight: 400; color: var(--dark); }
 @media (max-width: 1150px) { .setting-row { gap: 28px; padding: 24px; } }
 @media (max-width: 900px) { .setting-row { grid-template-columns: 1fr; gap: 24px; } .setting-controls input:not([type=checkbox]) { max-width: none; } }

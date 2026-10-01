@@ -140,14 +140,14 @@ onBeforeUnmount(() => { disposed = true; clearInterval(timer) })
 <style scoped>
 .notification-settings { display: flex; flex-direction: column; gap: 20px; }
 .notification-settings > .alert { background: var(--blue-light); border-color: #dce4fc; color: #53637c; margin-bottom: 0; }
-.notification-intro h2, .records-heading h2 { font-size: 18px; }
-.notification-intro p, .timezone-note, .channel-description p { color: var(--muted); font-size: 13px; line-height: 1.8; }
+.notification-intro h2, .records-heading h2 { font-size: 17px; }
+.notification-intro p, .timezone-note, .channel-description p { color: var(--muted); font-size: 12px; line-height: 1.8; }
 .notification-intro p { margin-top: 10px; }
-.notification-card { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); padding: 30px 28px; gap: 48px; overflow: visible; }
+.notification-card { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); padding: 26px; gap: 36px; overflow: visible; }
 .channel-title { display: flex; align-items: center; gap: 10px; }
-.channel-title h3 { font-size: 18px; }
+.channel-title h3 { font-size: 16px; }
 .channel-switch { margin-left: auto; }
-.channel-description p { margin-top: 16px; }
+.channel-description p { margin-top: 12px; }
 .channel-controls { display: flex; flex-direction: column; gap: 18px; min-width: 0; }
 .channel-controls label { font-size: 13px; }
 .channel-actions { display: flex; gap: 10px; flex-wrap: wrap; border-top: 1px solid var(--line); padding-top: 18px; margin-top: 8px; }

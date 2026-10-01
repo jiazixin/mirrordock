@@ -135,7 +135,7 @@ test('real configuration, rsync failover, publication, records and responsive UI
   await filter.click();await page.getByRole('option',{name:'GitHub Release',exact:true}).click();await expect(page.locator('.source-name')).toHaveCount(0)
   await filter.press('Home');await filter.press('ArrowDown');await filter.press('Enter');await expect(page.locator('.source-name')).toHaveCount(1)
   const fonts=await page.evaluate(()=>({family:getComputedStyle(document.body).fontFamily,heading:getComputedStyle(document.querySelector('h1')!).fontWeight,button:getComputedStyle(document.querySelector('.heading-actions .button')!).fontWeight}))
-  expect(fonts.family).not.toContain('Avenir');expect(fonts.heading).toBe('700');expect(fonts.button).toBe('500')
+  expect(fonts.family).not.toContain('Avenir');expect(fonts.heading).toBe('600');expect(fonts.button).toBe('500')
   const icon=await request.get(base+'/favicon.ico?v=2');const adminIcon=await request.get(base+'/admin/favicon.ico?v=2');expect(icon.status()).toBe(200);expect(adminIcon.status()).toBe(200);const iconBytes=await icon.body();expect(iconBytes.equals(await adminIcon.body())).toBeTruthy();expect([...iconBytes.subarray(0,6)]).toEqual([0,0,1,0,6,0]);expect(await page.locator('link[rel="icon"]').getAttribute('href')).toBe('/admin/favicon.ico?v=2')
   await page.screenshot({path:testInfo.outputPath('sources.png'),fullPage:true});expect(errors).toEqual([])
   // Read-only display fixtures cover all status/type colors without starting external syncs.

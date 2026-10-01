@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { useRoute } from 'vue-router'
-import { FolderSync, Layers3, ScrollText, Clock3, Settings2, LogOut, Menu, ExternalLink, ArrowUpRight } from '@lucide/vue'
+import { FolderSync, Layers3, ScrollText, Clock3, Settings2, LogOut, Menu, ExternalLink } from '@lucide/vue'
 import { ref, onBeforeUnmount } from 'vue'
 import ToastStack from '../components/ToastStack.vue'
 import { state, dismissToast } from '../app/state'
@@ -20,7 +20,7 @@ const links = [{ path: '/sources', label: '同步源', icon: FolderSync, group: 
       <nav>
         <template v-for="link in links" :key="link.path">
           <span v-if="link.group" class="nav-group">{{ link.group }}</span>
-          <RouterLink :to="link.path" @click="mobile=false"><component :is="link.icon" :size="19"/><span>{{ link.label }}</span><ArrowUpRight v-if="route.path===link.path" class="nav-arrow" :size="14"/></RouterLink>
+          <RouterLink :to="link.path" @click="mobile=false"><component :is="link.icon" :size="19"/><span>{{ link.label }}</span><span v-if="route.path===link.path" class="nav-arrow" aria-hidden="true"></span></RouterLink>
         </template>
       </nav>
       <div class="sidebar-bottom">
