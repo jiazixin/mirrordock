@@ -398,3 +398,11 @@ Vue 类型检查/Vite 生产构建、Go 1.27.1 临时二进制构建、`git diff
 OCR 本地 delegate preview/rule 检查工作区全部可审查源码/预览 **5/5，跳过 0**，新增 OptionCard.vue、修改 SourceEditor.vue，连同上一轮未提交的 RunDetail.vue、global.css 和历史预览一并覆盖。默认排除的日志 E2E 测试另行检查。核对 boolean/null 默认值与 v-model、原生 checkbox 的 switch 语义和焦点、组件作用域、无整行跨度、窄屏、减少动态效果及强制色彩回退，没有遗留确认的高/中严重度问题。外部 OCR LLM 调用未执行，沿用前次被审批阻止后的本地审查方式。报告为 `../test-results/ocr-option-cards-preview.json`、`ocr-option-cards-rules.json`、`ocr-option-cards-review.json`。
 
 本次未修改 Go 源码，未运行 Go 全套单元/竞态/静态检查、Linux 性能或真实发行版同步；所有浏览器检查使用临时配置、数据目录及隔离端口。用户正在运行的程序、配置和镜像未修改或重启，现有服务换用新 Web 构建嵌入的二进制并重启后生效。
+
+## 刷新按钮变更复审 · 2026-10-01
+
+用户确认此前的异常来自自己的浏览器，本次只评估提交 `66b4a81` 中日志刷新相关变更的必要性，未修改或回退产品源码。对比父提交 `71a1494`：旧版已有请求防重入及 `finally { loading = false }`，没有找到正常成功/失败后遗漏释放状态的证据。新版新增响应式 `logLoading`、忙碌语义、禁用与旋转反馈，并将悬停颜色改为中性，属于交互改进；取消旧尝试时不复位新尝试的加载状态，逻辑合理。建议保留加载反馈和独立的日志跟随功能；中性悬停仅是视觉选择。请求若一直未完成，前后两版都没有新增的前端超时恢复机制，不能将此提交解释为浏览器异常的修复。
+
+沿用项目已有的 OCR 本地 delegate preview/rule 流程，由当前 Codex 审查，外部 LLM 调用未执行。commit preview 共 9 项：完整审查 `web/src/features/runs/RunDetail.vue`、`web/src/styles/global.css` 与默认被 default_path 排除的 `web/e2e/log-controls.spec.ts`；核对 README、DESIGN、ACCEPTANCE 中相关说明（工具因 unsupported_ext 排除）。另外 3 项 `docs/previews/source-options.html`、`web/src/features/sources/OptionCard.vue`、`web/src/features/sources/SourceEditor.vue` 属于源编辑选项设计，超出本次刷新问题范围，未复审。覆盖汇总：total_files=9、reviewed_files=6、skipped_files=3、coverage_rate=66.7%；本次相关源码覆盖 3/3。未发现该范围内确认的高/中严重度正确性、安全或性能问题；不宣称整个提交已重新审查。
+
+复审后验证：`npm --prefix web run build`（vue-tsc / Vite）通过；Go 1.27.1 构建临时二进制 `/tmp/mirrordock-refresh-review` 通过；`MIRRORDOCK_TEST_BINARY=/tmp/mirrordock-refresh-review npm --prefix web run test:e2e -- log-controls.spec.ts` 最终 **1 passed（4.0s）**。覆盖成功/失败恢复按钮、持续悬停、跟随开关、尝试切换及重新打开。首次 Chromium 因沙箱 MachPort 权限未启动，获准在沙箱外运行隔离测试后通过。测试使用临时空源配置、随机本机端口和受控日志响应，没有执行同步或修改用户服务。未复现用户原浏览器环境，未新增慢请求取消时序测试，未运行全套 Go/E2E 或 Linux 性能检查。
