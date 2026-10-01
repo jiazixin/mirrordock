@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test'
 import { spawn, type ChildProcess } from 'node:child_process'
-import { mkdtemp, writeFile, readFile, rm, mkdir } from 'node:fs/promises'
+import { mkdtemp, writeFile, readFile, rm, mkdir, appendFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import net from 'node:net'
@@ -55,27 +55,64 @@ test('real configuration, rsync failover, publication, records and responsive UI
   const attempt=page.getByRole('combobox',{name:'选择日志尝试'})
   await expect(attempt).toHaveText('尝试 #2');await attempt.click();await page.getByRole('option',{name:'尝试 #1',exact:true}).click();await expect(attempt).toHaveText('尝试 #1');await expect(page.locator('.log-view')).toContainText('Connection refused')
   await attempt.press('End');await attempt.press('Enter');await expect(attempt).toHaveText('尝试 #2');await expect(page.locator('.log-view')).toContainText('Total transferred file size: 35 bytes')
+  let staleRequested = false
+  await page.route('**/api/runs/*/logs?attempt=1&offset=0', async route => {
+    staleRequested = true
+    await new Promise(resolve => setTimeout(resolve,600))
+    await route.fulfill({json:{text:'过期尝试响应',next_offset:10}})
+  })
+  await attempt.click(); await page.getByRole('option',{name:'尝试 #1',exact:true}).click()
+  await expect.poll(() => staleRequested).toBe(true)
+  await attempt.click(); await page.getByRole('option',{name:'尝试 #2',exact:true}).click()
+  await expect(page.locator('.log-view')).toContainText('Total transferred file size: 35 bytes')
+  await page.waitForTimeout(700); await expect(page.locator('.log-view')).not.toContainText('过期尝试响应')
+  await page.unroute('**/api/runs/*/logs?attempt=1&offset=0')
+  await expect(page.getByRole('button',{name:'读取后续日志',exact:true})).toHaveCount(0)
+  await expect(page.getByRole('button',{name:'下载',exact:true})).toBeVisible()
+  const successful = await (await page.request.get(base+'/api/runs?state=succeeded')).json()
+  const runID = successful.items[0].id
+  const logFile = path.join(dir,'data','logs',String(runID),'2.log')
+  const fullLog = '完整日志起点\n' + '0123456789abcdef\n'.repeat(140000) + '完整日志终点\n'
+  await appendFile(logFile, fullLog)
+  await expect(page.locator('.log-view')).toContainText('完整日志终点',{timeout:12000})
+  await expect(page.locator('.log-view')).not.toContainText('完整日志起点')
+  const beforeDownload = await readFile(logFile,'utf8')
+  expect((await request.get(base+`/api/runs/${runID}/logs?attempt=2&download=1`)).status()).toBe(401)
+  await page.route('**/api/runs/*/logs?attempt=2&download=1', async route => {
+    const response = await route.fetch()
+    await appendFile(logFile,'下载请求后追加\n')
+    await route.fulfill({response})
+  })
+  const downloadEvent = page.waitForEvent('download')
+  await page.getByRole('button',{name:'下载',exact:true}).click()
+  const logDownload = await downloadEvent
+  expect(logDownload.suggestedFilename()).toBe(`run-${runID}-attempt-2.log`)
+  expect(await readFile((await logDownload.path())!,'utf8')).toBe(beforeDownload)
+  await page.unroute('**/api/runs/*/logs?attempt=2&download=1')
+  let logRequests = 0
+  page.on('request', req => { if(req.url().includes(`/api/runs/${runID}/logs`))logRequests++ })
   await page.getByRole('button',{name:'关闭',exact:true}).click()
+  const stopped = logRequests; await page.waitForTimeout(3300); expect(logRequests).toBe(stopped)
   await page.getByRole('link',{name:'运行记录'}).click();await expect(page.locator('.table-scroll table')).toContainText('隔离测试源');await page.getByRole('combobox',{name:'按同步源筛选'}).click();await page.getByRole('option',{name:'隔离测试源',exact:true}).click();await page.getByRole('combobox',{name:'按时间筛选'}).click();await page.getByRole('option',{name:'最近 24 小时'}).click();await expect(page.locator('.table-scroll table')).toContainText('隔离测试源');await page.screenshot({path:testInfo.outputPath('records.png'),fullPage:true})
-  await page.getByRole('link',{name:'系统设置'}).click();await expect(page.getByRole('tab',{name:'同步执行',exact:true})).toHaveAttribute('aria-selected','true');await expect(page.getByLabel('listen',{exact:true})).toHaveCount(0);await expect(page.getByLabel('port',{exact:true})).toHaveCount(0);await expect(page.getByLabel('证书链 · cert')).toHaveCount(0);await expect(page.getByLabel('私钥 · key')).toHaveCount(0);await page.getByRole('tab',{name:'rsync',exact:true}).click();await page.getByLabel('rsync 传输限速').fill('12.5');await page.getByRole('tab',{name:'rsync',exact:true}).press('ArrowRight');await expect(page.getByRole('tab',{name:'GitHub Release',exact:true})).toBeFocused();await page.getByLabel('GitHub Token',{exact:true}).fill('e2e-github-token');await page.getByLabel('GitHub 代理 · proxy').fill('socks5://user:e2e-proxy-password@127.0.0.1:1080');await page.getByRole('button',{name:'保存设置'}).click();await expect.poll(async()=>await readFile(configFile,'utf8')).toContain('limit_mb: 12.5');expect(await readFile(configFile,'utf8')).toContain('# e2e comment');expect(await readFile(configFile,'utf8')).toContain('socks5://user:e2e-proxy-password@127.0.0.1:1080');await expect(page.getByLabel('GitHub 代理 · proxy')).toHaveValue('socks5://user:e2e-proxy-password@127.0.0.1:1080');await expect(page.getByLabel('GitHub 代理 · proxy')).toHaveAttribute('type','text');const proxyView=await (await page.request.get(base+'/api/config')).json();expect(proxyView.token_configured).toBe(true);expect(proxyView.config.settings.github.token).toBe('');expect(JSON.stringify(proxyView)).not.toContain('e2e-github-token');expect(await readFile(configFile,'utf8')).toContain('token: e2e-github-token');expect(proxyView.proxy_configured).toBe(true);expect(proxyView.config.settings.github.proxy).toBe('socks5://user:e2e-proxy-password@127.0.0.1:1080');expect(proxyView.config.auth.username).toBe('mirror-admin');expect(proxyView.config.auth).not.toHaveProperty('password');expect(await readFile(configFile,'utf8')).toContain('password: strong local password 123');expect(JSON.stringify(proxyView)).not.toContain('strong local password 123');await page.screenshot({path:testInfo.outputPath('settings-github.png'),fullPage:true});await page.reload();await page.getByRole('tab',{name:'GitHub Release',exact:true}).click();await expect(page.getByLabel('GitHub 代理 · proxy')).toHaveValue('socks5://user:e2e-proxy-password@127.0.0.1:1080');await page.getByLabel('GitHub 代理 · proxy').fill('');await page.getByRole('button',{name:'保存设置'}).click();await expect.poll(async()=>((await (await page.request.get(base+'/api/config')).json()).proxy_configured)).toBe(false)
+  await page.getByRole('link',{name:'系统设置'}).click();await expect(page.getByRole('tab',{name:'Rsync',exact:true})).toHaveAttribute('aria-selected','true');await expect(page.getByLabel('listen',{exact:true})).toHaveCount(0);await expect(page.getByLabel('port',{exact:true})).toHaveCount(0);await expect(page.getByLabel('证书链 · cert')).toHaveCount(0);await expect(page.getByLabel('私钥 · key')).toHaveCount(0);await page.getByRole('tab',{name:'Rsync',exact:true}).click();await page.getByLabel('Rsync 传输限速').fill('12.5');await page.getByRole('tab',{name:'Rsync',exact:true}).press('ArrowRight');await expect(page.getByRole('tab',{name:'GitHub Release',exact:true})).toBeFocused();await page.getByLabel('GitHub Token',{exact:true}).fill('e2e-github-token');await page.getByLabel('GitHub 代理 · proxy').fill('socks5://user:e2e-proxy-password@127.0.0.1:1080');await page.getByRole('button',{name:'保存设置'}).click();await expect.poll(async()=>await readFile(configFile,'utf8')).toContain('limit_mb: 12.5');expect(await readFile(configFile,'utf8')).toContain('# e2e comment');expect(await readFile(configFile,'utf8')).toContain('socks5://user:e2e-proxy-password@127.0.0.1:1080');await expect(page.getByLabel('GitHub 代理 · proxy')).toHaveValue('socks5://user:e2e-proxy-password@127.0.0.1:1080');await expect(page.getByLabel('GitHub 代理 · proxy')).toHaveAttribute('type','text');const proxyView=await (await page.request.get(base+'/api/config')).json();expect(proxyView.token_configured).toBe(true);expect(proxyView.config.settings.github.token).toBe('');expect(JSON.stringify(proxyView)).not.toContain('e2e-github-token');expect(await readFile(configFile,'utf8')).toContain('token: e2e-github-token');expect(proxyView.proxy_configured).toBe(true);expect(proxyView.config.settings.github.proxy).toBe('socks5://user:e2e-proxy-password@127.0.0.1:1080');expect(proxyView.config.auth.username).toBe('mirror-admin');expect(proxyView.config.auth).not.toHaveProperty('password');expect(await readFile(configFile,'utf8')).toContain('password: strong local password 123');expect(JSON.stringify(proxyView)).not.toContain('strong local password 123');await page.screenshot({path:testInfo.outputPath('settings-github.png'),fullPage:true});await page.reload();await page.getByRole('tab',{name:'GitHub Release',exact:true}).click();await expect(page.getByLabel('GitHub 代理 · proxy')).toHaveValue('socks5://user:e2e-proxy-password@127.0.0.1:1080');await page.getByLabel('GitHub 代理 · proxy').fill('');await page.getByRole('button',{name:'保存设置'}).click();await expect.poll(async()=>((await (await page.request.get(base+'/api/config')).json()).proxy_configured)).toBe(false)
   await expect(page.locator('.config-footer')).toHaveCount(0)
   await expect(page.getByRole('link',{name:'系统配置',exact:true})).toHaveCount(0)
-  await expect(page.getByRole('tab')).toHaveText(['同步执行','rsync','GitHub Release','系统配置','通知设置'])
-  await page.getByRole('tab',{name:'GitHub Release',exact:true}).press('ArrowRight')
+  await expect(page.getByRole('tab')).toHaveText(['Rsync','GitHub Release','同步执行','系统配置','通知设置'])
+  await page.getByRole('tab',{name:'同步执行',exact:true}).press('ArrowRight')
   await expect(page.getByRole('tab',{name:'系统配置',exact:true})).toBeFocused()
   await expect(page.locator('.active-config')).toContainText(configFile)
   await expect(page.getByRole('heading',{name:'运行环境',exact:true})).toHaveCount(0)
   await expect(page.getByRole('heading',{name:'监听与存储',exact:true})).toHaveCount(0)
   await expect(page.getByRole('button',{name:'保存设置'})).toHaveCount(0)
   await expect(page.locator('.environment-checks')).toContainText('检查完成')
-  await expect(page.locator('.check-row').filter({has:page.getByText('rsync',{exact:true})})).toContainText('版本 3.')
+  await expect(page.locator('.check-row').filter({has:page.getByText('Rsync',{exact:true})})).toContainText('版本 3.')
   await expect(page.locator('.check-row').filter({has:page.getByText('配置目录',{exact:true})})).toContainText('可写')
   await expect(page.locator('pre')).toHaveCount(0)
   const checks = await (await page.request.get(base+'/api/system/checks')).json()
   await page.route('**/api/system/checks',route=>route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({...checks,rsync:{available:false,version:''}})}))
   await page.getByRole('button',{name:'刷新',exact:true}).click()
   await expect(page.locator('.environment-checks')).toContainText('检查完成')
-  await expect(page.locator('.check-row').filter({has:page.getByText('rsync',{exact:true})})).toContainText('未检测到可用的 rsync')
+  await expect(page.locator('.check-row').filter({has:page.getByText('Rsync',{exact:true})})).toContainText('未检测到可用的 Rsync')
   await page.unroute('**/api/system/checks')
   await page.route('**/api/system/checks',route=>route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:'环境检查测试失败'})}))
   await page.getByRole('button',{name:'刷新',exact:true}).click()
@@ -85,10 +122,10 @@ test('real configuration, rsync failover, publication, records and responsive UI
   await page.unroute('**/api/system/checks')
   await page.getByRole('button',{name:'刷新',exact:true}).click()
   await expect(page.locator('.environment-checks')).toContainText('检查完成')
-  await expect(page.locator('.check-row').filter({has:page.getByText('rsync',{exact:true})})).toContainText('版本 3.')
+  await expect(page.locator('.check-row').filter({has:page.getByText('Rsync',{exact:true})})).toContainText('版本 3.')
   await page.screenshot({path:testInfo.outputPath('settings-environment.png'),fullPage:true})
   await page.getByRole('link',{name:'同步源',exact:true}).click();await page.getByRole('button',{name:'编辑 隔离测试源'}).click();await expect(page.getByRole('dialog')).toContainText('编辑同步源');await page.getByRole('button',{name:'取消',exact:true}).click()
-  for(const width of [1440,1024,736,375]) {await page.setViewportSize({width,height:1000});for(const name of ['sources','batches','records','schedules','settings']) {await page.goto(base+'/admin/'+name);await expect(page.locator('.page-heading')).toBeVisible();await expect(page.locator('.page-heading p,.connection,.page-note,.filter-help,.panel-caption,.sidebar .brand small')).toHaveCount(0);await expect(page.locator('select')).toHaveCount(0);await expect(page.locator('.topbar,.crumb,.topbar-right')).toHaveCount(0);expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBeTruthy();if(name==='settings'){for(const tab of ['同步执行','rsync','GitHub Release','系统配置']){await page.getByRole('tab',{name:tab,exact:true}).click();if(tab==='系统配置')await expect(page.locator('.environment-checks')).toContainText('检查完成');expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBeTruthy()}await page.screenshot({path:testInfo.outputPath(`settings-${width}.png`),fullPage:true})}}}
+  for(const width of [1440,1024,736,375]) {await page.setViewportSize({width,height:1000});for(const name of ['sources','batches','records','schedules','settings']) {await page.goto(base+'/admin/'+name);await expect(page.locator('.page-heading')).toBeVisible();await expect(page.locator('.page-heading p,.connection,.page-note,.filter-help,.panel-caption,.sidebar .brand small')).toHaveCount(0);await expect(page.locator('select')).toHaveCount(0);await expect(page.locator('.topbar,.crumb,.topbar-right')).toHaveCount(0);expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBeTruthy();if(name==='schedules')await page.screenshot({path:testInfo.outputPath(`schedules-${width}.png`),fullPage:true});if(name==='settings'){for(const tab of ['Rsync','GitHub Release','同步执行','系统配置']){await page.getByRole('tab',{name:tab,exact:true}).click();if(tab==='系统配置')await expect(page.locator('.environment-checks')).toContainText('检查完成');expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBeTruthy()}await page.screenshot({path:testInfo.outputPath(`settings-${width}.png`),fullPage:true})}}}
   await page.getByRole('button',{name:'打开导航'}).click();await expect(page.locator('.sidebar')).toHaveClass(/open/);await page.getByRole('link',{name:'同步源',exact:true}).click();await expect(page.locator('.sidebar')).not.toHaveClass(/open/);await expect.poll(async()=>{const box=await page.locator('.sidebar').boundingBox();return box?box.x+box.width:Infinity}).toBeLessThanOrEqual(0);await expect(page.locator('.page-heading')).toContainText('同步源');await page.screenshot({path:testInfo.outputPath('mobile-sources.png'),fullPage:true})
   await page.goto(base+'/admin/batches');await page.getByRole('combobox',{name:'批次状态',exact:true}).click()
   const bounds=await page.getByRole('listbox').boundingBox();expect(bounds).toBeTruthy();expect(bounds!.x).toBeGreaterThanOrEqual(0);expect(bounds!.x+bounds!.width).toBeLessThanOrEqual(375);expect(bounds!.y+bounds!.height).toBeLessThanOrEqual(1000)

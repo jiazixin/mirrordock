@@ -8,7 +8,7 @@ import type { SystemChecks } from '../../app/types'
 const checks = ref<SystemChecks>()
 const checking = ref(false)
 function toolVersion(tool: SystemChecks['rsync'] | undefined, name: 'rsync' | 'dnf') {
-  if (!tool?.available) return name === 'dnf' ? '可选；未检测到可用的 DNF' : '未检测到可用的 rsync'
+  if (!tool?.available) return name === 'dnf' ? '可选；未检测到可用的 DNF' : '未检测到可用的 Rsync'
   const pattern = name === 'rsync' ? /\brsync\s+version\s+(\d+(?:\.\d+)+)/i : /^\s*(\d+(?:\.\d+)+)\s*$/m
   const version = tool.version.match(pattern)?.[1]
   return version ? `版本 ${version}` : '可执行，版本未识别'
@@ -16,7 +16,7 @@ function toolVersion(tool: SystemChecks['rsync'] | undefined, name: 'rsync' | 'd
 const checkRows = computed(() => {
   const result = checks.value
   return [
-    { label: 'rsync', status: result?.rsync.available ? '可用' : '不可用', ok: result?.rsync.available, detail: toolVersion(result?.rsync, 'rsync') },
+    { label: 'Rsync', status: result?.rsync.available ? '可用' : '不可用', ok: result?.rsync.available, detail: toolVersion(result?.rsync, 'rsync') },
     { label: 'DNF', status: result?.dnf.available ? '可用' : '不可用', ok: result?.dnf.available, detail: `${toolVersion(result?.dnf, 'dnf')}；未检查 reposync 插件` },
     { label: '配置目录', status: result?.config_writable ? '可写' : '不可写', ok: result?.config_writable, detail: 'YAML 原子写回需要在此目录创建临时文件' },
     { label: '镜像根目录', status: result?.mirror_writable ? '可写' : '不可写', ok: result?.mirror_writable, detail: '同步与发布使用此目录' },

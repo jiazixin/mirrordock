@@ -675,6 +675,35 @@ func (e *Engine) Log(id int64, attempt int, offset int64) (string, int64, error)
 	b, err := io.ReadAll(io.LimitReader(f, 128<<10))
 	return syncer.CleanLog(string(b)), offset + int64(len(b)), err
 }
+
+// LogSnapshot opens the selected attempt and fixes its download length before
+// releasing the cleanup lock. Logs are already sanitized by redactedWriter.
+// The caller owns the file and must limit reads to size to exclude later writes.
+func (e *Engine) LogSnapshot(id int64, attempt int) (file *os.File, size int64, err error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	var r Run
+	if err = e.store.Run(id, &r); err != nil {
+		return nil, 0, err
+	}
+	if attempt < 1 || attempt > len(r.Attempts) {
+		return nil, 0, errors.New("尝试编号不存在")
+	}
+	if r.Attempts[attempt-1].LogCleared {
+		return nil, 0, errors.New("日志已清理；状态和错误摘要仍保留。")
+	}
+	file, err = os.Open(filepath.Join(e.data, "logs", fmt.Sprint(id), fmt.Sprint(attempt)+".log"))
+	if err != nil {
+		return nil, 0, err
+	}
+	info, err := file.Stat()
+	if err != nil {
+		file.Close()
+		return nil, 0, err
+	}
+	return file, info.Size(), nil
+}
+
 func (e *Engine) ClearLogs() (int, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()

@@ -323,6 +323,21 @@ func (a *App) action(w http.ResponseWriter, r *http.Request) {
 func (a *App) logs(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	attempt, _ := strconv.Atoi(r.URL.Query().Get("attempt"))
+	if r.URL.Query().Get("download") == "1" {
+		file, size, err := a.Runs.LogSnapshot(id, attempt)
+		if err != nil {
+			failure(w, err)
+			return
+		}
+		defer file.Close()
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="run-%d-attempt-%d.log"`, id, attempt))
+		w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
+		if _, err := io.CopyN(w, file, size); err != nil {
+			slog.Debug("log download stopped", "error", err)
+		}
+		return
+	}
 	offset, _ := strconv.ParseInt(r.URL.Query().Get("offset"), 10, 64)
 	text, next, err := a.Runs.Log(id, attempt, offset)
 	if err != nil {

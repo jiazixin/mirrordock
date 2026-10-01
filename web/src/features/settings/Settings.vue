@@ -8,13 +8,13 @@ import EnvironmentChecks from './EnvironmentChecks.vue'
 import Notifications from './Notifications.vue'
 
 const tabs = [
-  { id: 'execution', label: '同步执行', icon: Settings2 },
-  { id: 'rsync', label: 'rsync', icon: ArrowDownUp },
+  { id: 'rsync', label: 'Rsync', icon: ArrowDownUp },
   { id: 'github', label: 'GitHub Release', icon: ShieldCheck },
+  { id: 'execution', label: '同步执行', icon: Settings2 },
   { id: 'configuration', label: '系统配置', icon: FileText },
   { id: 'notifications', label: '通知设置', icon: Bell },
 ] as const
-const activeTab = ref<(typeof tabs)[number]['id']>('execution')
+const activeTab = ref<(typeof tabs)[number]['id']>('rsync')
 const draft = ref<Configuration>()
 const token = ref('')
 const clearToken = ref(false)
@@ -77,11 +77,11 @@ async function reload() {
     <div id="settings-panel-rsync" v-show="activeTab === 'rsync'" class="settings-sections" role="tabpanel" aria-labelledby="settings-tab-rsync">
       <article class="panel setting-row">
         <div class="setting-description"><span class="setting-index">01 · 连接</span><h3>连接与 I/O 超时</h3><p>避免上游连接或传输长时间无响应。</p><small>I/O 超时表示无数据传输的等待期限，整轮执行仍受任务累计超时限制。</small></div>
-        <div class="setting-controls form-grid"><label>rsync I/O 超时<input v-model="draft.settings.rsync.io_timeout" placeholder="5m"/><small>默认 5m。</small></label><label>rsync 连接超时<input v-model="draft.settings.rsync.connect_timeout" placeholder="30s"/><small>默认 30s。</small></label></div>
+        <div class="setting-controls form-grid"><label>Rsync I/O 超时<input v-model="draft.settings.rsync.io_timeout" placeholder="5m"/><small>默认 5m。</small></label><label>Rsync 连接超时<input v-model="draft.settings.rsync.connect_timeout" placeholder="30s"/><small>默认 30s。</small></label></div>
       </article>
       <article class="panel setting-row">
-        <div class="setting-description"><span class="setting-index">02 · 带宽</span><h3>传输限速</h3><p>控制每个 rsync 上游任务的下载带宽。</p><small>仅影响同步任务；公开镜像下载不受此限速影响。</small></div>
-        <div class="setting-controls"><label>rsync 传输限速 · MB/s<input v-model.number="draft.settings.rsync.limit_mb" type="number" min="0" step="any"/><small>十进制 MB/s，可填小数；0 不限速。</small></label></div>
+        <div class="setting-description"><span class="setting-index">02 · 带宽</span><h3>传输限速</h3><p>控制每个 Rsync 上游任务的下载带宽。</p><small>仅影响同步任务；公开镜像下载不受此限速影响。</small></div>
+        <div class="setting-controls"><label>Rsync 传输限速 · MB/s<input v-model.number="draft.settings.rsync.limit_mb" type="number" min="0" step="any"/><small>十进制 MB/s，可填小数；0 不限速。</small></label></div>
       </article>
     </div>
 

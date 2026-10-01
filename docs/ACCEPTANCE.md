@@ -354,3 +354,25 @@ OCR 首次 `ocr review --audience agent ... --output` 在解析 endpoint 阶段�
 使用 use-modern-go 的完整 Go 1.27.1 指南及 json_v2 explain。OCR 沿用项目此前外部调用被审批阻止后已允许的本地 delegate preview/rule 工作流，本轮没有尝试外部 LLM 调用或发送源码。当前 Codex 按规则审查全部 19 个生产源码，默认排除的 6 个测试源码（default_path）全部补充审查，4 个 Markdown（unsupported_ext，包括本节）全部核对；合计 **29/29 项、25/25 新增修改源码、跳过 0、覆盖 100%**。审查修复旧快照覆盖最新历史状态、后台刷新抹去操作错误、移动底栏负边距和重复刷新问题；没有遗留已确认的高/中严重度正确性、安全或性能问题。清单、规则、SHA256 和结构化报告为 `../test-results/ocr-pagination-preview.json`、`ocr-pagination-rules.json`、`ocr-pagination-review.json`。源码审查后运行对应最终测试。
 
 性能与未验证项：上述条数与耗时仅为 macOS 隔离功能验收数据，不是生产性能基准。本轮没有修改文件传输路径，也没有新增下载性能测量；已有 Linux sendfile/真实发行版/生产硬件吞吐未验证状态保持。未验证 Firefox/Safari、百万级历史数据查询性能及实际部署重启后的显示。未修改用户镜像、配置或凭证，未创建子代理、推送、发布或发送外部消息。
+
+
+## 2026-10-01：设置顺序、计划操作对齐与日志自动刷新/完整下载
+
+本轮开始 Git 工作区无已有改动。系统设置按 Rsync / GitHub Release / 同步执行 / 系统配置 / 通知设置排序，默认打开 Rsync；设置字段及系统配置环境检查的 Rsync 首字母大写。计划管理操作标题与立即同步按钮统一居中。删除“读取后续日志”，详情每 3 秒按字节游标追加，单轮最多读取 16 个 128 KiB 片段，页面最多保留当前 2 MiB 文本；切换尝试及关闭详情取消旧请求、停止旧轮询，无重叠读取。修正清理后 offset 不变时重复追加“已清理”提示的问题。
+
+“下载”从鉴权 API 下载所选尝试的完整日志，服务端在打开文件时固定长度，流式发送，不受页面片段限制，也不包含该请求后追加的内容。打开及长度快照与清理共用引擎锁，传输在锁外进行；已打开文件可在清理后继续下载。日志沿用写入时脱敏，不重新引入凭证；公开镜像下载路径无修改。
+
+验证均使用临时目录、随机本机端口和隔离 rsync 3.5.1 daemon：
+
+- `npm --prefix web run build`：vue-tsc 与 Vite 通过，唯一输出 web/dist。Go 1.27.1 构建 `/tmp/mirrordock-log-refresh-test` 与 `bin/mirrordock` 通过；未重启现有服务。
+- `GOCACHE="$PWD/.cache/go-build" go vet ./...`：通过，输出 `../test-results/log-refresh-vet.txt`。
+- `MIRRORDOCK_TEST_RSYNC="$PWD/.cache/rsync/rsync-3.5.1/rsync" GOCACHE="$PWD/.cache/go-build" go test -race ./internal/runs ./internal/app`：通过，输出 `../test-results/log-refresh-race-final.txt`。新测试覆盖大于 2 MiB 的完整快照、排除后续追加、清理期间保持已打开文件可读、清理后拒绝新下载及无效 run/attempt。
+- 使用临时二进制运行 `npm --prefix web run test:e2e`：全部 Chromium **5/5 通过，39.3s，跳过 0**，输出 `../test-results/log-refresh-e2e-all.txt`。本轮新增大于 2 MiB 日志的自动追加与页面裁剪、完整文件内容/文件名、请求后追加不混入下载、未登录下载 401、慢响应下切换尝试不混入旧内容、关闭详情停止请求；原有通知/分页/公开目录和管理操作回归通过。
+- 已查看 1440px 计划管理、375px 计划管理及 1440px 系统配置截图，确认桌面操作列标题/按钮共用中轴、设置顺序与 Rsync 大写；原有 1440/1024/736/375px 无整页横向溢出检查通过。手机表格继续仅在容器内滚动。
+- `git diff --check`：通过。
+
+初始 Chromium 检查因沙箱 Mach port 权限失败，初始 Go app 竞态检查因 httptest 本机端口 bind 权限失败；二者均未完成检查，不计为通过。获准在沙箱外执行上述隔离验收后通过；初始输出 `log-refresh-e2e.txt`、`log-refresh-race.txt` 保留。首轮定向 Chromium 检查通过后，补充慢响应取消回归和计划截图，最终运行全部 5 项回归。
+
+使用 use-modern-go 完整 Go 1.27 指南。OCR 沿用项目此前外部调用被审批阻止后允许的本地 delegate preview/rule 工作流，由当前 Codex 按解析规则审查，未尝试外部 LLM 调用、未发送源码。本轮 7 个默认可审查源码均审查；默认排除的 Go 测试和 E2E（default_path）补充审查，README/DESIGN/本节（unsupported_ext）核对；共 **12/12 项、9/9 新增修改源码、跳过 0、覆盖 100%**。审查确认鉴权、固定下载边界、锁内打开/锁外流式传输、文件关闭、日志脱敏、Vue 文本转义、请求取消与轮询清理、有界读取/显示和 fixture 隔离；没有遗留确认的高/中严重度问题。清单、规则和结构化覆盖报告为 `../test-results/ocr-log-refresh-preview.json`、`ocr-log-refresh-rules.json`、`ocr-log-refresh-review.json`。源码审查后执行最终相关测试，文档结果不冒充外部 OCR 审查。
+
+性能与未验证项：2 MiB 读取/显示上限及上述 E2E 耗时为功能验收数据，不是生产吞吐基准。本轮未新增下载性能测量；Linux 实机/sendfile、生产负载、真实发行版同步、Firefox/Safari、实际部署重启后的显示与外部 OCR LLM 审查未执行。未修改用户配置、镜像或凭证，未创建子代理、推送、发布或发送外部消息。

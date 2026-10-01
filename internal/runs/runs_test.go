@@ -18,6 +18,58 @@ import (
 
 type runnerFunc func(context.Context, syncer.Task, func(syncer.Progress), io.Writer) error
 
+func TestLogSnapshotExcludesLaterWritesAndSurvivesCleanup(t *testing.T) {
+	e, _, store, _ := testEngine(t, "2s", runnerFunc(func(context.Context, syncer.Task, func(syncer.Progress), io.Writer) error {
+		return nil
+	}))
+	r := &Run{SourceID: "snapshot-fixture", State: "succeeded", Attempts: []Attempt{{Number: 1}}}
+	id, err := store.CreateRun(r.SourceID, r.State, time.Now().UTC().Format(time.RFC3339Nano), r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(e.data, "logs", fmt.Sprint(id))
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	name := filepath.Join(dir, "1.log")
+	content := strings.Repeat("完整日志\n", 300000)
+	if err := os.WriteFile(name, []byte(content), 0600); err != nil {
+		t.Fatal(err)
+	}
+	file, size, err := e.LogSnapshot(id, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	w, err := os.OpenFile(name, os.O_APPEND|os.O_WRONLY, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, writeErr := io.WriteString(w, "下载请求后的追加内容\n")
+	closeErr := w.Close()
+	if writeErr != nil || closeErr != nil {
+		t.Fatal(writeErr, closeErr)
+	}
+	if count, err := e.ClearLogs(); err != nil || count != 1 {
+		t.Fatal(count, err)
+	}
+	got, err := io.ReadAll(io.LimitReader(file, size))
+	if err != nil || string(got) != content || size != int64(len(content)) {
+		t.Fatal("snapshot omitted content or included later writes", len(got), size, err)
+	}
+	if _, _, err := e.LogSnapshot(id, 1); err == nil {
+		t.Fatal("cleared log was downloadable")
+	}
+	for _, attempt := range []int{0, 2} {
+		if _, _, err := e.LogSnapshot(id, attempt); err == nil {
+			t.Fatal("invalid attempt accepted", attempt)
+		}
+	}
+	if _, _, err := e.LogSnapshot(id+1, 1); err == nil {
+		t.Fatal("unknown run accepted")
+	}
+}
+
 func (f runnerFunc) Run(ctx context.Context, task syncer.Task, emit func(syncer.Progress), log io.Writer) error {
 	return f(ctx, task, emit, log)
 }

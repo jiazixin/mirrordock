@@ -7,11 +7,67 @@ import StatusBadge from '../../components/StatusBadge.vue'
 import { api } from '../../app/api'
 import type { Run } from '../../app/types'
 import { time, duration, bytes, phases } from '../../app/format'
-const props = defineProps<{ id: number }>(); const emit = defineEmits<{ close: [] }>(); const run = ref<Run>(); const attempt = ref(1); const text = ref(''); const error = ref(''); const next = ref(0)
-let logRevision=0
-async function loadLog(append=false) { const revision=++logRevision; error.value=''; try { const payload=await api<{text:string;next_offset:number}>(`/runs/${props.id}/logs?attempt=${attempt.value}&offset=${append?next.value:0}`); if(revision!==logRevision)return;text.value=(append?text.value+payload.text:payload.text).slice(-(2<<20)); next.value=payload.next_offset } catch(e) { if(revision===logRevision)error.value=e instanceof Error?e.message:String(e) } }
-async function load() { try { run.value=await api<Run>(`/runs/${props.id}`); attempt.value=run.value.attempts.at(-1)?.number??1; if(run.value.attempts.length) await loadLog() } catch(e) {error.value=String(e)} }
-watch(()=>props.id,load,{immediate:true}); watch(attempt,()=>loadLog())
-function download() { const blob=new Blob([text.value],{type:'text/plain;charset=utf-8'}); const url=URL.createObjectURL(blob); const link=document.createElement('a'); link.href=url; link.download=`run-${props.id}-attempt-${attempt.value}.log`; link.click(); URL.revokeObjectURL(url) }
+const props = defineProps<{ id: number }>()
+const emit = defineEmits<{ close: [] }>()
+const run = ref<Run>()
+const attempt = ref(1)
+const text = ref('')
+const error = ref('')
+let refreshLog = () => Promise.resolve()
+
+watch(() => props.id, async (id, _, onCleanup) => {
+  const controller = new AbortController()
+  onCleanup(() => controller.abort())
+  run.value = undefined
+  text.value = ''; error.value = ''
+  try {
+    const result = await api<Run>(`/runs/${id}`, 'GET', undefined, controller.signal)
+    if (controller.signal.aborted) return
+    attempt.value = result.attempts.at(-1)?.number ?? 1
+    run.value = result
+  } catch (e) { if (!controller.signal.aborted) error.value = String(e) }
+}, { immediate: true })
+
+watch([() => run.value?.id, attempt], ([id, number], _, onCleanup) => {
+  text.value = ''; error.value = ''
+  if (!id || !run.value?.attempts.length) return
+  const controller = new AbortController()
+  let offset = 0
+  let loading = false
+  const loadLog = async () => {
+    if (loading || controller.signal.aborted) return
+    loading = true
+    try {
+      // Bound each refresh to 2 MiB; continue any backlog on the next tick.
+      for (let page = 0; page < 16; page++) {
+        const payload = await api<{ text: string; next_offset: number }>(
+          `/runs/${id}/logs?attempt=${number}&offset=${offset}`, 'GET', undefined, controller.signal)
+        if (controller.signal.aborted) return
+        const consumed = payload.next_offset - offset
+        if (consumed === 0 && payload.text) text.value = payload.text
+        else text.value = (text.value + payload.text).slice(-(2 << 20))
+        offset = payload.next_offset
+        if (consumed < 128 << 10) break
+      }
+      error.value = ''
+    } catch (e) { if (!controller.signal.aborted) error.value = e instanceof Error ? e.message : String(e) }
+    finally { loading = false }
+  }
+  refreshLog = loadLog
+  void loadLog()
+  const timer = window.setInterval(() => { void loadLog() }, 3000)
+  onCleanup(() => {
+    window.clearInterval(timer)
+    controller.abort()
+    refreshLog = () => Promise.resolve()
+  })
+}, { immediate: true })
+
+function download() {
+  const link = document.createElement('a')
+  link.href = `/api/runs/${props.id}/logs?attempt=${attempt.value}&download=1`
+  link.download = `run-${props.id}-attempt-${attempt.value}.log`
+  link.click()
+}
 </script>
-<template><Modal :title="`运行详情 · #${id}`" wide @close="emit('close')"><div v-if="run" class="detail-body"><div class="detail-title"><h3>{{run.name}}</h3><StatusBadge :state="run.state"/></div><div class="detail-grid"><div><small>运行来源</small><strong>{{run.trigger==='schedule'?'自动计划':'手动触发'}}</strong></div><div><small>执行耗时 / 总预算</small><strong>{{duration(run.elapsed_seconds)}} / {{duration(run.budget_seconds)}}</strong></div><div><small>阶段</small><strong>{{phases[run.progress.phase]??run.progress.phase}}</strong></div><div><small>传输字节</small><strong>{{bytes(run.progress.bytes)}}</strong></div><div><small>开始时间</small><strong>{{time(run.started_at)}}</strong></div><div><small>结束时间</small><strong>{{time(run.ended_at)}}</strong></div></div><div v-if="run.error" class="alert error"><div><strong>{{run.error_code}}</strong><p>{{run.error}}</p></div></div><h3 class="section-heading">来源尝试</h3><div v-for="item in run.attempts" :key="item.number" class="attempt-row"><strong>#{{item.number}}</strong><div><code>{{item.candidate}}</code><small>{{time(item.started_at)}} → {{time(item.ended_at)}}</small><span v-if="item.error_code" class="error-text">{{item.error_code}} · {{item.error}}</span></div><span class="muted">{{item.log_cleared?'日志已清理':item.error_code?'失败':item.ended_at?'完成':'进行中'}}</span></div><div class="log-toolbar"><h3>原始日志 <small>最多保留当前 2 MiB 文本</small></h3><SelectField v-model="attempt" aria-label="选择日志尝试" :options="run.attempts.map(item => ({ value: item.number, label: `尝试 #${item.number}` }))" /><button class="icon-button" aria-label="刷新日志" @click="loadLog()"><RefreshCw :size="16"/></button><button class="button compact" @click="download"><Download :size="15"/>下载当前片段</button></div><pre class="log-view">{{text||'暂无日志。'}}</pre><button class="text-button" v-if="text" @click="loadLog(true)">读取后续日志</button><details class="snapshot"><summary>配置快照与事件</summary><pre>{{JSON.stringify(run.snapshot,null,2)}}</pre><p v-for="(event,index) in run.events" :key="index">{{time(event.at)}} · {{event.message}}</p></details></div><div v-if="error" class="alert error" role="alert">{{error}}</div></Modal></template>
+<template><Modal :title="`运行详情 · #${id}`" wide @close="emit('close')"><div v-if="run" class="detail-body"><div class="detail-title"><h3>{{run.name}}</h3><StatusBadge :state="run.state"/></div><div class="detail-grid"><div><small>运行来源</small><strong>{{run.trigger==='schedule'?'自动计划':'手动触发'}}</strong></div><div><small>执行耗时 / 总预算</small><strong>{{duration(run.elapsed_seconds)}} / {{duration(run.budget_seconds)}}</strong></div><div><small>阶段</small><strong>{{phases[run.progress.phase]??run.progress.phase}}</strong></div><div><small>传输字节</small><strong>{{bytes(run.progress.bytes)}}</strong></div><div><small>开始时间</small><strong>{{time(run.started_at)}}</strong></div><div><small>结束时间</small><strong>{{time(run.ended_at)}}</strong></div></div><div v-if="run.error" class="alert error"><div><strong>{{run.error_code}}</strong><p>{{run.error}}</p></div></div><h3 class="section-heading">来源尝试</h3><div v-for="item in run.attempts" :key="item.number" class="attempt-row"><strong>#{{item.number}}</strong><div><code>{{item.candidate}}</code><small>{{time(item.started_at)}} → {{time(item.ended_at)}}</small><span v-if="item.error_code" class="error-text">{{item.error_code}} · {{item.error}}</span></div><span class="muted">{{item.log_cleared?'日志已清理':item.error_code?'失败':item.ended_at?'完成':'进行中'}}</span></div><div class="log-toolbar"><h3>原始日志 <small>最多保留当前 2 MiB 文本</small></h3><SelectField v-model="attempt" aria-label="选择日志尝试" :options="run.attempts.map(item => ({ value: item.number, label: `尝试 #${item.number}` }))" /><button class="icon-button" aria-label="刷新日志" @click="refreshLog()"><RefreshCw :size="16"/></button><button class="button compact" @click="download"><Download :size="15"/>下载</button></div><pre class="log-view">{{text||'暂无日志。'}}</pre><details class="snapshot"><summary>配置快照与事件</summary><pre>{{JSON.stringify(run.snapshot,null,2)}}</pre><p v-for="(event,index) in run.events" :key="index">{{time(event.at)}} · {{event.message}}</p></details></div><div v-if="error" class="alert error" role="alert">{{error}}</div></Modal></template>
