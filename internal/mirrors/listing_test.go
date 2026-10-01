@@ -4,6 +4,9 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
+	"golang.org/x/sys/unix"
+	"html"
+	"mirrordock/internal/config"
 	"net/http/httptest"
 	"net/url"
 	"os"
@@ -46,7 +49,7 @@ func TestListingEscapingBreadcrumbsAndScriptPolicy(t *testing.T) {
 	w := httptest.NewRecorder()
 	renderListing(w, httptest.NewRequest("GET", "/repo/%3Cunsafe%3E/", nil), items, false)
 	html := w.Body.String()
-	for _, want := range []string{`a&lt;&amp;&#34;.json`, `href="/repo/%3Cunsafe%3E/"`, `href="/repo/"`, `aria-current="page"`, `data-bytes="-1"`} {
+	for _, want := range []string{`a&lt;&amp;&#34;.json`, `title="&lt;unsafe&gt;"`, `href="/repo/"`, `aria-current="page"`, `data-bytes="-1"`} {
 		if !strings.Contains(html, want) {
 			t.Errorf("missing escaped content: %s", want)
 		}
@@ -68,6 +71,40 @@ func TestListingEscapingBreadcrumbsAndScriptPolicy(t *testing.T) {
 	renderListing(head, httptest.NewRequest("HEAD", "/", nil), nil, false)
 	if head.Body.Len() != 0 || head.Header().Get("Content-Security-Policy") != policy {
 		t.Fatal("HEAD must retain headers without rendering a body")
+	}
+}
+
+func TestListingHomeAndFullPathNavigation(t *testing.T) {
+	for _, tc := range []struct {
+		path, title string
+		links       []string
+	}{
+		{"/", "首页", nil},
+		{"/github/repo%20%26%20%E9%95%9C%E5%83%8F/v1/", "/github/repo &amp; 镜像/v1/", []string{`href="/"`, `href="/github/"`, `href="/github/repo%20&amp;%20%E9%95%9C%E5%83%8F/"`}},
+	} {
+		t.Run(tc.path, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			renderListing(w, httptest.NewRequest("GET", tc.path, nil), nil, false)
+			body := w.Body.String()
+			if !strings.Contains(body, "<title>"+tc.title+" · MirrorDock</title>") || !strings.Contains(body, `class="home-icon"`) {
+				t.Fatal("missing home icon or full path title")
+			}
+			for _, link := range tc.links {
+				if !strings.Contains(body, link) {
+					t.Errorf("missing path link %s", link)
+				}
+			}
+			_, nav, _ := strings.Cut(body, `<nav class="directory-path"`)
+			nav, _, _ = strings.Cut(nav, "</nav>")
+			if strings.Count(nav, `<a href=`) != len(tc.links) || strings.Count(nav, `aria-current="page"`) != 1 || !strings.Contains(nav, `<span class="path-current" aria-current="page"`) {
+				t.Fatal("only ancestors should be links; current directory must be a non-clickable span")
+			}
+			for _, removed := range []string{"全部镜像", "镜像目录", "公开下载", "上级目录", `class="parent-link"`, `class="directory-slash"`, `class="action"`} {
+				if strings.Contains(body, removed) {
+					t.Errorf("obsolete UI: %s", removed)
+				}
+			}
+		})
 	}
 }
 
@@ -131,7 +168,7 @@ func TestDirectoryListingMetadataAndBounds(t *testing.T) {
 		}
 	}
 	html = read()
-	if strings.Count(html, "<tr data-name=") > 1000 || !strings.Contains(html, "搜索与筛选仅针对已列出的条目") {
+	if strings.Count(html, "<tr data-name=") > 1000 || !strings.Contains(html, "搜索仅针对已列出的条目") {
 		t.Fatal("directory must retain its bounded listing and partial-results notice")
 	}
 }
@@ -190,5 +227,154 @@ func TestSaturatedListingPreservesDownloadsAndHEAD(t *testing.T) {
 		if w.Code != tc.status || (tc.status == 503 && w.Header().Get("Retry-After") != "3") {
 			t.Fatalf("%s %s: %d", tc.method, tc.path, w.Code)
 		}
+	}
+}
+
+func TestProjectAndReleaseListingMetadata(t *testing.T) {
+	m, source := testManager(t)
+	source.Type, source.Dest = "github_release", "github/openlist"
+	work, err := m.Prepare(t.Context(), source, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	synced := time.Now().UTC().Add(-2 * time.Hour).Truncate(time.Second)
+	for _, tag := range []string{"v1", "v2"} {
+		dir := filepath.Join(work, tag)
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "asset.zip"), make([]byte, 2048), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(work, "v1", ".mirrordock-release-sync"), []byte(synced.Format(time.RFC3339Nano)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(work, "v1", "partial.part"), make([]byte, 999), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(t.TempDir(), "secret"), filepath.Join(work, "v1", "link")); err != nil {
+		t.Fatal(err)
+	}
+	pub, err := m.Publish(t.Context(), source, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pub.Current.Summary.Bytes != 4096 || pub.Current.Summary.Releases["v1"].Bytes != 2048 || !pub.Current.Summary.Releases["v1"].SyncedAt.Equal(synced) || !pub.Current.Summary.Releases["v2"].SyncedAt.IsZero() {
+		t.Fatal(pub.Current.Summary)
+	}
+	calls := 0
+	m.ListingInfo = func(id string) SourceListingInfo {
+		calls++
+		if id != source.ID {
+			t.Fatal(id)
+		}
+		return SourceListingInfo{State: "failed", Last: time.Now(), Next: time.Now().Add(time.Hour)}
+	}
+	read := func(p string) string {
+		t.Helper()
+		w := httptest.NewRecorder()
+		m.ServeHTTP(w, httptest.NewRequest("GET", p, nil))
+		if w.Code != 200 {
+			t.Fatal(w.Code)
+		}
+		return html.UnescapeString(w.Body.String())
+	}
+	if html := read("/github/"); strings.Contains(html, `class="project-table"`) || calls != 0 {
+		t.Fatal("GitHub metadata must not appear on repository row")
+	}
+	html := read("/github/openlist/")
+	for _, want := range []string{`class="project-table"`, "上次同步", "下次同步", "同步失败", "2.0 KiB", synced.In(time.Local).Format(time.RFC3339)} {
+		if !strings.Contains(html, want) {
+			t.Errorf("missing %s", want)
+		}
+	}
+	if calls != 1 {
+		t.Fatal("source metadata must be loaded once per release listing", calls)
+	}
+	for _, removed := range []string{`class="filters"`, `class="page-footer"`, "浏览目录，获取", "软件镜像 · 公开文件服务"} {
+		if strings.Contains(html, removed) {
+			t.Errorf("obsolete UI: %s", removed)
+		}
+	}
+	if strings.Index(html, `class="search"`) < strings.Index(html, `id="files-heading"`) {
+		t.Fatal("list title must precede search in the header toolbar")
+	}
+	if html := read("/github/openlist/v1/"); strings.Contains(html, `class="project-table"`) || calls != 1 {
+		t.Fatal("asset directory must retain file metadata")
+	}
+	// Unselected releases retain their own earlier synchronization time.
+	nextWork, err := m.Prepare(t.Context(), source, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nextSync := time.Now().UTC().Truncate(time.Second)
+	if err := os.WriteFile(filepath.Join(nextWork, "v2", ".mirrordock-release-sync"), []byte(nextSync.Format(time.RFC3339Nano)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	nextPub, err := m.Publish(t.Context(), source, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !nextPub.Current.Summary.Releases["v1"].SyncedAt.Equal(synced) || !nextPub.Current.Summary.Releases["v2"].SyncedAt.Equal(nextSync) {
+		t.Fatal(nextPub.Current.Summary)
+	}
+	// A new manager must restore summaries without querying the task store on downloads.
+	reopened, err := New(m.Root, m.store, []config.Source{source})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	if got := reopened.Publications()[0].Current.Summary.Releases["v1"]; got.Bytes != 2048 || !got.SyncedAt.Equal(synced) {
+		t.Fatal(got)
+	}
+}
+
+func TestOrdinaryMirrorProjectListing(t *testing.T) {
+	m, source := testManager(t)
+	work, err := m.Prepare(t.Context(), source, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(work, "file.rpm"), make([]byte, 1024), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Publish(t.Context(), source, 1); err != nil {
+		t.Fatal(err)
+	}
+	m.ListingInfo = func(string) SourceListingInfo { return SourceListingInfo{State: "succeeded"} }
+	w := httptest.NewRecorder()
+	m.ServeHTTP(w, httptest.NewRequest("GET", "/", nil))
+	if html := w.Body.String(); !strings.Contains(html, `class="project-table"`) || !strings.Contains(html, "1.0 KiB") || !strings.Contains(html, "同步成功") {
+		t.Fatal(html)
+	}
+}
+
+func TestSummaryIgnoresUnsafeSyncMarkers(t *testing.T) {
+	dir := t.TempDir()
+	for _, tag := range []string{"fifo", "link"} {
+		if err := os.Mkdir(filepath.Join(dir, tag), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, tag, "asset"), []byte("abc"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := unix.Mkfifo(filepath.Join(dir, "fifo", ".mirrordock-release-sync"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	secret := filepath.Join(t.TempDir(), "secret")
+	if err := os.WriteFile(secret, []byte(time.Now().Format(time.RFC3339Nano)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(secret, filepath.Join(dir, "link", ".mirrordock-release-sync")); err != nil {
+		t.Fatal(err)
+	}
+	summary, err := summarizeDirectory(t.Context(), dir, "github_release")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.Bytes != 6 || !summary.Releases["fifo"].SyncedAt.IsZero() || !summary.Releases["link"].SyncedAt.IsZero() {
+		t.Fatal(summary)
 	}
 }

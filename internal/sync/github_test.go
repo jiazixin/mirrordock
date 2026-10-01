@@ -21,6 +21,7 @@ import (
 	"sync/atomic"
 	"syscall"
 	"testing"
+	"time"
 )
 
 func assetClient(t *testing.T, handler http.HandlerFunc) (*github.Client, *httptest.Server) {
@@ -133,6 +134,13 @@ func TestGitHubSelectsNewestAssetsWithoutSourceArchives(t *testing.T) {
 	b, err := os.ReadFile(filepath.Join(dir, "new", "linux-amd64.bin"))
 	if err != nil || string(b) != "abc" {
 		t.Fatal(string(b), err)
+	}
+	marker, markerErr := os.ReadFile(filepath.Join(dir, "new", ".mirrordock-release-sync"))
+	if markerErr != nil {
+		t.Fatal(markerErr)
+	}
+	if _, err := time.Parse(time.RFC3339Nano, string(marker)); err != nil {
+		t.Fatal(err)
 	}
 	if _, err = os.Stat(filepath.Join(dir, "old")); !os.IsNotExist(err) {
 		t.Fatal("old release downloaded")

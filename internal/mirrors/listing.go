@@ -46,6 +46,80 @@ type listingItem struct {
 	Size, Modified, Timestamp    string
 	Bytes                        int64
 	Dir                          bool
+	Project                      bool
+	Status, StatusClass          string
+	LastSync, LastTimestamp      string
+	NextSync, NextTimestamp      string
+}
+
+type SourceListingInfo struct {
+	State      string
+	Last, Next time.Time
+}
+
+func listingTime(at, now time.Time) (string, string) {
+	if at.IsZero() {
+		return "—", ""
+	}
+	delta := now.Sub(at)
+	suffix := "前"
+	if delta < 0 {
+		delta, suffix = -delta, "后"
+	}
+	label := "刚刚"
+	switch {
+	case delta >= 24*time.Hour:
+		label = fmt.Sprintf("%d 天%s", int(delta.Hours()/24), suffix)
+	case delta >= time.Hour:
+		label = fmt.Sprintf("%d 小时%s", int(delta.Hours()), suffix)
+	case delta >= time.Minute:
+		label = fmt.Sprintf("%d 分钟%s", int(delta.Minutes()), suffix)
+	case suffix == "后":
+		label = "即将同步"
+	}
+	return label, at.In(time.Local).Format(time.RFC3339)
+}
+
+func (m *Manager) sourceListingInfo(id string) SourceListingInfo {
+	if m.ListingInfo != nil {
+		return m.ListingInfo(id)
+	}
+	return SourceListingInfo{}
+}
+
+func projectItem(item listingItem, p Publication, release *ReleaseSummary, info SourceListingInfo) listingItem {
+	item.Project = true
+	item.Status, item.StatusClass = "已发布", "neutral"
+	switch info.State {
+	case "succeeded":
+		item.Status, item.StatusClass = "同步成功", "success"
+	case "running":
+		item.Status, item.StatusClass = "同步中", "running"
+	case "queued":
+		item.Status, item.StatusClass = "等待同步", "waiting"
+	case "pausing":
+		item.Status, item.StatusClass = "正在暂停", "waiting"
+	case "paused":
+		item.Status, item.StatusClass = "已暂停", "waiting"
+	case "failed":
+		item.Status, item.StatusClass = "同步失败", "failure"
+	case "timed_out":
+		item.Status, item.StatusClass = "同步超时", "failure"
+	case "interrupted":
+		item.Status, item.StatusClass = "同步中断", "failure"
+	case "cancelled":
+		item.Status, item.StatusClass = "已取消", "neutral"
+	}
+	if release != nil {
+		item.Bytes, item.Size = release.Bytes, fileSize(release.Bytes)
+		info.Last = release.SyncedAt
+	} else if p.Current.Summary != nil {
+		item.Bytes, item.Size = p.Current.Summary.Bytes, fileSize(p.Current.Summary.Bytes)
+	}
+	now := time.Now()
+	item.LastSync, item.LastTimestamp = listingTime(info.Last, now)
+	item.NextSync, item.NextTimestamp = listingTime(info.Next, now)
+	return item
 }
 
 func newListingItem(name, u string, dir bool, info os.FileInfo) listingItem {
@@ -163,7 +237,7 @@ func renderListing(w http.ResponseWriter, r *http.Request, items []listingItem, 
 	if len(items) > 1000 {
 		items, more = items[:1000], true
 	}
-	crumbs := []listingCrumb{{Name: "全部镜像", URL: "/"}}
+	crumbs := []listingCrumb{{Name: "首页", URL: "/"}}
 	u := "/"
 	for segment := range strings.SplitSeq(strings.Trim(r.URL.Path, "/"), "/") {
 		if segment == "" {
@@ -172,14 +246,15 @@ func renderListing(w http.ResponseWriter, r *http.Request, items []listingItem, 
 		u += url.PathEscape(segment) + "/"
 		crumbs = append(crumbs, listingCrumb{Name: segment, URL: u})
 	}
-	parent := ""
+	title := "首页"
 	if len(crumbs) > 1 {
-		parent = crumbs[len(crumbs)-2].URL
+		title = r.URL.Path
 	}
 	_ = listing.Execute(w, struct {
-		Title, Parent string
-		Crumbs        []listingCrumb
-		Items         []listingItem
-		More          bool
-	}{crumbs[len(crumbs)-1].Name, parent, crumbs, items, more})
+		Title    string
+		Crumbs   []listingCrumb
+		Items    []listingItem
+		More     bool
+		Projects bool
+	}{title, crumbs, items, more, slices.ContainsFunc(items, func(i listingItem) bool { return i.Project })})
 }

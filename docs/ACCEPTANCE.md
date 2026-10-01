@@ -214,3 +214,124 @@ OCR 沿用项目授权的本地 delegate preview/rule 工作流，本轮未执�
 OCR 使用项目授权的本地 delegate preview/rule，无外部 LLM 调用或源码发送。当前工作区清单 **28/28 项覆盖，跳过 0**（21 个实现/工具/测试源码、YAML、6 项文档）；本轮重新审查变更的 5 个源码（listing.go、listing.html、listing.css、listing-icons.html、导入脚本）及 5 项文档，其余 18 项 SHA256 与此前 26 项审查结果一致并继承审查记录。默认排除的测试/文档均在覆盖记录中补充说明；检查 SVG 外链/脚本/模板注入、模板信任边界、授权信息、离线构建、分类兼容及 CSS 尺寸/颜色，无遗留确认的高/中问题。清单、规则、哈希及继承依据见 `../test-results/ocr-phosphor-preview.json`、`ocr-phosphor-rules.json`、`ocr-phosphor-review.json`；测试/性能输出为 `phosphor-go-race.txt`、`phosphor-e2e.txt`、`phosphor-benchmark.txt`。
 
 已构建 bin/mirrordock；现有服务未重启，新图标需运行新版二进制后生效。未执行 Linux 实机、sendfile syscall、生产镜像性能或 Firefox/Safari。测试仅使用临时目录、隔离本地端口和可控 rsync，没有修改用户镜像或凭证，没有推送或发布。
+
+## 公开项目信息与页面精简 · 2026-10-01
+
+按用户截图删除标题下说明、类型筛选和页脚，将搜索放到列表标题前方。普通镜像在实际 dest 项目行显示状态、大小、上次同步与下次计划；GitHub 仓库根行不加信息，仅在各 Release 行显示。各版本独立统计当前发布代的普通公开文件字节，成功校验后私有标记记录版本同步时间，未选版本保留旧时间，旧数据无记录时显示 `—`。状态与下次计划明确属于项目，时间悬停显示程序启动时区的准确时间。文件目录保留原有类型/大小/修改时间、Phosphor 图标、排序与分页；窄屏项目表格在面板内横向滚动。
+
+摘要在发布阶段计算并保存在发布记录，旧代首次启动补算；每代最多 1000 个 Release 摘要，超出部分大小/时间未知。统计不跟随符号链接、不计私有文件/保留代/磁盘分配块。目录请求只读不可变摘要，源状态/cron 在目录查询中读取；每个 Release 列表只读取一次项目状态。普通文件、Range 和 HEAD 不进入任务数据库查询或递归统计，保留真实文件与 ReaderFrom 路径。
+
+- Web 构建、`go vet ./...`、本机 Go 构建通过；已生成 `bin/mirrordock`，现有服务未重启。
+- Go 1.27.1 / rsync 3.5.1 隔离上游的 `go test -race ./...` 全部通过；审查最终修复后列表/摘要相关 `go test -race ./internal/mirrors -run 'TestListing|TestDirectory|TestProject|TestOrdinary|TestSaturatedListing|TestSummary'` 通过。覆盖 GitHub 根行与版本行、普通项目大小、独立时间/未知记录、未选版本保留旧时间、重启恢复、标记保密、FIFO/越界链接标记忽略、CSP 与下载隔离。
+- Chromium 公开目录 E2E 两项通过：临时 rsync 同步与 GitHub 已导入版本 fixture，验证状态、真实大小、cron 下次时间、程序时区、搜索、排序、55 项分页、清除搜索、空目录、无脚本降级、文件名转义与下载。检查 1440/1024/736/375px，页面无横向溢出、无脚本错误；已查看桌面/375px 的版本列表截图。GitHub 测试只用本地 fixture，不请求真实 GitHub。
+- Apple M2 Max / macOS arm64 合成基准：8 MiB 公开文件回环 `BenchmarkPublicHTTP` 898 次、1,320,448 ns/op、6352.85 MB/s、10,762 B/op、142 allocs/op；1000 项目录读取/模板渲染 62 次、16,534,657 ns/op、8,388,367 B/op、176,969 allocs/op。包含 ResponseRecorder 保存 HTML 的分配，回环速度不代表生产吞吐或 Linux sendfile。
+
+OCR 沿用此前自动审批阻止外部 LLM 后已允许的本地 delegate preview/rule；本轮没有执行外部 OCR LLM 调用或发送源码。当前 Codex 按规则完成全部 **12/12 新增或修改源码**（9 项生产源码、3 项默认 default_path 排除的测试补充审查），另检查 README、DESIGN、设计计划与本节；**16/16，跳过 0，覆盖 100%**。修复 Release 行重复读取项目状态、旧代摘要补算前根路径校验及私有标记可能阻塞读取的问题。没有遗留确认的高/中严重度问题。清单、规则、SHA256 和结构化报告为 `../test-results/ocr-project-listing-preview.json`、`ocr-project-listing-rules.json`、`ocr-project-listing-review.json`。
+
+最初测试与基准因沙箱禁止本地 bind 失败，审批后使用隔离端口重跑通过；首轮新测试直接匹配带 `+08:00` 的 HTML 属性，忽略模板对 `+` 的转义，修正测试解码后通过，未改变模板转义。失败不记为通过。结果为 `../test-results/project-listing-go-race.txt`、`project-listing-go-final.txt`、`project-listing-e2e.txt`、`project-listing-e2e-final.txt`、`project-listing-benchmark.txt`；截图在 `../web/test-results/`。
+
+未验证 Linux 实机/sendfile syscall、生产硬件吞吐、实际发行版、真实 GitHub/代理或 Firefox/Safari。旧 Release 同步时间无法从文件修改时间可靠恢复，下一次该版本成功同步后才有记录。测试没有修改用户配置、镜像与凭证，没有重启部署服务、创建子代理、推送或发布。
+
+## 公开目录路径导航 · 2026-10-01
+
+按用户最新截图移除品牌旁“镜像目录”、右上“公开下载”、重复的小面包屑、目录名尾斜杠及行尾操作列。大标题从小房子首页图标开始展示完整项目路径，各级链接可点击返回；根目录仅显示小房子，不显示 `/` 或“全部镜像”。文件名仍可进入目录或下载。首页链接有“首页”可访问名称，当前目录有 aria-current，路径保持模板转义与逐段 URL 编码。
+
+验证范围为本轮五个源码（listing.go/html/css、listing_test.go、public-directory.spec.ts）：
+
+- `npm --prefix web run build`、`go vet ./...`、Go 1.27.1 本机构建通过；生成 `bin/mirrordock` 与隔离测试二进制，现有服务未重启。Go 缓存使用仓库 `.cache/go-build`。
+- `go test -race ./internal/mirrors` 通过，包含完整路径/特殊字符链接、首页/当前页语义、模板转义/CSP、下载与发布隔离回归。输出见 `../test-results/path-go-race-final.txt`。
+- Chromium 两项公开目录 E2E 通过（5.1 秒），仅使用临时目录、随机端口和本地 rsync 3.5.1 上游/导入 fixture。覆盖小房子首页链接、完整多级路径、父路径点击、首页返回、无脚本跳转、原搜索/排序/分页与 GitHub 版本元数据；1440/1024/736/375px 无页面横向溢出、无脚本错误。已查看桌面及 375px 截图；输出 `../test-results/path-e2e.txt`，截图在 `../web/test-results/`。
+
+OCR 沿用此前外部调用被自动审批阻止后的本地 delegate preview/rule，由当前 Codex 审查，未执行外部 LLM 调用或发送源码。隔离副本以本轮修改前工作区快照为基线；默认可审查 3 项生产文件全部完成，2 项测试（default_path）与 4 项文档（unsupported_ext，含本节）补充检查，**本轮 9/9，跳过 0**。当前工作区其余 7 个源码的 SHA256 与前次项目列表审查一致，继承其审查记录；总计 **12/12 新增/修改源码及 4 项文档覆盖**。无遗留确认的高/中严重度问题。清单/规则/哈希报告为 `../test-results/ocr-path-preview.json`、`ocr-path-rules.json`、`ocr-path-review.json`。
+
+最初使用默认 Go 缓存被沙箱拒绝访问，改用仓库缓存；首次镜像测试被本地 bind 限制阻止，经自动审批允许后重跑通过，初次失败保存在 `../test-results/path-go-race.txt`，不计为通过。本轮未新增性能基准（仅列表展示/导航改动，文件传输路径未变）；前次合成性能数据不作为本轮结果。未验证 Linux 实机/sendfile、生产吞吐、实际发行版、真实 GitHub/代理、Firefox/Safari。没有修改用户配置、镜像或凭证，没有重启部署服务、创建子代理、推送或发布。
+
+## 目录 Header 局部改造 · 2026-10-01
+
+按本次完整规格将公开目录顶部改为白底三层 Header：“当前位置”、动态 Home/Chevron 面包屑、列表标题与普通数量/右侧搜索。祖先目录复用原安全编码链接，当前目录为不可点击的 aria-current 文本；彻底移除上级目录按钮、样式及不用的 Parent 字段。复用字体与单色线性图标；搜索 320×38px，800px 以下另起一行铺满容器。标签至路径 6px、路径至工具栏 22px、工具栏至表格 14px，Header 与原表格 Card 严格对齐。长路径只在导航内部滚动，脚本首次显示及窗口缩放时定位当前目录，超长段落省略且保留完整悬停文本；无脚本仍有全部原生父路径链接。
+
+本轮修改 6 个源码：listing.html/css/js/go、listing_test.go 和 public-directory.spec.ts。搜索过滤/输入事件、表格主体/字段/状态 Badge/行高、排序/分页、接口、同步和下载路径保持现状。
+
+- `use-modern-go` 读取 Go 1.27.1 完整指南；`npm --prefix web run build`（Vue 类型检查/Vite）、`GOCACHE=$PWD/.cache/go-build go vet ./...`、本机 Go 构建通过，已生成 bin/mirrordock 及 /tmp/mirrordock-header-test。现有服务未重启，新 Header 需重启运行新版二进制后生效。
+- `GOCACHE=$PWD/.cache/go-build MIRRORDOCK_TEST_RSYNC=$PWD/.cache/rsync/rsync-3.5.1/rsync go test -race ./internal/mirrors` 最终通过，覆盖根/祖先/当前目录语义、特殊字符模板转义、CSP 实际脚本哈希、目录容量/HEAD、版本摘要及文件下载/发布回归。结果：`../test-results/header-go-race-final.txt`。
+- `MIRRORDOCK_TEST_BINARY=/tmp/mirrordock-header-test MIRRORDOCK_TEST_RSYNC=$PWD/.cache/rsync/rsync-3.5.1/rsync npm --prefix web run test:e2e -- public-directory.spec.ts` 最终 **2 passed（5.5s）**。覆盖每级链接、Home 返回、当前不可点击、取消上级按钮、9 级深路径/超长名称/空格中文和 &、无脚本导航、1440/1024/736/375/320px、Header 与表格边界/14px 间距、当前段可见、搜索右侧/窄屏铺满及搜索/清除/排序/55 项分页/下载/版本元数据。无整页横向溢出、无脚本错误，已查看桌面、375px 列表和 320px 深路径截图。结果 `../test-results/header-e2e-final.txt`，截图 `../web/test-results/`。
+- 初轮 mirrors race 未通过：已有测试仍要求搜索在列表标题前方，与本次指定标题左侧/搜索右侧顺序相反；更新该布局断言后最终通过，没有改动数据/下载断言。首次失败保留在 `../test-results/header-go-race.txt`，不记为通过。
+
+OCR 沿用此前外部调用被审批阻止后允许的 local delegate preview/rule，由当前 Codex 按规则审查；本次未执行外部 LLM 调用、未发送源码。本轮 6/6 源码与 4/4 文档重新检查，其余 6 个已改源码 SHA256 与 `ocr-path-review.json` 一致并继承审查记录；当前工作区全部 **12/12 新增/修改源码、4/4 文档覆盖，16/16，跳过 0**。默认 9 项源码全部覆盖（4 项本轮、5 项继承），3 个默认 default_path 排除的测试补充检查（2 项本轮、1 项继承），4 项 unsupported_ext 文档核对。核查原生导航/不可点击当前页、转义/CSP、搜索逻辑保持、布局边界、隔离 fixture 与清理、文件下载热路径不变；无遗留确认的高/中严重度问题。清单、规则和哈希报告：`../test-results/ocr-header-preview.json`、`ocr-header-rules.json`、`ocr-header-review.json`。审查后执行上述最终相关测试。
+
+本轮没有新增性能基准，先前合成吞吐不作为本轮结果；未验证 Linux 实机/sendfile syscall、生产性能、实际发行版、真实 GitHub/代理及 Firefox/Safari。只使用临时目录、随机本地端口、可控 rsync/本地已导入版本，不修改用户镜像/凭证，不启动完整发行版同步，未创建子代理、重启部署、推送或发布。
+
+## 管理页面精简与设置合并 · 2026-10-01
+
+按截图删除侧栏品牌副标题、连接/版本状态栏和所有管理页标题下说明；同时删除批次预算说明、计划管理的调度时区提示整行及同步源页底发布说明。侧栏系统配置入口和独立页面已移除，系统设置在 GitHub Release 后只有一个“系统配置”页签，内含配置文件路径和环境检查。环境检查进入时读取，点击“刷新”重新请求，刷新期间禁止重复点击；失败清除旧结果并显示错误，可再次刷新恢复。配置文件/检查结果使用 Vue 文本插值，原设置草稿、保存与凭证行为保留。
+
+- Vue 类型检查和 Vite 构建、Go 1.27.1 本机嵌入构建、`GOCACHE=$PWD/.cache/go-build go vet ./...`、`git diff --check` 通过。已生成 `bin/mirrordock` 与 `/tmp/mirrordock-admin-cleanup-test`，现有服务未重启。
+- Chromium 管理 E2E 最终 **1 passed（9.2s）**，使用临时 YAML/镜像目录、随机端口和本地 rsync 3.5.1。覆盖新增源、来源切换、发布/Range、运行记录、代理和 Token 保存回归、四个页签顺序/键盘切换、环境检查重读后的不同结果、503 错误和再次刷新恢复。五个管理页面及全部设置页签在 1440/1024/736/375px 无整页横向溢出、无页面脚本错误；截图等待检查完成，已查看桌面/375px 完整检查结果。结果 `../test-results/admin-cleanup-e2e-final.txt`；截图 `../web/test-results/mirrordock-real-configurat-8d275-n-records-and-responsive-UI/`。
+- 最初 Chromium 启动被沙箱 MachPort 权限阻止，未执行测试；经自动审批允许隔离浏览器/本地监听后完成上述验证。初次失败保存在 `../test-results/admin-cleanup-e2e.txt`，不记为通过。
+
+OCR 沿用此前外部调用被审批阻止后的本地 delegate preview/rule 工作流，由当前 Codex 完成审查，未执行外部 LLM 调用、未发送源码。当前工作区 **27/27 项覆盖，跳过 0**：本轮 14 项（10 个源码/测试、删除旧页面、3 项文档）重新检查，13 项 SHA256 与 `ocr-header-review.json` 一致并继承审查记录。默认排除的测试（default_path）、文档（unsupported_ext）和删除文件均显式记录。源码合计 23/23（含删除旧页面），无遗留确认的高/中严重度问题。检查页签装配/键盘切换、异步错误和 finally、重复请求、文本转义/凭证、窄屏和保存回归；最终相关 E2E 在审查后执行。清单、规则、哈希覆盖为 `../test-results/ocr-admin-cleanup-preview.json`、`ocr-admin-cleanup-rules.json`、`ocr-admin-cleanup-review.json`。
+
+本轮没有 Go 源码改动或新增性能基准；未重复全量 Go race，未验证 Linux 实机/sendfile、生产性能、实际发行版、真实 GitHub/代理及 Firefox/Safari。没有修改用户镜像/配置/凭证，没有启动示例完整同步、创建子代理、重启部署、推送或发布。
+
+## 同步源拆列与标签样式 · 2026-10-01
+
+同步源表格拆成“同步源 / 来源 / 目标 / 最近运行 / 状态 / 操作”，移除镜像发布列及复制按钮；来源保留备用数量和完整 title，目标独立显示，最近运行沿用创建时间，未运行状态使用灰色标签。类型标签统一蓝色 rsync、橙色 reposync、紫色 GitHub Release；按用户随后提供的参考图，类型/状态统一使用 6px 圆角、语义细边框、深文字/浅背景标签，成功绿、运行蓝、排队灰蓝、暂停琥珀、失败红、超时橙、中断紫、取消/未运行灰。批次取消外围嵌套框及独立卡片边框，采用左侧时间/圆点/连续竖线，批次编号加粗；统计框使用同一 6px 圆角和细边框，添加圆点，完成绿色、跳过琥珀、错误红色，标题可换行；同步源图标和类型颜色共用变量。视觉规范更新于 DESIGN 第 8 节。
+
+- `npm --prefix web run build`（Vue 类型检查 / Vite）及 Go 1.27.1 嵌入构建通过，已生成 `bin/mirrordock` 与 `/tmp/mirrordock-admin-tags-test`；`git diff --check` 通过。现有服务未重启，新界面在重启新版二进制后生效。
+- Chromium 管理 E2E 最终 **1 passed（11.3s）**，日志 `../test-results/admin-tags-reference-e2e-final.txt`。在临时 YAML/镜像目录、随机端口、本地 rsync 3.5.1 上游验证新增/编辑、来源切换、发布与 Range、运行记录、设置保存/Token、环境检查和键盘回归；新增拆列/无运行状态断言。三种类型、九种运行状态使用只读浏览器响应 fixture 展示，不执行 reposync 或真实 GitHub 同步。同步源/批次在 1440/1024/736/375/320px 无整页横向溢出，无页面脚本错误；已查看最终桌面与 375px 截图，截图在 `../web/test-results/mirrordock-real-configurat-8d275-n-records-and-responsive-UI/`（sources-tags、batches-tags、batches-tags-mobile）。
+- 初次 Chromium 启动被沙箱 MachPort 权限阻止，未执行测试；自动审批允许隔离浏览器后测试通过，失败日志为 `../test-results/admin-tags-e2e.txt`，不计为通过。首次截图发现自动表格布局挤窄目标列，改为明确列宽并增加目标空间，最终重新构建/审查并运行上述测试。用户在实施中提供新的标签/时间线参考图后，取消初版胶囊和独立卡片，按新图统一小圆角细边框及连续时间线；重新构建、审查和运行最终 E2E，已检查桌面/手机截图。
+
+OCR 沿用此前外部调用被审批阻止后的本地 delegate preview/rule，由当前 Codex 完成审查；本轮未执行外部 LLM 调用，未发送源码。当前工作区 **28/28 项覆盖，跳过 0**：8 项重新检查（StatusBadge、Sources、Batches、global.css、管理 E2E、README、DESIGN、本节），其余 20 项 SHA256 与 `ocr-admin-cleanup-review.json` 一致，继承其审查记录；源码合计 **24/24（含删除旧页面）**、文档 4/4。默认排除的测试（default_path）、文档（unsupported_ext）和删除项明确记录，检查列/空态跨度、Vue 转义、删除发布操作后的引用、样式覆盖/可读性、窄屏和隔离 fixture，无遗留确认的高/中问题。报告为 `../test-results/ocr-admin-tags-preview.json`、`ocr-admin-tags-rules.json`、`ocr-admin-tags-reference-rules.json`、`ocr-admin-tags-review.json`。最终源码审查后执行上述 E2E。
+
+本轮仅修改管理前端/测试及文档，没有新增性能基准，不把历史合成性能当作本轮数据；没有 Go 源码改动，未重复 Go race/vet。未验证 Firefox/Safari、Linux 实机/sendfile、生产性能、实际发行版与真实 GitHub/代理。没有修改用户镜像/配置/凭证，没有启动示例完整同步、创建子代理、重启部署、推送或发布。
+
+## 2026-10-01：表格中轴对齐与紧凑时间
+
+按用户参考图将“全部同步方式”改为“同步方式”，桌面筛选框由 190px 缩为 150px；最近运行改为日期/时分秒上下两行、共享中轴，列宽由 170px 缩为 130px。时间仍通过原有程序启动时区格式化，未运行只显示一个 `—`；运行记录复用同一展示组件。管理表格和公开目录表头文字居中；状态、时间、数值居中，名称/来源/目录与记录原因保留左对齐，操作及详情按钮靠右。公开排序箭头绝对定位到文字右侧，不参与居中计算，保留原有排序交互和 aria-sort。
+
+验证与边界：
+
+- Vue 类型检查/Vite 生产构建、Go 1.27.1 嵌入构建及 `git diff --check` 通过。已构建 `bin/mirrordock` 和隔离测试二进制 `/tmp/mirrordock-alignment-test`；现有服务未重启，需运行新版二进制后生效。
+- 审查后的最终 Chromium E2E **3 passed（14.8s）**，覆盖管理与公开目录原有配置/同步/发布/下载/排序/分页/窄屏回归。结果 `../test-results/alignment-e2e-final.txt`；已查看同步源、公开文件列表的桌面截图，以及管理/公开目录手机截图。
+- 额外临时浏览器测量验证筛选框实际占宽为 150px，全部表头居中；日期、时分秒、状态与列中轴误差不超过 0.01px，公开表头文字中心误差不超过 0.5px，箭头均在文字右侧。操作按钮无溢出且靠右；1440/1024/736/375/320px 无整页横向溢出。程序使用 Asia/Shanghai、浏览器使用 America/New_York，固定 UTC 07:13:56 仍显示 15:13:56。测量结果 `../test-results/alignment-geometry.json`，临时诊断脚本 `alignment-geometry.cjs`，未新增仅复述样式实现的持久测试。
+- 使用仓库 Go 缓存和现代 rsync 隔离 fixture 的 `go test -race ./internal/mirrors` 通过，结果 `../test-results/alignment-go-race-final.txt`。首次受沙箱限制，Chromium Mach port 启动和本地 TCP 绑定失败，尚未进入功能检查；获准在沙箱外重跑隔离测试后通过，初次失败日志分别保存为 `alignment-e2e.txt`、`alignment-go-race.txt`，不记为通过。
+
+OCR 沿用此前外部调用被自动审批阻止后允许的本地 delegate preview/rule，由当前 Codex 按规则审查，未执行外部 LLM 调用、未发送源码。本轮 **6 个源码及 3 项文档重新审查**，其余 **20 项 SHA256 与 ocr-admin-tags-review.json 一致并继承审查记录**；当前工作区 **29/29 项覆盖、跳过 0**，包括 **25/25 源码（含删除旧页面）及 4/4 文档**。默认排除的 4 个测试（default_path）、4 项文档（unsupported_ext）和删除页面均记录覆盖依据。已修正公共组件反向依赖 app、筛选宽度未作用于实际容器、操作列缩窄导致按钮空间不足及左对齐覆盖空态的问题；无遗留确认的高/中严重度问题。清单、规则、哈希与结构化审查报告见 `../test-results/ocr-alignment-preview.json`、`ocr-alignment-rules.json`、`ocr-alignment-review.json`；最终 E2E 与位置测量在源码审查后执行。
+
+本轮没有新增性能基准，未验证 Linux 实机/sendfile syscall、生产吞吐、实际发行版或 Firefox/Safari；文件下载热路径未改变。测试仅使用临时配置/目录、随机端口、本地 rsync 与只读浏览器响应 fixture，未修改用户镜像和凭证，未启动案例全量同步、创建子代理、重启部署服务、推送或发布。
+
+## 2026-10-01：修正表头、下拉及计划时间
+
+用户反馈后更新：同步源前三列“同步源/来源/目标”表头恢复左对齐；运行记录的同步源和处理结果/失败原因表头左对齐。详情标题使用与按钮同宽的 32px 区域，共用右侧中轴。自定义选择菜单取消 180px 最小宽度，菜单随触发框同宽并继续受视口限制。计划管理同步源表头左对齐，“下次运行”复用上下两行时间，日期 600 字重/深色，时分秒浅色，程序启动时区不变；未启用计划保持“未启用”。
+
+- Vue 类型检查/Vite 构建、Go 1.27.1 嵌入构建（bin/mirrordock 与隔离测试二进制）、git diff --check 通过；现有服务未重启。
+- 最终管理 Chromium E2E **1 passed（9.9s）**，日志 `../test-results/alignment-fix-e2e-final.txt`。配置/运行/设置/键盘/窄屏回归使用临时目录、随机端口与本地 rsync fixture。
+- 临时测量通过：150px 桌面筛选框与菜单同宽、左边界一致，1440/1024/736/375/320px 均同宽且无整页横向溢出；记录详情文字/按钮中心偏差为 0px。计划日期/时间中心偏差为 0px、确认为上下行和 600 日期字重，固定 UTC 时间在纽约浏览器仍按上海启动时区显示 15:13:56；停用计划不展示时间。已查看同步源展开菜单、运行记录和计划管理的最终桌面截图。结果 `../test-results/alignment-fix-geometry.json`，截图 `alignment-fix-sources.png`、`alignment-fix-records.png`、`alignment-fix-schedules.png`；诊断脚本保存在忽略的 test-results 中。
+
+OCR 沿用已允许的本地 delegate preview/rule，由当前 Codex 完成审查，无外部 LLM 调用或源码发送。本轮 4 个源码（SelectField、global.css、Records、Schedules）和 3 项文档重新审查，其余 23 项 SHA256 与 ocr-alignment-review.json 完全一致并继承审查；当前工作区 **30/30 项覆盖、跳过 0**，源码 **26/26（含删除页面）**、文档 4/4。默认排除的测试/文档/删除项保留明确覆盖依据。核查选择框视口限制、键盘/菜单定位保持、时间脱敏与启动时区、停用/缺失时间分支、共享组件依赖边界和最终 CSS 优先级，没有遗留确认的高/中严重度问题。报告 `../test-results/ocr-alignment-fix-preview.json`、`ocr-alignment-fix-rules.json`、`ocr-alignment-fix-review.json`。最终 E2E 和位置测量在源码审查后执行。
+
+本轮为管理界面调整，未重复 Go 竞态/vet 和性能基准，没有新增性能数据；未验证 Firefox/Safari、Linux 实机/sendfile、生产吞吐或实际发行版同步。未修改用户配置、镜像或凭证，未启动完整发行版同步、创建子代理、重启部署、推送或发布。
+
+## 2026-10-01：通知设置与持久发送队列
+
+保留本轮开始前的全部工作区改动。在系统设置新增通知页签，五渠道默认关闭，横向/窄屏单列卡片、可访问帮助、独立保存/测试反馈与敏感输入清空；底部最近 30 条记录每 5 秒刷新，离开页签停止轮询。YAML 专用配置保存保留注释并校验 revision，通知凭据 AES-256-GCM 加密，读取只返回存在标记。项目原本没有加密密钥管理，新增数据目录 `notification.key`，已说明和 YAML/SQLite 一起备份。
+
+SQLite 新增终态事实快照与通知队列，终态事实与任务结果同事务保存，修复中断后快速继续导致扫描遗漏的问题；通知内容生成后固定正文/时区，启用边界按任务 ID 排除历史及启用前创建的活动任务。独立 worker 扫描去重、失败过滤、关闭停止、三次尝试及 30/60 秒退避，启动恢复未确认发送态。每轮生成最多每渠道 100 项、发送 10 项；HTTP 在配置锁外发送，下载热路径未接入通知。当前每个任务只有一个源/目标，不新增跨任务聚合；超时归类任务失败，首次终态通知后继续同编号不再重复入队。
+
+验证均使用临时配置、数据库、镜像目录、本机随机端口、可控 rsync daemon 和模拟通知接收端，未向真实渠道发送测试消息：
+
+- `npm --prefix web run build`：通过，含 vue-tsc 类型检查；输出仅 `web/dist/`。
+- `MIRRORDOCK_TEST_RSYNC=<隔离 rsync 3.5.1> GOCACHE=<项目缓存> go test -race ./...`：通过，包含现有源同步/发布/鉴权等回归。最终审查修正后另运行通知、runs、app、database 的相关 race 测试；结果见 `test-results/notification-final-race.txt`。
+- `go vet ./...`：通过；macOS 构建与 `GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build`：通过，测试二进制位于 /tmp，未替换实际运行服务。
+- 全部 Chromium E2E：**4/4 通过、跳过 0**，包含原有管理台和公开目录回归。通知页覆盖五渠道默认状态、凭据不回显、空值保留、钉钉清除密钥、保存后清空、未保存禁测试、关闭自动通知时测试、请求期间两按钮禁用、启用不补旧任务、新任务发送、时区同步、发送记录、帮助悬停/聚焦/点击/Escape、1440/736/375px 无横向页面溢出，以及离开后停止轮询；截图已人工核对，位于 web/test-results。
+- Go 通知测试覆盖：非法渠道/URL/官方参数/Token/缺失配置、revision 冲突、通用设置保留通知、Cookie/权限/同源/CSRF、密文渠道/字段绑定与篡改、错误/缺失密钥和权限、启用/重新启用边界、关闭/仅失败停止、成功/取消/含失败条目过滤、队列唯一去重、30/60 秒延迟与三次上限、真实关闭/重新打开 SQLite 后恢复、未确认发送达到上限失败、快速继续仍保留中断事件、UTC 默认/IANA 时区与夏令时偏移及正文快照、名称截断/未开始/未记录/未完成数、Bark 末尾斜杠/自建路径前缀、五渠道本机请求与业务响应、钉钉签名、64 KiB 上限、禁止重定向、超时和错误脱敏、并发测试拒绝、30 条查询上限及通知失败不修改业务结果。
+
+下载合成回归基准（Apple M2 Max、darwin/arm64、Go 1.27.1）：BenchmarkPublicHTTP **1,332,072 ns/op，6297.41 MB/s，10805 B/op，145 allocs/op**。仅为本机临时文件/回环基准，不是 Linux sendfile 系统调用观测或生产网络/磁盘吞吐验收。
+
+OCR 首次 `ocr review --audience agent ... --output` 在解析 endpoint 阶段失败：未配置 LLM endpoint，因此未执行外部 LLM 请求或发送源码。按照项目已允许的本地 delegate preview/rule 工作流，由当前 Codex 逐项审查；默认可审查 **33/33**，默认排除的 7 个测试（default_path）补充审查、5 个 Markdown（unsupported_ext）核对、删除旧页面检查装配引用，共 **46/46 项、跳过 0、覆盖 100%**。其中新增/修改源码 **39/39**，另覆盖删除源码 1 项、YAML 1 项和文档 5 项；未变化文件仅在 SHA256 与此前 ocr-alignment-fix-review.json 完全相同时继承审查。当前源码检查内容包括锁顺序/领取与停用、复用配置保护、事务终态事件、正文计数/时间、固定脱敏错误、HTTP 限制、凭据 AES-GCM/密钥权限与备份、Vue 转义/交互/轮询、测试隔离。修复快速继续丢失事件、Bark isArchive 参数类型、未报告结束时间不伪造完成时间及模拟超时接收端无界等待问题，无遗留确认的高/中严重度问题。
+
+初次浏览器断言因 Chromium 返回 Asia/Calcutta（Asia/Kolkata 的 IANA 别名）失败，已按浏览器实际同步名称和 UTC+05:30 偏移验证。初次额外超时 fixture 一直等待关闭导致测试挂起，已终止该自有测试进程、增加 200 ms 等待上限并重跑；这些检查不记为通过。初始沙箱阻止本机监听及默认 Go 缓存写入，改为项目 GOCACHE 并获准执行隔离端口测试。
+
+报告与命令输出：test-results/notification-ocr-preview.json、notification-ocr-rules.json、notification-ocr-review.json、notification-web-build.txt、notification-go-race.txt、notification-final-race.txt、notification-go-vet.txt、notification-linux-build.txt、notification-e2e.txt、notification-download-benchmark.txt；报告及生成物均忽略。配置方法、触发、重试/可能重复语义和凭据备份要求已更新 README 与配置案例。
+
+未验证：真实企业微信/钉钉/Telegram/Bark 接收和平台实际限制、Linux 实际启动/生产负载/发行版验收与 sendfile 系统调用、缺少系统时区文件的实际容器运行（已嵌入 tzdata 并完成 Linux 构建）、外部 OCR LLM 审查。没有推送、发布或外部消息发送。

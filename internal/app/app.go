@@ -13,6 +13,7 @@ import (
 	"mirrordock/internal/config"
 	"mirrordock/internal/database"
 	"mirrordock/internal/mirrors"
+	"mirrordock/internal/notifications"
 	"mirrordock/internal/runs"
 	syncer "mirrordock/internal/sync"
 	webui "mirrordock/web"
@@ -33,17 +34,18 @@ type App struct {
 	connections *connections
 	workers     sync.WaitGroup
 
-	Config   *config.Manager
-	Store    *database.Store
-	Mirrors  *mirrors.Manager
-	Runs     *runs.Engine
-	auth     *auth
-	location *time.Location
-	lock     *os.File
-	Server   *http.Server
-	once     sync.Once
-	sse      chan struct{}
-	closing  chan struct{}
+	Config        *config.Manager
+	Store         *database.Store
+	Mirrors       *mirrors.Manager
+	Runs          *runs.Engine
+	Notifications *notifications.Service
+	auth          *auth
+	location      *time.Location
+	lock          *os.File
+	Server        *http.Server
+	once          sync.Once
+	sse           chan struct{}
+	closing       chan struct{}
 }
 
 func Open(file string) (*App, error) {
@@ -91,17 +93,44 @@ func OpenConfig(cfg *config.Manager) (*App, error) {
 	}
 	auth, err := newAuth(c.Auth)
 	if err != nil {
+		engine.Close()
 		m.Close()
 		store.Close()
 		fail()
 		return nil, err
 	}
-	a := &App{Config: cfg, Store: store, Mirrors: m, Runs: engine, auth: auth, location: location, lock: lock, sse: make(chan struct{}, 8), closing: make(chan struct{}), connections: &connections{entries: map[net.Conn]*connection{}, limit: connectionLimit()}}
+	notifier, err := notifications.New(cfg, store)
+	if err != nil {
+		engine.Close()
+		m.Close()
+		store.Close()
+		fail()
+		return nil, err
+	}
+	engine.ConfigValidator = notifier.ValidateConfig
+	engine.ConfigApplied = notifier.Sync
+	a := &App{Config: cfg, Store: store, Mirrors: m, Runs: engine, Notifications: notifier, auth: auth, location: location, lock: lock, sse: make(chan struct{}, 8), closing: make(chan struct{}), connections: &connections{entries: map[net.Conn]*connection{}, limit: connectionLimit()}}
+	m.ListingInfo = func(id string) mirrors.SourceListingInfo {
+		info := mirrors.SourceListingInfo{Next: engine.ScheduleInfo()[id]}
+		latest, _, err := engine.List("", id, 1, 0)
+		if err == nil && len(latest) > 0 {
+			info.State = latest[0].State
+			info.Last = latest[0].EndedAt
+			if info.Last.IsZero() {
+				completed, _, err := engine.List("succeeded", id, 1, 0)
+				if err == nil && len(completed) > 0 {
+					info.Last = completed[0].EndedAt
+				}
+			}
+		}
+		return info
+	}
 	a.Server = &http.Server{Addr: net.JoinHostPort(c.Listen, strconv.Itoa(c.Port)), Handler: a.Handler(), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 90 * time.Second, MaxHeaderBytes: 64 << 10, TLSConfig: &tls.Config{MinVersion: tls.VersionTLS12}, ConnState: a.connections.state, ErrorLog: slog.NewLogLogger(slog.Default().Handler(), slog.LevelError)}
 	a.workers.Go(a.watchConnections)
 	return a, nil
 }
 func (a *App) Serve() error {
+	a.Notifications.Start()
 	a.Runs.Start()
 	c := a.Config.Startup()
 	if c.TLS.Cert != "" {
@@ -115,6 +144,7 @@ func (a *App) Close(ctx context.Context) error {
 		close(a.closing)
 		a.workers.Wait()
 		a.Runs.Close()
+		a.Notifications.Close()
 		err = a.Server.Shutdown(ctx)
 		if err != nil {
 			_ = a.Server.Close()
@@ -148,6 +178,7 @@ func (a *App) Handler() http.Handler {
 	api.HandleFunc("GET /api/events", a.events)
 	api.HandleFunc("GET /api/system/info", a.info)
 	api.HandleFunc("GET /api/system/checks", a.checks)
+	a.notificationRoutes(api)
 	api.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		respond(w, 404, map[string]string{"error": "接口不存在"})
 	})

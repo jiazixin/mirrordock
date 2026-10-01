@@ -13,12 +13,16 @@ const password = ref('')
 const error = ref('')
 const busy = ref(false)
 
+async function syncNotificationTimezone() {
+  try { await api('/notifications/timezone', 'POST', { timezone: Intl.DateTimeFormat().resolvedOptions().timeZone }) }
+  catch { state.error = '通知时区同步失败，继续使用服务端已保存的时区。' }
+}
 async function check() {
   try {
     const status = await api<{ authenticated: boolean; username?: string }>('/auth/status')
     authenticated.value = status.authenticated
     state.username = status.username ?? ''
-    if (status.authenticated) { await refresh(); connectEvents() }
+    if (status.authenticated) { await syncNotificationTimezone(); await refresh(); connectEvents() }
   } catch (e) { error.value = e instanceof Error ? e.message : String(e) }
   finally { loading.value = false }
 }
@@ -30,6 +34,7 @@ async function submit() {
     password.value = ''
     state.username = session.username
     authenticated.value = true
+    await syncNotificationTimezone()
     await refresh()
     connectEvents()
   } catch (e) { error.value = e instanceof Error ? e.message : String(e) }

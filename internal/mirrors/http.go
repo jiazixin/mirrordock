@@ -138,7 +138,7 @@ func (m *Manager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			http.Redirect(w, r, r.URL.EscapedPath()+"/", 301)
 			return
 		}
-		m.directory(w, r, file)
+		m.directory(w, r, file, entry)
 		return
 	}
 	if !st.Mode().IsRegular() {
@@ -229,13 +229,21 @@ func (m *Manager) virtual(w http.ResponseWriter, r *http.Request, p string, tabl
 		http.Redirect(w, r, r.URL.EscapedPath()+"/", 301)
 		return
 	}
+	if r.Method == "HEAD" {
+		renderListing(w, r, nil, false)
+		return
+	}
 	items := []listingItem{}
 	for name := range children {
-		items = append(items, newListingItem(name, r.URL.EscapedPath()+url.PathEscape(name)+"/", true, nil))
+		item := newListingItem(name, r.URL.EscapedPath()+url.PathEscape(name)+"/", true, nil)
+		if entry := table.entries[prefix+name]; entry != nil && entry.Publication.Type != "github_release" {
+			item = projectItem(item, entry.Publication, nil, m.sourceListingInfo(entry.Publication.SourceID))
+		}
+		items = append(items, item)
 	}
 	renderListing(w, r, items, false)
 }
-func (m *Manager) directory(w http.ResponseWriter, r *http.Request, f *os.File) {
+func (m *Manager) directory(w http.ResponseWriter, r *http.Request, f *os.File, publications ...*opened) {
 	if r.Method == "HEAD" {
 		renderListing(w, r, nil, false)
 		return
@@ -254,6 +262,14 @@ func (m *Manager) directory(w http.ResponseWriter, r *http.Request, f *os.File) 
 		entries = entries[:1000]
 	}
 	items := []listingItem{}
+	var publication Publication
+	var sourceInfo SourceListingInfo
+	if len(publications) > 0 {
+		publication = publications[0].Publication
+		if publication.Type == "github_release" && strings.Trim(r.URL.Path, "/") == publication.Dest {
+			sourceInfo = m.sourceListingInfo(publication.SourceID)
+		}
+	}
 	for _, e := range entries {
 		if hidden(e.Name()) {
 			continue
@@ -264,7 +280,19 @@ func (m *Manager) directory(w http.ResponseWriter, r *http.Request, f *os.File) 
 		}
 		// DirEntry.Info uses lstat: listing metadata never follows symbolic links.
 		info, _ := e.Info()
-		items = append(items, newListingItem(e.Name(), u, e.IsDir(), info))
+		item := newListingItem(e.Name(), u, e.IsDir(), info)
+		if publication.Type == "github_release" && strings.Trim(r.URL.Path, "/") == publication.Dest && e.IsDir() {
+			var release ReleaseSummary
+			known := false
+			if publication.Current.Summary != nil {
+				release, known = publication.Current.Summary.Releases[e.Name()]
+			}
+			item = projectItem(item, publication, &release, sourceInfo)
+			if !known {
+				item.Bytes, item.Size = -1, "—"
+			}
+		}
+		items = append(items, item)
 	}
 	renderListing(w, r, items, more)
 }

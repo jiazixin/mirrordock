@@ -75,23 +75,25 @@ type active struct {
 	intent string
 }
 type Engine struct {
-	mu          sync.Mutex
-	configMu    sync.Mutex
-	cfg         *config.Manager
-	store       *database.Store
-	mirror      *mirrors.Manager
-	runner      syncer.Runner
-	data        string
-	ctx         context.Context
-	cancel      context.CancelFunc
-	wg          sync.WaitGroup
-	pending     []*Run
-	current     map[int64]*Run
-	working     map[int64]*active
-	wake        chan struct{}
-	cron        *cron.Cron
-	location    *time.Location
-	scheduleIDs map[string]cron.EntryID
+	mu              sync.Mutex
+	configMu        sync.Mutex
+	cfg             *config.Manager
+	store           *database.Store
+	mirror          *mirrors.Manager
+	runner          syncer.Runner
+	data            string
+	ctx             context.Context
+	cancel          context.CancelFunc
+	wg              sync.WaitGroup
+	pending         []*Run
+	current         map[int64]*Run
+	working         map[int64]*active
+	wake            chan struct{}
+	cron            *cron.Cron
+	location        *time.Location
+	scheduleIDs     map[string]cron.EntryID
+	ConfigValidator func(config.Config) error
+	ConfigApplied   func() error
 }
 
 func New(cfg *config.Manager, store *database.Store, m *mirrors.Manager, runner syncer.Runner, location *time.Location) (*Engine, error) {
@@ -227,7 +229,18 @@ func (e *Engine) Reload() error {
 	e.configMu.Lock()
 	defer e.configMu.Unlock()
 	e.mu.Lock()
-	err := e.cfg.ReloadChecked(e.validateChange)
+	err := e.cfg.ReloadChecked(func(c config.Config) error {
+		if err := e.validateChange(c); err != nil {
+			return err
+		}
+		if e.ConfigValidator != nil {
+			return e.ConfigValidator(c)
+		}
+		return nil
+	})
+	if err == nil && e.ConfigApplied != nil {
+		err = e.ConfigApplied()
+	}
 	e.mu.Unlock()
 	if err != nil {
 		return err
@@ -256,6 +269,7 @@ func (e *Engine) Enqueue(sourceID, trigger string) (*Run, error) {
 	budget, _ := time.ParseDuration(c.Settings.TaskTimeout)
 	c.Settings.GitHub.Token = ""
 	c.Settings.GitHub.Proxy = ""
+	c.Settings.Notifications = nil
 	r := &Run{SourceID: s.ID, Name: s.Name, Type: s.Type, Dest: s.Dest, State: "queued", Trigger: trigger, CreatedAt: time.Now().UTC(), BudgetSeconds: budget.Seconds(), Progress: syncer.Progress{Phase: "prepare"}, Snapshot: Snapshot{Source: s, Settings: c.Settings}}
 	e.event(r, "任务已加入队列")
 	id, err := e.store.CreateRun(s.ID, r.State, r.CreatedAt.Format(time.RFC3339Nano), r)
@@ -401,6 +415,7 @@ func (e *Engine) worker() {
 		remaining := r.BudgetSeconds - r.ElapsedSeconds
 		if remaining <= 0 {
 			r.State = "timed_out"
+			r.EndedAt = time.Now().UTC()
 			r.ErrorCode = "TASK_TIMEOUT"
 			_ = e.save(r)
 			delete(e.current, r.ID)
@@ -709,4 +724,13 @@ func (e *Engine) ClearLogs() (int, error) {
 		}
 	}
 	return cleared, nil
+}
+
+// NotificationChange serializes activation with new task creation and YAML edits.
+func (e *Engine) NotificationChange(operation func() error) error {
+	e.configMu.Lock()
+	defer e.configMu.Unlock()
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return operation()
 }

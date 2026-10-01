@@ -19,7 +19,7 @@ let typedAt = 0
 function place() {
   if (!trigger.value) return
   const rect = trigger.value.getBoundingClientRect()
-  const width = Math.min(Math.max(rect.width, 180), window.innerWidth - 16)
+  const width = Math.min(rect.width, window.innerWidth - 16)
   const below = window.innerHeight - rect.bottom - 12
   const above = rect.top - 12
   const height = Math.min(props.options.length * 42 + 12 || 54, 280)

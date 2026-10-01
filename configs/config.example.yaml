@@ -1,6 +1,6 @@
 # MirrorDock / 源仓：Go 1.27.1 + Vue 实现的完整注释配置。
 # 启动：mirrordock -f /path/to/config.yaml（或 --config）。
-# 时区使用程序启动时的时区，不在 YAML 中配置。
+# 调度与页面使用程序启动时区；通知独立使用最近登录浏览器的时区，不在 YAML 中配置。
 # 相对文件路径以配置文件所在目录为基准。
 
 listen: "0.0.0.0"           # 监听所有 IPv4 网卡，供其他机器访问；仅本机可改 127.0.0.1
@@ -35,6 +35,9 @@ tls:
   key: ""                   # PEM 私钥文件，例如 ./certs/privkey.pem
 
 settings:
+  # 通知通过系统设置页面保存到 notifications，敏感字段为 enc:v1: 密文，禁止粘贴明文。
+  # 五渠道默认关闭；必须一同备份数据目录 notification.key、SQLite 和本 YAML。
+  notifications: {}
   task_timeout: "8h"        # 每轮任务的累计执行预算；切换 src 不重置，排队/暂停不计入
   rsync:
     io_timeout: "5m"        # 连续无数据传输的等待上限，超时后可切换下一来源

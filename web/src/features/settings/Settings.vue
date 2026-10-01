@@ -1,14 +1,18 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
-import { Save, RotateCcw, ShieldCheck, Settings2, ArrowDownUp } from '@lucide/vue'
+import { Save, RotateCcw, ShieldCheck, Settings2, ArrowDownUp, FileText, Bell } from '@lucide/vue'
 import { clone, state, saveConfiguration, perform, refresh, notify } from '../../app/state'
 import type { Configuration } from '../../app/types'
 import { api } from '../../app/api'
+import EnvironmentChecks from './EnvironmentChecks.vue'
+import Notifications from './Notifications.vue'
 
 const tabs = [
   { id: 'execution', label: '同步执行', icon: Settings2 },
   { id: 'rsync', label: 'rsync', icon: ArrowDownUp },
   { id: 'github', label: 'GitHub Release', icon: ShieldCheck },
+  { id: 'configuration', label: '系统配置', icon: FileText },
+  { id: 'notifications', label: '通知设置', icon: Bell },
 ] as const
 const activeTab = ref<(typeof tabs)[number]['id']>('execution')
 const draft = ref<Configuration>()
@@ -47,10 +51,10 @@ async function reload() {
 <template>
   <section v-if="draft" class="settings-page">
     <div class="page-heading">
-      <div><span class="eyebrow">SYSTEM PREFERENCES</span><h1>系统设置<span>.</span></h1><p>管理同步预算、rsync 传输与 GitHub Release 下载。</p></div>
+      <div><span class="eyebrow">SYSTEM PREFERENCES</span><h1>系统设置<span>.</span></h1></div>
       <div class="heading-actions">
         <button class="button" :disabled="busy" @click="perform(reload)"><RotateCcw :size="16"/>重新载入配置</button>
-        <button class="button primary" :disabled="busy" @click="perform(save)"><Save :size="16"/>{{ busy ? '保存中…' : '保存设置' }}</button>
+        <button v-if="['execution', 'rsync', 'github'].includes(activeTab)" class="button primary" :disabled="busy" @click="perform(save)"><Save :size="16"/>{{ busy ? '保存中…' : '保存设置' }}</button>
       </div>
     </div>
     <div v-if="state.config?.restart_required" class="alert warning">配置文件中的账号、日志、监听、目录或 TLS 已修改，请重启程序后生效。</div>
@@ -96,11 +100,23 @@ async function reload() {
       </article>
     </div>
 
+    <div v-if="activeTab === 'notifications'" id="settings-panel-notifications" role="tabpanel" aria-labelledby="settings-tab-notifications"><Notifications /></div>
+
+    <div id="settings-panel-configuration" v-if="activeTab === 'configuration'" class="settings-sections" role="tabpanel" aria-labelledby="settings-tab-configuration">
+      <article class="panel active-config">
+        <h2>配置文件</h2>
+        <code>{{ state.config?.file }}</code>
+      </article>
+      <EnvironmentChecks />
+    </div>
   </section>
 </template>
 
 <style scoped>
-.settings-tabs { gap: 28px; }
+.settings-tabs { gap: 28px; overflow-x: auto; }
+.active-config { padding: 26px 28px; }
+.active-config h2 { font-size: 17px; }
+.active-config code { display: block; margin-top: 14px; overflow-wrap: anywhere; color: var(--dark); font-size: 13px; }
 .settings-tabs button { white-space: nowrap; }
 .settings-sections { display: flex; flex-direction: column; gap: 20px; }
 .setting-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 48px; padding: 30px 28px; }

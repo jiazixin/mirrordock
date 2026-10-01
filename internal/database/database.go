@@ -17,9 +17,22 @@ CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY);
 CREATE TABLE IF NOT EXISTS runs (id INTEGER PRIMARY KEY AUTOINCREMENT, source_id TEXT NOT NULL, state TEXT NOT NULL, created_at TEXT NOT NULL, data BLOB NOT NULL);
 CREATE INDEX IF NOT EXISTS runs_source_state ON runs(source_id,state);
 CREATE INDEX IF NOT EXISTS runs_state_id ON runs(state,id DESC);
+CREATE TABLE IF NOT EXISTS run_results (id INTEGER PRIMARY KEY, data BLOB NOT NULL);
 CREATE TABLE IF NOT EXISTS publications (source_id TEXT PRIMARY KEY, data BLOB NOT NULL);
 CREATE TABLE IF NOT EXISTS app_state (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+
+CREATE TABLE IF NOT EXISTS notifications (
+ id INTEGER PRIMARY KEY AUTOINCREMENT,
+ channel TEXT NOT NULL, run_id INTEGER NOT NULL, event TEXT NOT NULL,
+ title TEXT NOT NULL, body TEXT NOT NULL, failure INTEGER NOT NULL,
+ state TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
+ next_at INTEGER NOT NULL, updated_at TEXT NOT NULL, error TEXT NOT NULL DEFAULT '',
+ UNIQUE(channel,run_id)
+);
+CREATE INDEX IF NOT EXISTS notifications_due ON notifications(state,next_at,id);
+
 INSERT OR IGNORE INTO schema_migrations(version) VALUES(1);
+INSERT OR IGNORE INTO schema_migrations(version) VALUES(2);
 `
 
 type Store struct{ DB *sql.DB }
@@ -84,23 +97,63 @@ func (s *Store) CreateRun(source, state, created string, value any) (int64, erro
 			return 0, err
 		}
 	}
+	if terminal(state) {
+		if _, err = tx.Exec("INSERT OR IGNORE INTO run_results(id,data) VALUES(?,?)", id, b); err != nil {
+			return 0, err
+		}
+	}
 	return id, tx.Commit()
+}
+func terminal(state string) bool {
+	switch state {
+	case "succeeded", "failed", "timed_out", "cancelled", "interrupted":
+		return true
+	}
+	return false
 }
 func (s *Store) SaveRun(id int64, state string, value any) error {
 	b, err := json.Marshal(value)
 	if err != nil {
 		return err
 	}
-	r, err := s.DB.Exec("UPDATE runs SET state=?,data=? WHERE id=?", state, b, id)
+	if !terminal(state) {
+		result, err := s.DB.Exec("UPDATE runs SET state=?,data=? WHERE id=?", state, b, id)
+		if err != nil {
+			return err
+		}
+		n, err := result.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if n != 1 {
+			return fmt.Errorf("run %d missing", id)
+		}
+		return nil
+	}
+	tx, err := s.DB.Begin()
 	if err != nil {
 		return err
 	}
-	n, _ := r.RowsAffected()
+	defer tx.Rollback()
+	result, err := tx.Exec("UPDATE runs SET state=?,data=? WHERE id=?", state, b, id)
+	if err != nil {
+		return err
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
 	if n != 1 {
 		return fmt.Errorf("run %d missing", id)
 	}
-	return nil
+	// Preserve the first terminal result even if an interrupted task is resumed
+	// before the independent notification worker scans it.
+	if _, err = tx.Exec("INSERT OR IGNORE INTO run_results(id,data) VALUES(?,?)", id, b); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
+
 func (s *Store) Run(id int64, out any) error {
 	var b []byte
 	if err := s.DB.QueryRow("SELECT data FROM runs WHERE id=?", id).Scan(&b); err != nil {

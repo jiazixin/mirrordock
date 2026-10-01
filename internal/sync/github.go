@@ -208,6 +208,21 @@ func GitHubWithClient(ctx context.Context, client *github.Client, httpClient *ht
 		fmt.Fprintf(log, "asset %d %s/%s: verified (%d bytes)\n", a.GetID(), entry.Tag, name, a.GetSize())
 		tick(int64(a.GetSize()))
 	}
+	// Record only releases actually verified in this successful attempt. The
+	// private marker becomes public listing metadata only after publication.
+	verifiedTags := map[string]bool{}
+	for _, entry := range assets {
+		verifiedTags[entry.Tag] = true
+	}
+	for tag := range verifiedTags {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		marker := filepath.Join(t.Directory, tag, ".mirrordock-release-sync")
+		if err := config.AtomicWrite(marker, []byte(time.Now().UTC().Format(time.RFC3339Nano)), 0600); err != nil {
+			return err
+		}
+	}
 	if t.Settings.GitHub.PruneOldReleases {
 		entries, err := os.ReadDir(t.Directory)
 		if err != nil {

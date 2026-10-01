@@ -19,13 +19,15 @@ import (
 )
 
 type Generation struct {
-	ID          string    `json:"id"`
-	Directory   string    `json:"directory"`
-	PublishedAt time.Time `json:"published_at"`
-	RetainUntil time.Time `json:"retain_until,omitzero"`
+	ID          string            `json:"id"`
+	Directory   string            `json:"directory"`
+	PublishedAt time.Time         `json:"published_at"`
+	RetainUntil time.Time         `json:"retain_until,omitzero"`
+	Summary     *DirectorySummary `json:"summary,omitzero"`
 }
 type Publication struct {
 	SourceID string       `json:"source_id"`
+	Type     string       `json:"type"`
 	Dest     string       `json:"dest"`
 	Current  Generation   `json:"current"`
 	Previous []Generation `json:"previous"`
@@ -51,6 +53,7 @@ type Manager struct {
 	requests      atomic.Int64
 	bytes         atomic.Int64
 	cache         *metadataCache
+	ListingInfo   func(string) SourceListingInfo
 }
 
 func New(root string, store *database.Store, sources []config.Source) (*Manager, error) {
@@ -115,6 +118,20 @@ func New(root string, store *database.Store, sources []config.Source) (*Manager,
 				}
 			} else {
 				continue
+			}
+		}
+		p.Type = s.Type
+		if p.Current.Summary == nil {
+			real, e := filepath.EvalSymlinks(p.Current.Directory)
+			if e != nil || !config.Within(m.Root, real) {
+				return nil, errors.New("publication escaped mirror root")
+			}
+			p.Current.Summary, err = summarizeDirectory(context.Background(), p.Current.Directory, s.Type)
+			if err != nil {
+				return nil, err
+			}
+			if err = store.SavePublication(s.ID, p); err != nil {
+				return nil, err
 			}
 		}
 		if err = m.register(p); err != nil {
@@ -351,6 +368,10 @@ func (m *Manager) Publish(ctx context.Context, s config.Source, id int64) (Publi
 	if err := Validate(ctx, work, s.Type); err != nil {
 		return Publication{}, err
 	}
+	summary, err := summarizeDirectory(ctx, work, s.Type)
+	if err != nil {
+		return Publication{}, err
+	}
 	if err := flushTree(ctx, work); err != nil {
 		return Publication{}, err
 	}
@@ -359,9 +380,9 @@ func (m *Manager) Publish(ctx context.Context, s config.Source, id int64) (Publi
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	g := Generation{ID: uuid.New().String(), PublishedAt: time.Now().UTC()}
+	g := Generation{ID: uuid.New().String(), PublishedAt: time.Now().UTC(), Summary: summary}
 	g.Directory = filepath.Join(m.Root, ".mirrordock", "published", g.ID)
-	p := Publication{SourceID: s.ID, Dest: s.Dest, Current: g}
+	p := Publication{SourceID: s.ID, Type: s.Type, Dest: s.Dest, Current: g}
 	if old := m.table.Load().entries[s.Dest]; old != nil {
 		previous := old.Publication.Current
 		previous.RetainUntil = time.Now().UTC().Add(24 * time.Hour)

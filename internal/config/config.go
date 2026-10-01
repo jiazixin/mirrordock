@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"math"
 	"net"
 	"net/url"
@@ -53,9 +54,10 @@ type GitHubSettings struct {
 	Proxy              string `yaml:"proxy" json:"proxy"`
 }
 type Settings struct {
-	TaskTimeout string         `yaml:"task_timeout" json:"task_timeout"`
-	Rsync       RsyncSettings  `yaml:"rsync" json:"rsync"`
-	GitHub      GitHubSettings `yaml:"github" json:"github"`
+	TaskTimeout   string                  `yaml:"task_timeout" json:"task_timeout"`
+	Rsync         RsyncSettings           `yaml:"rsync" json:"rsync"`
+	GitHub        GitHubSettings          `yaml:"github" json:"github"`
+	Notifications map[string]Notification `yaml:"notifications,omitempty" json:"-"`
 }
 type Rsync struct {
 	PreserveLinks       *bool `yaml:"preserve_links,omitempty" json:"preserve_links"`
@@ -161,6 +163,7 @@ func Clone(c Config) Config {
 	_ = json.Unmarshal(b, &out)
 	// Passwords are omitted from JSON, but internal copies retain credentials.
 	out.Auth = c.Auth
+	out.Settings.Notifications = maps.Clone(c.Settings.Notifications)
 	return out
 }
 func (s Source) Candidates() []string {
@@ -212,6 +215,9 @@ func Within(root, p string) bool {
 }
 
 func (c Config) Validate(file string) error {
+	if err := ValidateNotifications(c.Settings.Notifications); err != nil {
+		return err
+	}
 	if !slices.Contains([]string{"debug", "info", "warn", "error"}, c.Log.Level) {
 		return errors.New("log.level 只支持 debug、info、warn、error")
 	}
@@ -293,7 +299,7 @@ func (c Config) Validate(file string) error {
 		if logInfo != nil && !logInfo.Mode().IsRegular() {
 			return errors.New("log.path 必须是普通文件")
 		}
-		protected := []string{cfgFile, filepath.Join(data, "data.sqlite"), filepath.Join(data, "data.sqlite-wal"), filepath.Join(data, "data.sqlite-shm"), filepath.Join(data, ".mirrordock.lock")}
+		protected := []string{cfgFile, filepath.Join(data, "data.sqlite"), filepath.Join(data, "data.sqlite-wal"), filepath.Join(data, "data.sqlite-shm"), filepath.Join(data, ".mirrordock.lock"), filepath.Join(data, "notification.key")}
 		for _, p := range []string{c.TLS.Cert, c.TLS.Key} {
 			if p != "" {
 				protected = append(protected, Resolve(file, p))
@@ -554,8 +560,21 @@ func (m *Manager) ReloadChecked(check func(Config) error) error {
 	return nil
 }
 func (m *Manager) Save(c Config, revision string, tokenUpdate, proxyUpdate *string) error {
+	return m.save(c, revision, tokenUpdate, proxyUpdate, nil)
+}
+func (m *Manager) SaveNotifications(channels map[string]Notification, revision string) error {
+	return m.save(Config{}, revision, nil, nil, channels)
+}
+func (m *Manager) save(c Config, revision string, tokenUpdate, proxyUpdate *string, channels map[string]Notification) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if channels != nil {
+		c = Clone(m.cfg)
+	}
+	c.Settings.Notifications = maps.Clone(m.cfg.Settings.Notifications)
+	if channels != nil {
+		c.Settings.Notifications = maps.Clone(channels)
+	}
 	if c.Sources == nil {
 		c.Sources = []Source{}
 	}
