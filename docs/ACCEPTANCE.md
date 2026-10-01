@@ -118,3 +118,25 @@ Docker 守护进程仍不可用，本次容器构建/启动未执行；Linux 运
 按 `use-modern-go` 的 Go 1.27.1 指南实施，使用 OCR 本地 delegate 的 preview/rule 逐文件审查本次 **11 个生产文件，11/11，跳过 0**，没有遗留确认的高/中严重度问题。OCR 默认排除的五项测试（`default_path`）与六项 Markdown 文档（`unsupported_ext`，含本节）另行检查。隔离审查副本以本轮修改前源码为基线，仅复制跟踪源码和新增测试/计划，没有复制用户配置、凭证或镜像。清单、规则与 SHA256 报告为 `../test-results/ocr-auth-preview.json`、`ocr-auth-rules.json`、`ocr-auth-review.json`。外部 LLM 调用未执行，沿用此前自动审批拒绝后允许的本地审查流程。
 
 测试全部使用临时配置、目录、隔离端口和受控本地上游；用户配置、镜像数据及正在运行的服务未修改或重启。采用新程序前，现有 YAML 必须补上 `auth` 并设置自己的密码，账号与新界面在新二进制重启后生效。本次未重复 Docker、目标 Linux 运行、下载性能基准或实际发行版全量同步；下载热路径未修改，交叉编译不等同 Linux 运行验收。
+
+## 旧二进制启动失败与程序日志追加验收 · 2026-10-01
+
+已确认 `field auth not found in type config.Config` 的原因：现有 `bin/mirrordock` 与 Linux 二进制仍为 10:27–10:28 构建，上一轮账号功能只构建了临时测试程序。使用原本机二进制和临时空源 YAML 实际复现退出码 1、拒绝 auth，未创建数据目录。本次已将支持 auth 与 log 的最终程序重新生成到 `bin/mirrordock`、`bin/mirrordock-linux-amd64`、`bin/mirrordock-linux-arm64`；实际部署仍需替换所运行的程序并重启。
+
+顶层 `log.level` 支持 debug/info/warn/error，默认 info；`log.format` 支持 json/text，默认 json；`log.path` 为空表示标准输出，填写时为相对于 YAML 的日志文件路径。父目录自动创建，文件以 0600 权限追加写入，不自动轮转，文档说明 logrotate copytruncate / 停机归档。先加载配置并初始化 slog，再初始化应用；HTTP 内部错误使用同一 logger，退出先完成资源关闭。配置错误或日志文件打开失败使用启动默认 JSON logger；已初始化之后的应用错误写入所选日志。日志修改后重启生效，回写保留注释及 auth 凭证。
+
+程序日志不得进入镜像根、覆盖 YAML/SQLite/WAL/SHM/实例锁/TLS 文件；校验硬链接和符号链接别名。`<path>/logs/` 子目录为任务日志保留，程序日志可使用该目录根部的 `mirrordock.log`。FIFO/目录不接受为日志文件，打开时采用非阻塞标记避免 FIFO 无读者导致启动挂起。任务日志路径、格式及手动清理语义保持原样。
+
+| 检查 | 本次实际结果 |
+| --- | --- |
+| Web 构建 | `npm --prefix web run build` 类型检查及 Vite 构建通过，先生成真实 web/dist 再编译 Go。前端更新配置类型和日志重启提示。 |
+| Go 检查 | Go 1.27.1；使用仓库 GOCACHE 的 `go vet ./...` 通过；带隔离 rsync 3.5.1 fixture 的最终 `go test -race ./...` 通过，app 包 33.658s。最终配置/日志定向竞态测试通过。 |
+| 配置与日志单元测试 | 覆盖缺省/局部 log 配置、非法字段/级别/格式、私有路径隔离、配置硬链接/符号链接别名、任务日志子目录、JSON/Text 内容、四级过滤、文件追加、权限、FIFO 及打开错误、回写注释和重启状态。 |
+| 最终二进制 | 本机 `go build -trimpath -o bin/mirrordock ./cmd/mirrordock` 通过；CGO_ENABLED=0 的 Linux amd64/arm64 交叉构建通过，三项均已写入 bin。 |
+| 隔离启动验证 | 最终本机程序验证默认 JSON、Text、文件 JSON（启动两次追加）、warn 过滤；均能以 YAML 账号登录，读取 API 无密码，管理页面与公开首页返回 200，SIGTERM 退出 0。配置保存保留密码并标记日志重启生效；日志初始化之后的应用错误写入 JSON 文件并退出 1。五项最终均通过。 |
+
+完整竞态测试首次因沙箱禁止监听临时端口而失败，自动审批允许后重跑通过。启动验证脚本首轮遗漏 X-MirrorDock-Request 请求头，登录收到 403；补齐后正确。第二轮用于制造应用初始化错误的 fixture 实际先触发配置路径校验，没有生成文件日志；改用实例锁目录冲突，让错误发生在日志初始化后，最终通过。这些初次失败不记录为通过。实际输出和复现脚本在 `../test-results/log-go-race.txt`、`log-smoke.json`、`log-smoke.py`。
+
+按 use-modern-go 的完整 Go 1.27 指南实施，沿用此前自动审批阻止外部 OCR LLM 后已允许的本地 delegate 工作流。本轮 `ocr review --preview` 初始无改动，未调用外部 LLM；实现后在只包含此次修改的隔离副本执行 `ocr delegate preview/rule`，当前 Codex 完成 **7/7 生产文件审查，跳过 0，覆盖率 100%**：cmd/mirrordock/main.go、configs/config.example.yaml、internal/app/app.go、internal/config/config.go、internal/observability/log.go、web/src/app/types.ts、web/src/features/settings/Settings.vue。默认排除的两项测试（default_path）和四项 Markdown（unsupported_ext）另行检查，本节验收说明也已核对。审查修复 FIFO 启动挂起、硬链接误写私有文件、与任务日志路径重叠三项问题，没有遗留确认的高/中严重度问题。清单、规则及 SHA256 结果见 `../test-results/ocr-log-preview.json`、`ocr-log-rules.json`、`ocr-log-review.json`；外部 LLM 调用未执行。
+
+测试未修改用户配置、凭证、镜像或现有运行服务。下载热路径未修改，无新增逐块日志/数据库访问、哈希或压缩；性能基准本轮未重复。浏览器 E2E、Docker、目标 Linux 实际运行、sendfile syscall 与发行版同步未执行；交叉构建不替代目标平台验收。

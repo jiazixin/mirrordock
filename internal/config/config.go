@@ -35,6 +35,11 @@ type Auth struct {
 	Username string `yaml:"username" json:"username"`
 	Password string `yaml:"password" json:"-"`
 }
+type Log struct {
+	Level  string `yaml:"level" json:"level"`
+	Path   string `yaml:"path" json:"path"`
+	Format string `yaml:"format" json:"format"`
+}
 type RsyncSettings struct {
 	IOTimeout      string  `yaml:"io_timeout" json:"io_timeout"`
 	ConnectTimeout string  `yaml:"connect_timeout" json:"connect_timeout"`
@@ -102,6 +107,7 @@ type Config struct {
 	Path       string   `yaml:"path" json:"path"`
 	MirrorRoot string   `yaml:"mirror_root" json:"mirror_root"`
 	Auth       Auth     `yaml:"auth" json:"auth"`
+	Log        Log      `yaml:"log" json:"log"`
 	TLS        TLS      `yaml:"tls" json:"tls"`
 	Settings   Settings `yaml:"settings" json:"settings"`
 	Sources    []Source `yaml:"sources" json:"sources"`
@@ -147,7 +153,7 @@ func (s Source) MarshalYAML() (any, error) {
 	return &node, nil
 }
 func Defaults() Config {
-	return Config{Listen: "0.0.0.0", Port: 8080, Path: "../data", MirrorRoot: "/srv/mirrors", Settings: Settings{TaskTimeout: "8h", Rsync: RsyncSettings{IOTimeout: "5m", ConnectTimeout: "30s"}, GitHub: GitHubSettings{ReleaseCount: 5}}}
+	return Config{Listen: "0.0.0.0", Port: 8080, Path: "../data", MirrorRoot: "/srv/mirrors", Log: Log{Level: "info", Format: "json"}, Settings: Settings{TaskTimeout: "8h", Rsync: RsyncSettings{IOTimeout: "5m", ConnectTimeout: "30s"}, GitHub: GitHubSettings{ReleaseCount: 5}}}
 }
 func Clone(c Config) Config {
 	b, _ := json.Marshal(c)
@@ -206,6 +212,15 @@ func Within(root, p string) bool {
 }
 
 func (c Config) Validate(file string) error {
+	if !slices.Contains([]string{"debug", "info", "warn", "error"}, c.Log.Level) {
+		return errors.New("log.level 只支持 debug、info、warn、error")
+	}
+	if c.Log.Format != "json" && c.Log.Format != "text" {
+		return errors.New("log.format 只支持 json、text")
+	}
+	if strings.TrimSpace(c.Log.Path) != c.Log.Path || strings.IndexFunc(c.Log.Path, unicode.IsControl) >= 0 {
+		return errors.New("log.path 不能包含首尾空白或控制字符")
+	}
 	if strings.TrimSpace(c.Auth.Username) == "" || strings.TrimSpace(c.Auth.Username) != c.Auth.Username || len(c.Auth.Username) > 128 || strings.IndexFunc(c.Auth.Username, unicode.IsControl) >= 0 {
 		return errors.New("auth.username 必须非空，最多 128 字节，不能包含首尾空白或控制字符")
 	}
@@ -252,6 +267,48 @@ func (c Config) Validate(file string) error {
 	}
 	if root == string(filepath.Separator) || Within(root, data) || Within(data, root) || Within(root, cfgFile) {
 		return errors.New("镜像根必须与数据库、日志和配置目录隔离，且不能是文件系统根")
+	}
+	if c.Log.Path != "" {
+		logFile, err := Canonical(Resolve(file, c.Log.Path))
+		if err != nil {
+			return err
+		}
+		if Within(root, logFile) {
+			return errors.New("log.path 不能位于镜像根中")
+		}
+		taskLogs, err := Canonical(filepath.Join(data, "logs"))
+		if err != nil {
+			return err
+		}
+		if Within(taskLogs, logFile) && filepath.Dir(logFile) != taskLogs {
+			return errors.New("log.path 不能使用任务日志子目录；可使用 <path>/logs/mirrordock.log")
+		}
+		logInfo, err := os.Stat(logFile)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		if logInfo != nil && !logInfo.Mode().IsRegular() {
+			return errors.New("log.path 必须是普通文件")
+		}
+		protected := []string{cfgFile, filepath.Join(data, "data.sqlite"), filepath.Join(data, "data.sqlite-wal"), filepath.Join(data, "data.sqlite-shm"), filepath.Join(data, ".mirrordock.lock")}
+		for _, p := range []string{c.TLS.Cert, c.TLS.Key} {
+			if p != "" {
+				protected = append(protected, Resolve(file, p))
+			}
+		}
+		for _, p := range protected {
+			p, err := Canonical(p)
+			if err != nil {
+				return err
+			}
+			protectedInfo, statErr := os.Stat(p)
+			if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
+				return statErr
+			}
+			if logFile == p || (logInfo != nil && protectedInfo != nil && os.SameFile(logInfo, protectedInfo)) {
+				return errors.New("log.path 不能覆盖配置、数据库、实例锁或 TLS 文件")
+			}
+		}
 	}
 	if (c.TLS.Cert == "") != (c.TLS.Key == "") {
 		return errors.New("TLS 证书与私钥必须同时填写")
@@ -468,7 +525,7 @@ func (m *Manager) View() View {
 	proxyConfigured := c.Settings.GitHub.Proxy != ""
 	c.Settings.GitHub.Token = ""
 	c.Settings.GitHub.Proxy = ""
-	restart := c.Listen != m.startup.Listen || c.Port != m.startup.Port || c.Path != m.startup.Path || c.MirrorRoot != m.startup.MirrorRoot || c.TLS != m.startup.TLS || c.Auth != m.startup.Auth
+	restart := c.Listen != m.startup.Listen || c.Port != m.startup.Port || c.Path != m.startup.Path || c.MirrorRoot != m.startup.MirrorRoot || c.TLS != m.startup.TLS || c.Auth != m.startup.Auth || c.Log != m.startup.Log
 	c.Auth.Password = ""
 	return View{Config: c, Revision: m.revision, TokenConfigured: configured, ProxyConfigured: proxyConfigured, RestartRequired: restart, File: m.file}
 }

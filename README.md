@@ -36,6 +36,10 @@ mirror_root: ../data/mirrors
 auth:
   username: "admin"
   password: "请替换为你的密码"
+log:
+  level: info
+  path: ""
+  format: json
 tls:
   cert: ""
   key: ""
@@ -64,11 +68,15 @@ YAML
 
 `-f <文件>` 和 `--config <文件>` 等价；两者同时指定不同文件会报错。没有参数读取工作目录 `config.yaml`，文件不存在就报错，不自动覆盖或生成。所有相对路径以被选中的配置文件目录为基准，数据库固定为 `<path>/data.sqlite`，日志在 `<path>/logs/<run-id>/<attempt>.log`。
 
+程序日志使用独立的顶层 `log`：`level` 支持 `debug`、`info`、`warn`、`error`，默认 `info`；`format` 支持 `json`、`text`（普通键值格式），默认 `json`；`path` 为空时输出标准输出，填写时表示日志文件路径（例如 `../data/logs/mirrordock.log`）。相对路径以配置文件目录为基准，父目录自动创建，文件追加写入，不自动轮转；可用 logrotate 的 copytruncate，或停机归档后重启。同步任务原始日志仍按上述 run/attempt 路径保存，页面“清理日志”只清理任务日志。日志不能放进镜像根，也不能指向配置、数据库、实例锁或 TLS 文件；`<path>/logs/` 的子目录为任务日志保留，程序日志可放在该目录根部的 `mirrordock.log`；无效级别、格式、路径及文件打开失败都会报错，修改 `log` 后重启生效。
+
+出现 `field auth not found in type config.Config` 表示正在运行旧版二进制：现版已支持 `auth`，按“安装与构建”重新构建并替换实际部署的程序后重启。仅修改 YAML 或只生成临时测试二进制不会更新正在使用的程序。
+
 程序启动时自动创建数据库和所需表、索引，初始化语句内置在 `internal/database`，无需手动执行 SQL。已有数据库重复启动会保留原有记录。
 
 用户已确定的 YAML 协议优先于目录规范的默认协议：不用 `CONFIG_FILE` 或环境变量覆盖字段，GitHub 凭证直接放 `settings.github.token`。没有 version、timezone、maxconcurrent、exec、token_env 或 records 字段。进程启动环境/系统时区决定调度与显示时区；可在启动环境设置 `TZ=Asia/Shanghai`，不使用浏览器自动时区。
 
-- `listen`、`port`、`path`、`mirror_root`、TLS、`auth` 修改后需要重启。其余修改对新任务/计划生效，当前任务保留脱敏配置快照。Token 在每次实际执行时读取当前配置。
+- `listen`、`port`、`path`、`mirror_root`、TLS、`auth`、`log` 修改后需要重启。其余修改对新任务/计划生效，当前任务保留脱敏配置快照。Token 在每次实际执行时读取当前配置。
 - 页面写回 YAML，保留现有注释，通过 revision 防止覆盖另一位管理员/磁盘编辑；保存使用同目录临时文件、fsync 与 rename。外部修改后点击“重新载入配置”。文件及其父目录必须允许程序身份写入，不能只挂载不可替换的单个配置文件。
 - rsync 来源使用 `src1`、`src2`、`src3` 等，按数字升序尝试；连接/网络类错误切换，磁盘与权限类错误停止。失败切换和暂停继续共享默认 8h 累计运行预算，排队/暂停不计时，超时后先 TERM，最多 10 秒后 KILL 进程组。
 - `rsync.delete` 和保留 links/times/perms/hardlinks 默认 true。`limit_mb` 是每个上游任务的十进制 MB/s，0 不限速；不限制公开下载。UID/GID 可只填一项，0 有效；跨 UID 映射通常需要 root，程序不自动提权。
@@ -138,7 +146,7 @@ systemd 定义在 [deploy/mirrordock.service](deploy/mirrordock.service)。默�
 
 ```text
 cmd/mirrordock/           CLI 入口
-internal/{config,database,sync,runs,mirrors,app}/
+internal/{config,observability,database,sync,runs,mirrors,app}/
 configs/                 注释案例；本地配置被忽略
 deploy/                  systemd 定义
 scripts/                 Logo 衍生 favicon 生成工具

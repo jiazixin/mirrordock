@@ -118,6 +118,8 @@ tls.cert 和 tls.key 为 PEM 证书链与匹配私钥的文件路径，路径同
 
 rsync 的 srcN 与 exclude 位于源级，reposync 类型的 src1 同样位于源级并表示 RPM 仓库 baseurl，github_release.repository 保留 owner/repo 格式。源级 rsync 块可以省略；默认保留链接、修改时间、权限、硬链接，并默认开启删除；uid/gid 可选，不默认指定身份。所有 Release 固定按 published_at 从新到旧选择，不暴露 order_by，不包含源码压缩包选项。配置无 version、timezone、max_concurrent_tasks、executable、token_env 或 records 段；reposync 仅配置在对应源下。Token 存于 YAML，API 读取、运行快照、审计及日志均脱敏；前端设置只展示是否已配置，更新时提交新 Token。
 
+2026-10-01 追加程序日志协议：顶层 `log.level`（debug/info/warn/error，默认 info）、`log.path`（日志文件路径，默认空表示标准输出）、`log.format`（json/text，默认 json）。日志文件相对 YAML 所在目录，自动创建父目录并追加写入，不自动轮转；可用 logrotate copytruncate 或停机归档。使用标准库 slog，在应用初始化前设置 logger，HTTP 内部错误共用该 logger；日志修改后重启生效。文件日志隔离镜像根、YAML、数据库、实例锁和 TLS 文件。任务原始日志格式及路径不变，下载热路径不新增日志操作。
+
 ### ADR-004：YAML 是配置唯一真源，SQLite 保存运行事实
 
 管理账号同样以 YAML 为唯一来源：

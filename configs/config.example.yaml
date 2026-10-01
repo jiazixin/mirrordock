@@ -19,6 +19,14 @@ auth:
   username: "admin"
   password: "请替换为你的密码"
 
+# 程序日志，修改后重启生效；不改变同步任务原始日志。
+log:
+  level: "info"             # debug、info、warn、error；默认 info
+  path: ""                  # 空字符串输出到标准输出；文件例 ../data/logs/mirrordock.log
+  format: "json"            # json（默认）或 text（普通键值格式）
+# 文件路径相对于配置文件目录，自动创建父目录，追加写入；不自动轮转。
+# 可由 logrotate copytruncate 管理，或停止程序后归档并重启。
+
 # 两项都留空时使用 HTTP；两项填齐时在同一端口启用 HTTPS。
 # 只填写一项、证书与私钥不匹配或文件不可读时，启动报错。
 # 证书路径相对于配置文件目录；TLS 相关配置修改后重启生效。

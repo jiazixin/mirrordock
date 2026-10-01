@@ -10,12 +10,67 @@ import (
 )
 
 func TestDefaultsAndCandidates(t *testing.T) {
+	if Defaults().Log != (Log{Level: "info", Format: "json"}) {
+		t.Fatal("wrong logging defaults")
+	}
 	s := Source{Upstreams: map[string]string{"src10": "ten", "src2": "two", "src1": "one"}}
 	if strings.Join(s.Candidates(), ",") != "one,two,ten" {
 		t.Fatal(s.Candidates())
 	}
 	if !DefaultBool(s.Rsync.Delete) || !DefaultBool(s.Rsync.PreserveHardlinks) || DefaultBool(new(false)) {
 		t.Fatal("defaults")
+	}
+}
+
+func TestLogConfiguration(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "config.yaml")
+	base := "listen: 127.0.0.1\npath: ./data\nmirror_root: ./mirror\nauth:\n  username: operator\n  password: test-secret\nsources: []\n"
+	for _, section := range []string{"", "log: {}\n", "log:\n  level: debug\n", "log:\n  format: text\n  path: ./logs/server.log\n"} {
+		c, err := Parse([]byte(base+section), file)
+		if err != nil || c.Log.Level == "" || c.Log.Format == "" {
+			t.Fatal("valid log configuration rejected", err)
+		}
+	}
+	for _, section := range []string{"log:\n  level: trace\n", "log:\n  format: xml\n", "log:\n  level: ''\n", "log:\n  unknown: true\n", "log:\n  path: './mirror/server.log'\n", "log:\n  path: './data/data.sqlite'\n", "log:\n  path: './data/data.sqlite-wal'\n", "log:\n  path: './data/.mirrordock.lock'\n", "log:\n  path: './config.yaml'\n", "log:\n  path: './data/logs/1/1.log'\n", "log:\n  path: ' trailing '\n"} {
+		if _, err := Parse([]byte(base+section), file); err == nil {
+			t.Fatal("unsafe log configuration accepted", section)
+		}
+	}
+	text := base + "log:\n  level: info\n  path: '' # keep log comment\n  format: json\n"
+	if err := os.WriteFile(file, []byte(text), 0600); err != nil {
+		t.Fatal(err)
+	}
+	m, err := Open(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := m.View().Config
+	c.Log = Log{Level: "error", Path: "./logs/server.log", Format: "text"}
+	if err := m.Save(c, m.View().Revision, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(file)
+	if err != nil || !strings.Contains(string(b), "# keep log comment") || m.Current().Log != c.Log || !m.View().RestartRequired || m.Startup().Log != Defaults().Log {
+		t.Fatal("log writeback/restart state incorrect", err)
+	}
+	if err := m.Reload(); err != nil || m.Current().Log != c.Log {
+		t.Fatal("log reload failed", err)
+	}
+	for _, link := range []string{"hardlink.log", "symlink.log"} {
+		p := filepath.Join(filepath.Dir(file), link)
+		var err error
+		if link == "hardlink.log" {
+			err = os.Link(file, p)
+		} else {
+			err = os.Symlink(file, p)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		c.Log.Path = p
+		if err := c.Validate(file); err == nil {
+			t.Fatal("log path alias of config accepted", link)
+		}
 	}
 }
 func TestWritebackConflictAndSecrets(t *testing.T) {

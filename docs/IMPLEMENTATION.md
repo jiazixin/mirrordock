@@ -9,6 +9,7 @@ MirrorDock 使用 Go 1.27.1、Vue 3 / TypeScript。配置字段沿用用户确�
 - `internal/sync`：系统 rsync 的参数、CR/LF 进度、进程组停止；DNF 4 私有 repo 配置；go-github v88 与流式附件下载、有效 Range 续传、身份侧车文件、可用 SHA-256 校验。不请求自动源码归档。
 - `internal/runs`：两个内置 worker、同源排他、五字段 cron、8h 默认累计预算、暂停/取消/继续、重启恢复和日志脱敏。预算覆盖准备到发布，排队和暂停不计入。异常断电最多丢失一个 5 秒进度检查点；正常关闭会保存实际执行时间。
 - `internal/mirrors`：私有工作目录、reflink 优先、独立复制回退、RPM/APT 索引及包大小校验、原子持久发布指针、旧代读取与 24 小时回收保护。
+- `internal/observability`：根据顶层 log 构造 slog JSON/Text logger，info/标准输出/json 为默认，文件相对配置目录追加写入；启动前初始化，退出时关闭，HTTP 内部错误共用 logger。修改后重启生效，不改变任务日志及下载热路径。
 - `internal/app`：启动时加载 YAML 的 auth.username/auth.password，内存 bcrypt 校验值、12 小时 Cookie 会话、登录限流与同源写请求验证；管理 API、SSE、嵌入页面、HTTP/TLS 和连接无进展检测。无初始化码及设置密码 API，账号修改后重启生效。
 
 目录布局依据根 `目录规范.md`，没有 `backend/`、额外根 Node 清单或第二份 Web 编译输出。

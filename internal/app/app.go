@@ -51,9 +51,14 @@ func Open(file string) (*App, error) {
 	if err != nil {
 		return nil, err
 	}
+	return OpenConfig(cfg)
+}
+
+// OpenConfig uses the configuration already validated during process startup.
+func OpenConfig(cfg *config.Manager) (*App, error) {
 	c := cfg.Startup()
 	data := config.Resolve(cfg.File(), c.Path)
-	if err = os.MkdirAll(data, 0700); err != nil {
+	if err := os.MkdirAll(data, 0700); err != nil {
 		return nil, err
 	}
 	lock, err := os.OpenFile(filepath.Join(data, ".mirrordock.lock"), os.O_CREATE|os.O_RDWR, 0600)
@@ -92,7 +97,7 @@ func Open(file string) (*App, error) {
 		return nil, err
 	}
 	a := &App{Config: cfg, Store: store, Mirrors: m, Runs: engine, auth: auth, location: location, lock: lock, sse: make(chan struct{}, 8), closing: make(chan struct{}), connections: &connections{entries: map[net.Conn]*connection{}, limit: connectionLimit()}}
-	a.Server = &http.Server{Addr: net.JoinHostPort(c.Listen, strconv.Itoa(c.Port)), Handler: a.Handler(), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 90 * time.Second, MaxHeaderBytes: 64 << 10, TLSConfig: &tls.Config{MinVersion: tls.VersionTLS12}, ConnState: a.connections.state}
+	a.Server = &http.Server{Addr: net.JoinHostPort(c.Listen, strconv.Itoa(c.Port)), Handler: a.Handler(), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 90 * time.Second, MaxHeaderBytes: 64 << 10, TLSConfig: &tls.Config{MinVersion: tls.VersionTLS12}, ConnState: a.connections.state, ErrorLog: slog.NewLogLogger(slog.Default().Handler(), slog.LevelError)}
 	a.workers.Go(a.watchConnections)
 	return a, nil
 }
