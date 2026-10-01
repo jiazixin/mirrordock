@@ -4,6 +4,8 @@ import (
 	"cmp"
 	"context"
 	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/hex"
 	"encoding/json/v2"
 	"errors"
@@ -19,6 +21,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -49,6 +52,15 @@ func githubRedirect(r *http.Request, via []*http.Request) error {
 	return nil
 }
 
+// The SDK auth transport adds the token on each request, including redirects.
+// Keep API redirects on the original origin; asset redirects use the unauthenticated client.
+func githubAPIRedirect(r *http.Request, via []*http.Request) error {
+	if len(via) > 0 && (r.URL.Scheme != via[0].URL.Scheme || r.URL.Host != via[0].URL.Host) {
+		return errors.New("GitHub API cross-origin redirect rejected")
+	}
+	return githubRedirect(r, via)
+}
+
 type AssetIdentity struct {
 	ID      int64  `json:"id"`
 	Size    int64  `json:"size"`
@@ -66,7 +78,9 @@ func GitHub(ctx context.Context, t Task, emit func(Progress), log io.Writer) err
 		return err
 	}
 	defer transport.CloseIdleConnections()
-	opts := []github.ClientOptionsFunc{github.WithHTTPClient(httpClient), github.WithTimeout(time.Minute)}
+	apiHTTP := *httpClient
+	apiHTTP.CheckRedirect = githubAPIRedirect
+	opts := []github.ClientOptionsFunc{github.WithHTTPClient(&apiHTTP), github.WithTimeout(time.Minute)}
 	if t.Token != "" {
 		opts = append(opts, github.WithAuthToken(t.Token))
 	}
@@ -76,15 +90,22 @@ func GitHub(ctx context.Context, t Task, emit func(Progress), log io.Writer) err
 	}
 	return GitHubWithClient(ctx, client, httpClient, t, emit, log)
 }
-func GitHubWithClient(ctx context.Context, client *github.Client, httpClient *http.Client, t Task, emit func(Progress), log io.Writer) error {
+func GitHubWithClient(ctx context.Context, client *github.Client, httpClient *http.Client, t Task, emit func(Progress), log io.Writer) (result error) {
+	defer func() {
+		if failure, ok := errors.AsType[*Failure](result); ok {
+			fmt.Fprintf(log, "GitHub: %s\n", failure)
+		}
+	}()
 	owner, repo, _ := strings.Cut(t.Source.GitHubRelease.Repository, "/")
 	emit(Progress{Phase: "scan"})
+	fmt.Fprintln(log, "GitHub API: scanning Release list")
 	releases := []*github.RepositoryRelease{}
 	for page := 1; page <= 100; page++ {
 		list, res, err := client.Repositories.ListReleases(ctx, owner, repo, &github.ListOptions{Page: page, PerPage: 100})
 		if err != nil {
-			return githubError(err)
+			return githubError(err, t.Settings.GitHub.Proxy)
 		}
+		fmt.Fprintf(log, "GitHub API HTTP %d: Release page %d\n", res.StatusCode, page)
 		for _, r := range list {
 			if !r.GetDraft() && (!r.GetPrerelease() || t.Settings.GitHub.IncludePrereleases) {
 				releases = append(releases, r)
@@ -112,8 +133,9 @@ func GitHubWithClient(ctx context.Context, client *github.Client, httpClient *ht
 		for page := 1; ; page++ {
 			list, res, err := client.Repositories.ListReleaseAssets(ctx, owner, repo, r.GetID(), &github.ListOptions{Page: page, PerPage: 100})
 			if err != nil {
-				return githubError(err)
+				return githubError(err, t.Settings.GitHub.Proxy)
 			}
+			fmt.Fprintf(log, "GitHub API HTTP %d: Release %d asset page %d\n", res.StatusCode, r.GetID(), page)
 			for _, a := range list {
 				matched := len(t.Source.GitHubRelease.AssetPatterns) == 0
 				for _, p := range t.Source.GitHubRelease.AssetPatterns {
@@ -174,7 +196,7 @@ func GitHubWithClient(ctx context.Context, client *github.Client, httpClient *ht
 			}
 			emit(Progress{Phase: "transfer", Bytes: base + n, Total: total, Percent: new(percent), Speed: speed, ETA: eta, Files: len(assets), Success: success, Skipped: skipped})
 		}
-		reused, err := downloadAsset(ctx, client, httpClient, owner, repo, a.GetID(), identity, target, tick)
+		reused, err := downloadAsset(ctx, client, httpClient, owner, repo, a.GetID(), identity, target, tick, t.Settings.GitHub.Proxy)
 		if err != nil {
 			return err
 		}
@@ -202,14 +224,80 @@ func GitHubWithClient(ctx context.Context, client *github.Client, httpClient *ht
 	emit(Progress{Phase: "verify", Bytes: total, Total: total, Percent: new(float64(100)), Files: len(assets), Success: success, Skipped: skipped})
 	return nil
 }
-func githubError(err error) error {
-	if e, ok := errors.AsType[*github.ErrorResponse](err); ok {
-		return &Failure{Code: "GITHUB_API", Message: fmt.Sprintf("GitHub API 返回 %d: %s", e.Response.StatusCode, e.Message)}
-	}
+func githubError(err error, proxy string) error {
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-		return err
+		return contextFailure(err)
 	}
-	return &Failure{Code: "GITHUB_API", Message: "GitHub API 查询失败，请检查网络或凭证"}
+	if _, ok := errors.AsType[*github.RateLimitError](err); ok {
+		return &Failure{Code: "GITHUB_RATE_LIMIT", Message: "GitHub API 配额已用尽，请等待限流重置或检查 Token"}
+	}
+	if _, ok := errors.AsType[*github.AbuseRateLimitError](err); ok {
+		return &Failure{Code: "GITHUB_RATE_LIMIT", Message: "GitHub API 触发临时限流，请稍后重试"}
+	}
+	if e, ok := errors.AsType[*github.ErrorResponse](err); ok && e.Response != nil {
+		// Do not echo upstream messages: a proxy can return arbitrary text or credentials.
+		detail := "请求未成功，请检查 GitHub 服务状态"
+		switch e.Response.StatusCode {
+		case http.StatusUnauthorized:
+			detail = "Token 无效或已过期，请重新配置"
+		case http.StatusForbidden:
+			detail = "访问被拒绝，请检查 Token 权限或 API 限流"
+		case http.StatusNotFound:
+			detail = "仓库或附件不存在，或 Token 无权访问"
+		case http.StatusProxyAuthRequired:
+			detail = "代理要求认证，请检查代理用户名和密码"
+		}
+		return &Failure{Code: "GITHUB_API", Message: fmt.Sprintf("GitHub API HTTP %d：%s", e.Response.StatusCode, detail)}
+	}
+	return githubNetworkError(err, proxy, "GITHUB_API", "GitHub API 查询")
+}
+
+// Return only the sentinel, since wrapped request errors can contain signed URLs.
+func contextFailure(err error) error {
+	if errors.Is(err, context.Canceled) {
+		return context.Canceled
+	}
+	return context.DeadlineExceeded
+}
+
+// Classify failures without emitting URLs, signed query strings, credentials or raw upstream text.
+func githubNetworkError(err error, proxy, code, operation string) error {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return contextFailure(err)
+	}
+	detail := "网络连接失败，请检查网络"
+	if _, ok := errors.AsType[*net.DNSError](err); ok {
+		detail = "DNS 解析失败，请检查目标或代理的域名解析"
+	} else if _, ok := errors.AsType[*tls.CertificateVerificationError](err); ok {
+		detail = "TLS 证书校验失败，请检查目标或 HTTPS 代理的证书"
+	} else if _, ok := errors.AsType[x509.UnknownAuthorityError](err); ok {
+		detail = "TLS 证书不受信任，请检查目标或 HTTPS 代理的证书"
+	} else if n, ok := errors.AsType[net.Error](err); ok && n.Timeout() {
+		detail = "网络等待超时，请检查目标或代理的连接"
+	} else if errors.Is(err, syscall.ECONNREFUSED) {
+		detail = "连接被拒绝，请检查目标或代理的监听地址与端口"
+	} else if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		detail = "连接被提前关闭（EOF）"
+	} else if strings.Contains(err.Error(), "Proxy Authentication Required") {
+		detail = "代理要求认证（HTTP 407），请检查代理用户名和密码"
+	}
+	if proxy != "" {
+		code = "GITHUB_PROXY"
+		if e, ok := errors.AsType[*net.OpError](err); ok && e.Op == "proxyconnect" {
+			operation += "未能建立代理连接"
+		} else {
+			operation += "经代理失败"
+		}
+		u, _ := config.ParseProxyURL(proxy)
+		if u != nil && u.Scheme == "https" {
+			detail += "；https:// 要求代理入口本身支持 TLS，HTTP/mixed 入口应使用 http://"
+		} else {
+			detail += "；请确认代理协议、端口及 CONNECT/SOCKS 转发是否可用"
+		}
+	} else {
+		operation += "直连失败"
+	}
+	return &Failure{Code: code, Message: operation + "：" + detail}
 }
 func identityFile(target string) string {
 	return filepath.Join(filepath.Dir(target), ".mirrordock-asset-"+filepath.Base(target)+".json")
@@ -269,7 +357,7 @@ func verifyAsset(ctx context.Context, target string, id AssetIdentity) error {
 	}
 	return nil
 }
-func downloadAsset(ctx context.Context, client *github.Client, httpClient *http.Client, owner, repo string, assetID int64, id AssetIdentity, target string, tick func(int64)) (bool, error) {
+func downloadAsset(ctx context.Context, client *github.Client, httpClient *http.Client, owner, repo string, assetID int64, id AssetIdentity, target string, tick func(int64), proxy string) (bool, error) {
 	if sameIdentity(target, id) && verifyAsset(ctx, target, id) == nil {
 		tick(id.Size)
 		return true, nil
@@ -299,7 +387,7 @@ func downloadAsset(ctx context.Context, client *github.Client, httpClient *http.
 	}
 	stream, redirect, err := client.Repositories.DownloadReleaseAsset(ctx, owner, repo, assetID, nil)
 	if err != nil {
-		return false, githubError(err)
+		return false, githubError(err, proxy)
 	}
 	if stream != nil {
 		offset = 0
@@ -320,7 +408,7 @@ func downloadAsset(ctx context.Context, client *github.Client, httpClient *http.
 			if ctx.Err() != nil {
 				return false, ctx.Err()
 			}
-			return false, &Failure{Code: "DOWNLOAD_FAILED", Message: "资产下载网络失败"}
+			return false, githubNetworkError(err, proxy, "DOWNLOAD_FAILED", "资产下载")
 		}
 		if offset > 0 && (res.StatusCode == 416 || (res.StatusCode == 206 && !validRange(res.Header.Get("Content-Range"), offset, id.Size))) {
 			res.Body.Close()
@@ -328,7 +416,7 @@ func downloadAsset(ctx context.Context, client *github.Client, httpClient *http.
 			req.Header.Del("Range")
 			res, err = httpClient.Do(req)
 			if err != nil {
-				return false, &Failure{Code: "DOWNLOAD_FAILED", Message: "资产重新下载失败"}
+				return false, githubNetworkError(err, proxy, "DOWNLOAD_FAILED", "资产重新下载")
 			}
 		}
 		if offset > 0 && res.StatusCode == 206 && validRange(res.Header.Get("Content-Range"), offset, id.Size) {

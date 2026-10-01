@@ -140,3 +140,26 @@ Docker 守护进程仍不可用，本次容器构建/启动未执行；Linux 运
 按 use-modern-go 的完整 Go 1.27 指南实施，沿用此前自动审批阻止外部 OCR LLM 后已允许的本地 delegate 工作流。本轮 `ocr review --preview` 初始无改动，未调用外部 LLM；实现后在只包含此次修改的隔离副本执行 `ocr delegate preview/rule`，当前 Codex 完成 **7/7 生产文件审查，跳过 0，覆盖率 100%**：cmd/mirrordock/main.go、configs/config.example.yaml、internal/app/app.go、internal/config/config.go、internal/observability/log.go、web/src/app/types.ts、web/src/features/settings/Settings.vue。默认排除的两项测试（default_path）和四项 Markdown（unsupported_ext）另行检查，本节验收说明也已核对。审查修复 FIFO 启动挂起、硬链接误写私有文件、与任务日志路径重叠三项问题，没有遗留确认的高/中严重度问题。清单、规则及 SHA256 结果见 `../test-results/ocr-log-preview.json`、`ocr-log-rules.json`、`ocr-log-review.json`；外部 LLM 调用未执行。
 
 测试未修改用户配置、凭证、镜像或现有运行服务。下载热路径未修改，无新增逐块日志/数据库访问、哈希或压缩；性能基准本轮未重复。浏览器 E2E、Docker、目标 Linux 实际运行、sendfile syscall 与发行版同步未执行；交叉构建不替代目标平台验收。
+
+## GitHub 代理排查与系统设置分类追加验收 · 2026-10-01
+
+用户当前代理配置使用 HTTPS 协议，实际只读请求在 GitHub API 之前返回 `proxyconnect tcp: EOF`；同一端口改用 HTTP 诊断也返回 `unexpected EOF`，没有 CONNECT 响应。初次受限沙箱请求无法解析代理域名，不作为实际代理故障证据；经自动审批允许网络后复现上述断开。使用同一端口的 SOCKS5 则 TLS 成功、OpenList Release API HTTP 200，并成功下载校验一个 121 字节的真实 Release asset（ID 598014765，临时文件随后删除）。验证只覆盖小附件连接/完整性，不等同完整默认源同步或大文件吞吐验收。
+
+按用户“2001 端口也行”的授权，通过当前本机服务的认证配置 API，将现有 proxy 的协议从 HTTPS 修正为 SOCKS5，保持原地址、2001 端口和 token；带 revision 检查、YAML 原子写回并应用到当前内存配置，下一次执行读取新代理。没有触发完整 OpenList/发行版同步，没有改动用户镜像文件或重启现有服务。诊断输出与文档不记录 token、完整代理 URL 或签名附件地址。
+
+系统设置采用“同步执行 / rsync / GitHub Release”页签及左侧说明、右侧输入布局，沿用系统字体和蓝色主题，手机上下排列。监听/端口/数据目录/镜像根与 TLS 输入均移除；后端 Save 同样保留当前 YAML 的固定部署字段。外部编辑仍通过重新载入与重启应用，不恢复已删除的配置字段。Token/proxy 切换页签保留草稿，空输入保留现有值，显式清空时禁用输入。
+
+GitHub 错误现在区分 DNS、连接拒绝、EOF、TLS、代理认证、GitHub 401/403/404 和两类限流；查询状态与失败摘要写入任务原始日志，不回显上游任意正文、凭证或 URL。补充 token 空白/控制字符校验。审查确认 SDK 的 auth transport 会在重定向时重新附加 token，因此认证 API 客户端限制同 origin；附件使用独立、不带 token 的客户端。下载热路径、流缓冲、数据库写入及发布逻辑未修改，没有新增逐块日志、整文件哈希或动态压缩。
+
+| 检查 | 本次实际结果 |
+| --- | --- |
+| Go 指南 | 已读取 use-modern-go 的完整 Go 1.27 指南；工具链 Go 1.27.1，新 JSON 使用 encoding/json/v2。 |
+| Web | `npm --prefix web run build` 类型检查与 Vite 构建通过，先生成真实 web/dist 后编译 Go。初次使用不存在的 Github 图标导出导致类型检查失败，替换为已支持的 ShieldCheck 后通过。 |
+| 定向 Go 测试 | 配置与 sync 包通过。初次 sync 测试因沙箱禁止临时监听失败，经自动审批允许本地 fixture 后通过。覆盖四类代理的 API/附件下载、token/代理认证隔离、无直连回退、EOF 日志、固定错误诊断、认证/限流、取消错误脱敏、跨 origin 重定向拒绝及固定配置保存保护；原有续传/身份校验继续通过。 |
+| 静态与竞态 | 仓库 GOCACHE 的最终 `go vet ./...`、带隔离 rsync 3.5.1 fixture 的 `go test -race ./...` 全部通过。首轮受到 test-results 内两个临时诊断 main.go 文件的包发现冲突影响；将诊断文本移为 .go.txt 后重跑通过，初次失败日志保留，未记为通过。业务包首轮实际全部通过，app 33.790s，sync 2.890s；最终命令复用通过结果缓存。 |
+| 浏览器 | Chromium E2E **1 passed（测试 8.6s，总计 9.0s）**。覆盖页签初始状态、键盘切换、跨页签保存小数限速/Token/proxy、API 不泄露凭证、清空代理与保留账号/注释；固定部署输入不存在。五页在 1440/1024/736/375 宽度无整页横向溢出，系统设置全部页签分别检查；已查看桌面与手机截图，无脚本错误。 |
+| 二进制 | 本机 bin/mirrordock 已重新构建；Linux amd64/arm64 为 CGO_ENABLED=0 交叉构建。新界面与新诊断需重启新二进制才能用于现有服务；已保存代理协议对下一次执行立即生效。 |
+
+OCR 使用此前外部 LLM 被审批阻止后允许的本地 delegate preview/rule 工作流，本次未尝试外部 LLM。当前 Codex 已逐文件审查 **3/3 生产文件，跳过 0，覆盖率 100%**：internal/config/config.go、internal/sync/github.go、web/src/features/settings/Settings.vue。默认排除的 **4 个测试源码（default_path）**已另外全部审查：internal/config/config_test.go、internal/sync/github_test.go、internal/sync/proxy_test.go、web/e2e/mirrordock.spec.ts；所有新增/修改源码共 **7/7**。默认排除的五项 Markdown（unsupported_ext，包含本节验收）也已核对。已修复 token 重定向重新附加、包装取消错误携带 URL 的隐患，没有遗留确认的高/中严重度问题。清单、规则与 SHA256 覆盖结果见 ../test-results/ocr-github-settings-preview.json、ocr-github-settings-rules.json、ocr-github-settings-review.json；诊断脚本文本、最终测试输出及初次失败输出均保留在 test-results，均不提交。
+
+性能基准本轮未重复：没有新的性能数据。Docker、Linux 目标机实际运行、sendfile syscall、大附件持续传输与完整发行版验收未执行；Linux 交叉构建不等同目标平台运行。回归测试仅使用临时 YAML、目录、端口、rsync daemon 与可控 HTTP/代理上游；唯一针对真实服务的配置写入为用户授权的代理协议修正。

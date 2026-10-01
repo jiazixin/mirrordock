@@ -39,3 +39,7 @@ GitHub 的 `settings.github.proxy` 使用 Go 原生 HTTP/HTTPS/SOCKS5 代理，A
 运行记录当前按任务聚合，成功/失败页分页查询运行，详情显示 attempts、事件、日志和脱敏配置快照。GitHub 的资产完成事件保留在原始日志，尚未提供每资产的独立数据库检索页。reposync 的详细输出可查看日志，进度总量无法可靠取得时显示未知，不伪造百分比。
 
 参考图的布局已落实在 Vue 五个页面，采用钴蓝新 Logo 和本地 SVG 图标，不依赖远程字体/CDN。现版采用浅色主题。生产 Linux sendfile 系统调用、HTTPS/HTTP2 及完整 EL 包签名同步的实测边界以 `ACCEPTANCE.md` 为准。
+
+系统设置分为同步执行、rsync、GitHub Release 三个页签，采用左侧说明、右侧输入布局，窄屏上下排列。监听、端口、数据库/日志目录、镜像根及 TLS 无页面输入，Config.Manager.Save 保留当前 YAML 中这些固定值；外部编辑仍由 revision 冲突保护，重新载入后需要重启。凭证字段切换页签保留草稿，保存后清空输入；显式清空时禁用对应输入。
+
+GitHub API 与下载网络失败使用固定诊断消息，区分 DNS、TLS 证书、连接拒绝、EOF、代理认证及 GitHub 401/403/404/限流，不回显底层 URL 或上游任意正文。扫描和查询状态、失败摘要写入任务原始日志，未新增逐块日志；取消/截止错误保留 context sentinel，避免包装的签名 URL 泄露。认证 API 客户端禁止跨 origin 重定向，因为 SDK 的 auth transport 会对重定向重新附加 token；附件继续使用不含 token 的客户端。Token 校验拒绝空白与控制字符，不回显值。

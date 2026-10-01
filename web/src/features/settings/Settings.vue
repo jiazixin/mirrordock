@@ -1,13 +1,131 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
-import { Save, RotateCcw, ShieldCheck, Settings2, CheckCircle2 } from '@lucide/vue'
+import { Save, RotateCcw, ShieldCheck, Settings2, CheckCircle2, ArrowDownUp } from '@lucide/vue'
 import { clone, state, saveConfiguration, perform, refresh, notify } from '../../app/state'
 import type { Configuration } from '../../app/types'
 import { api } from '../../app/api'
-const draft = ref<Configuration>(); const token=ref('');const clearToken=ref(false);const proxy=ref('');const clearProxy=ref(false);const busy=ref(false);const checks=ref<Record<string,unknown>>()
-watch(()=>state.config?.revision,()=>{if(state.config)draft.value=clone(state.config.config)},{immediate:true})
-async function save() { if(!draft.value)return;busy.value=true;try{await saveConfiguration(draft.value,clearToken.value?'':token.value||undefined,clearProxy.value?'':proxy.value||undefined);token.value='';clearToken.value=false;proxy.value='';clearProxy.value=false}finally{busy.value=false} }
-async function reload() { await api('/config/reload','POST');await refresh();notify('已重新载入磁盘配置') }
-async function check() { checks.value=await api('/system/checks') }
+
+const tabs = [
+  { id: 'execution', label: '同步执行', icon: Settings2 },
+  { id: 'rsync', label: 'rsync', icon: ArrowDownUp },
+  { id: 'github', label: 'GitHub Release', icon: ShieldCheck },
+] as const
+const activeTab = ref<(typeof tabs)[number]['id']>('execution')
+const draft = ref<Configuration>()
+const token = ref('')
+const clearToken = ref(false)
+const proxy = ref('')
+const clearProxy = ref(false)
+const busy = ref(false)
+const checks = ref<Record<string, unknown>>()
+watch(() => state.config?.revision, () => {
+  if (state.config) draft.value = clone(state.config.config)
+}, { immediate: true })
+
+function navigateTab(event: KeyboardEvent, index: number) {
+  let next = index
+  if (event.key === 'ArrowRight') next = (index + 1) % tabs.length
+  else if (event.key === 'ArrowLeft') next = (index + tabs.length - 1) % tabs.length
+  else if (event.key === 'Home') next = 0
+  else if (event.key === 'End') next = tabs.length - 1
+  else return
+  event.preventDefault()
+  activeTab.value = tabs[next]!.id
+  const button = event.currentTarget as HTMLButtonElement
+  button.parentElement?.querySelectorAll<HTMLButtonElement>('[role="tab"]')[next]?.focus()
+}
+async function save() {
+  if (!draft.value) return
+  busy.value = true
+  try {
+    await saveConfiguration(draft.value, clearToken.value ? '' : token.value || undefined, clearProxy.value ? '' : proxy.value || undefined)
+    token.value = ''; clearToken.value = false; proxy.value = ''; clearProxy.value = false
+  } finally { busy.value = false }
+}
+async function reload() {
+  await api('/config/reload', 'POST'); await refresh(); notify('已重新载入磁盘配置')
+}
+async function check() { checks.value = await api('/system/checks') }
 </script>
-<template><section v-if="draft"><div class="page-heading"><div><span class="eyebrow">SYSTEM PREFERENCES</span><h1>系统设置<span>.</span></h1><p>设置写回当前 YAML，运行中的任务继续使用原始快照。</p></div><div class="heading-actions"><button class="button" @click="perform(reload)"><RotateCcw :size="16"/>重新载入配置</button><button class="button primary" :disabled="busy" @click="perform(save)"><Save :size="16"/>{{busy?'保存中…':'保存设置'}}</button></div></div><div v-if="state.config?.restart_required" class="alert warning">账号、日志、监听、目录或 TLS 设置已修改。请重启程序后生效。</div><div class="settings-grid"><section class="panel settings-panel"><div class="section-heading"><Settings2 :size="18"/><h3>同步执行</h3></div><label>任务累计超时<input v-model="draft.settings.task_timeout" placeholder="8h"/><small>切换来源、继续执行共享预算；排队与暂停不计时。</small></label><div class="form-grid"><label>rsync I/O 超时<input v-model="draft.settings.rsync.io_timeout" placeholder="5m"/></label><label>rsync 连接超时<input v-model="draft.settings.rsync.connect_timeout" placeholder="30s"/></label></div><label>rsync 传输限速 · MB/s<input v-model.number="draft.settings.rsync.limit_mb" type="number" min="0" step="any"/><small>十进制 MB/s；0 不限速。仅限制每个上游同步任务。</small></label></section><section class="panel settings-panel"><div class="section-heading"><ShieldCheck :size="18"/><h3>GitHub Release</h3></div><label>默认最近 N 个 Release<input v-model.number="draft.settings.github.release_count" type="number" min="1" max="100"/><small>单个同步源可覆盖；始终忽略草稿与自动源码归档。</small></label><label>GitHub Token<input v-model="token" type="password" autocomplete="new-password" :placeholder="state.config?.token_configured?'已配置，留空保留现有 Token':'未配置，可直接粘贴 Token'"/><small>保存后输入框清空，读取 API 不返回凭证。</small></label><label>GitHub 代理 · proxy<input v-model="proxy" type="password" autocomplete="new-password" :placeholder="state.config?.proxy_configured?'已配置，留空保留现有代理':'http://127.0.0.1:8081 或 socks5://127.0.0.1:1080'"/><small>API 和附件共用代理；支持 HTTP/HTTPS、SOCKS5。未配置时直连，不读取系统代理。代理地址可能含密码，读取 API 不返回原值。</small></label><div class="check-stack"><label class="check"><input v-model="draft.settings.github.include_prereleases" type="checkbox"/>包含预发布版本</label><label class="check"><input v-model="draft.settings.github.prune_old_releases" type="checkbox"/>成功后清理超出数量的旧版本</label><label class="check"><input v-model="clearToken" type="checkbox"/>清空现有 Token</label><label class="check"><input v-model="clearProxy" type="checkbox"/>清空代理并直连</label></div></section><section class="panel settings-panel"><div class="section-heading"><Settings2 :size="18"/><h3>监听与目录</h3><span class="type-pill">重启生效</span></div><div class="form-grid"><label>listen<input v-model="draft.listen"/></label><label>port<input v-model.number="draft.port" type="number" min="1" max="65535"/></label></div><label>数据库与日志 · path<input v-model="draft.path"/><small>数据库固定为 data.sqlite，源镜像目录单独存放。</small></label><label>镜像根 · mirror_root<input v-model="draft.mirror_root"/></label></section><section class="panel settings-panel"><div class="section-heading"><ShieldCheck :size="18"/><h3>TLS 证书</h3><span class="type-pill">重启生效</span></div><label>证书链 · cert<input v-model="draft.tls.cert" placeholder="./certs/fullchain.pem"/></label><label>私钥 · key<input v-model="draft.tls.key" placeholder="./certs/privkey.pem"/></label><p class="setting-note">两项留空提供 HTTP，填齐提供 HTTPS。相对路径以配置文件目录为基准；不匹配或不可读会报错。</p><p class="setting-note">HTTP 文件下载优先使用 sendfile；HTTPS 使用 TLS 流式传输。</p></section></div><section class="panel config-footer"><div><span class="eyebrow">ACTIVE CONFIGURATION</span><code>{{state.config?.file}}</code><small>时区：{{state.info?.timezone}} · Go {{state.info?.go}} · 记录永久保存</small></div><button class="button" @click="perform(check)"><CheckCircle2 :size="16"/>检查运行环境</button><pre v-if="checks">{{JSON.stringify(checks,null,2)}}</pre></section></section></template>
+
+<template>
+  <section v-if="draft" class="settings-page">
+    <div class="page-heading">
+      <div><span class="eyebrow">SYSTEM PREFERENCES</span><h1>系统设置<span>.</span></h1><p>管理同步预算、rsync 传输与 GitHub Release 下载。</p></div>
+      <div class="heading-actions">
+        <button class="button" :disabled="busy" @click="perform(reload)"><RotateCcw :size="16"/>重新载入配置</button>
+        <button class="button primary" :disabled="busy" @click="perform(save)"><Save :size="16"/>{{ busy ? '保存中…' : '保存设置' }}</button>
+      </div>
+    </div>
+    <div v-if="state.config?.restart_required" class="alert warning">配置文件中的账号、日志、监听、目录或 TLS 已修改，请重启程序后生效。</div>
+    <div class="tabs settings-tabs" role="tablist" aria-label="系统设置分类">
+      <button v-for="(tab, index) in tabs" :id="`settings-tab-${tab.id}`" :key="tab.id" role="tab"
+        :class="{ active: activeTab === tab.id }" :aria-selected="activeTab === tab.id"
+        :aria-controls="`settings-panel-${tab.id}`" :tabindex="activeTab === tab.id ? 0 : -1"
+        @click="activeTab = tab.id" @keydown="navigateTab($event, index)">
+        <component :is="tab.icon" :size="16"/>{{ tab.label }}
+      </button>
+    </div>
+
+    <div id="settings-panel-execution" v-show="activeTab === 'execution'" class="settings-sections" role="tabpanel" aria-labelledby="settings-tab-execution">
+      <article class="panel setting-row">
+        <div class="setting-description"><span class="setting-index">01 · 执行预算</span><h3>任务累计超时</h3><p>设置一轮同步可使用的总执行时间。</p><small>切换来源与暂停后继续共享预算；排队和暂停不计时。修改对新任务生效。</small></div>
+        <div class="setting-controls"><label>任务累计超时<input v-model="draft.settings.task_timeout" placeholder="8h"/><small>支持 30m、8h 等时间长度，默认 8h。</small></label></div>
+      </article>
+    </div>
+
+    <div id="settings-panel-rsync" v-show="activeTab === 'rsync'" class="settings-sections" role="tabpanel" aria-labelledby="settings-tab-rsync">
+      <article class="panel setting-row">
+        <div class="setting-description"><span class="setting-index">01 · 连接</span><h3>连接与 I/O 超时</h3><p>避免上游连接或传输长时间无响应。</p><small>I/O 超时表示无数据传输的等待期限，整轮执行仍受任务累计超时限制。</small></div>
+        <div class="setting-controls form-grid"><label>rsync I/O 超时<input v-model="draft.settings.rsync.io_timeout" placeholder="5m"/><small>默认 5m。</small></label><label>rsync 连接超时<input v-model="draft.settings.rsync.connect_timeout" placeholder="30s"/><small>默认 30s。</small></label></div>
+      </article>
+      <article class="panel setting-row">
+        <div class="setting-description"><span class="setting-index">02 · 带宽</span><h3>传输限速</h3><p>控制每个 rsync 上游任务的下载带宽。</p><small>仅影响同步任务；公开镜像下载不受此限速影响。</small></div>
+        <div class="setting-controls"><label>rsync 传输限速 · MB/s<input v-model.number="draft.settings.rsync.limit_mb" type="number" min="0" step="any"/><small>十进制 MB/s，可填小数；0 不限速。</small></label></div>
+      </article>
+    </div>
+
+    <div id="settings-panel-github" v-show="activeTab === 'github'" class="settings-sections" role="tabpanel" aria-labelledby="settings-tab-github">
+      <article class="panel setting-row">
+        <div class="setting-description"><span class="setting-index">01 · 版本范围</span><h3>Release 下载范围</h3><p>按发布时间选择最近的 Release。</p><small>单个同步源可覆盖默认数量；仅下载匹配的附件，始终忽略草稿和自动源码归档。</small></div>
+        <div class="setting-controls"><label>默认最近 N 个 Release<input v-model.number="draft.settings.github.release_count" type="number" min="1" max="100"/><small>1–100 个，默认 5 个。</small></label><label class="check"><input v-model="draft.settings.github.include_prereleases" type="checkbox"/>包含预发布版本</label><label class="check"><input v-model="draft.settings.github.prune_old_releases" type="checkbox"/>成功后清理超出数量的旧版本</label></div>
+      </article>
+      <article class="panel setting-row">
+        <div class="setting-description"><span class="setting-index">02 · 凭证</span><h3>GitHub Token</h3><p>为 GitHub API 请求提供认证。</p><small>当前{{ state.config?.token_configured ? '已配置' : '未配置' }}。留空保留现有值，保存后输入框清空；读取 API 不返回凭证。</small></div>
+        <div class="setting-controls"><label>GitHub Token<input v-model="token" type="password" autocomplete="new-password" :disabled="clearToken" :placeholder="state.config?.token_configured ? '已配置，留空保留现有 Token' : '未配置，可直接粘贴 Token'"/></label><label class="check"><input v-model="clearToken" type="checkbox"/>清空现有 Token</label></div>
+      </article>
+      <article class="panel setting-row">
+        <div class="setting-description"><span class="setting-index">03 · 网络</span><h3>下载代理</h3><p>GitHub API 和附件下载共用此代理。</p><small>需要正向代理入口；http:// 用于 HTTP/mixed，https:// 要求代理入口本身支持 TLS，SOCKS 使用 socks5:// 或 socks5h://。未配置时直连，不读取系统代理。</small></div>
+        <div class="setting-controls"><label>GitHub 代理 · proxy<input v-model="proxy" type="password" autocomplete="new-password" :disabled="clearProxy" :placeholder="state.config?.proxy_configured ? '已配置，留空保留现有代理' : 'http://127.0.0.1:8081'"/><small>当前{{ state.config?.proxy_configured ? '已配置' : '未配置' }}。代理地址可能含密码，读取 API 不返回原值。保存后对下一次执行生效。</small></label><label class="check"><input v-model="clearProxy" type="checkbox"/>清空代理并直连</label></div>
+      </article>
+    </div>
+
+    <section class="panel config-footer">
+      <div><span class="eyebrow">ACTIVE CONFIGURATION</span><code>{{ state.config?.file }}</code><small>设置写回当前 YAML · 时区：{{ state.info?.timezone }} · Go {{ state.info?.go }}</small><small>监听、目录与 TLS 证书仅在配置文件中修改，重启后生效。</small></div>
+      <button class="button" @click="perform(check)"><CheckCircle2 :size="16"/>检查运行环境</button>
+      <pre v-if="checks">{{ JSON.stringify(checks, null, 2) }}</pre>
+    </section>
+  </section>
+</template>
+
+<style scoped>
+.settings-tabs { gap: 28px; }
+.settings-tabs button { white-space: nowrap; }
+.settings-sections { display: flex; flex-direction: column; gap: 20px; }
+.setting-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 48px; padding: 30px 28px; }
+.setting-description { max-width: 530px; }
+.setting-index { display: block; font-size: 11px; font-weight: 500; letter-spacing: 1.4px; color: var(--muted); margin-bottom: 10px; }
+.setting-description h3 { font-size: 18px; margin-bottom: 12px; }
+.setting-description p { color: var(--muted); font-size: 13px; line-height: 1.8; margin-bottom: 12px; }
+.setting-description small { display: block; }
+.setting-controls { display: flex; flex-direction: column; gap: 18px; min-width: 0; }
+.setting-controls.form-grid { display: grid; align-content: start; }
+.setting-controls label { font-size: 13px; }
+.setting-controls input:not([type=checkbox]) { max-width: 420px; }
+.setting-controls .check { font-weight: 400; color: var(--dark); }
+.config-footer { margin-top: 24px; }
+.config-footer code { overflow-wrap: anywhere; }
+@media (max-width: 1150px) { .setting-row { gap: 28px; padding: 24px; } }
+@media (max-width: 900px) { .setting-row { grid-template-columns: 1fr; gap: 24px; } .setting-controls input:not([type=checkbox]) { max-width: none; } }
+@media (max-width: 480px) { .settings-tabs { gap: 16px; } .settings-tabs button { font-size: 12px; gap: 5px; } .setting-row { padding: 22px 18px; } }
+</style>

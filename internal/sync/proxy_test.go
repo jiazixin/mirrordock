@@ -261,10 +261,10 @@ func TestGitHubUnavailableProxyCannotFallBackToDirect(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		task := Task{Directory: t.TempDir(), Source: config.Source{GitHubRelease: config.GitHubRelease{Repository: "o/r"}}, Settings: config.Settings{GitHub: config.GitHubSettings{ReleaseCount: 1}}}
+		task := Task{Directory: t.TempDir(), Source: config.Source{GitHubRelease: config.GitHubRelease{Repository: "o/r"}}, Settings: config.Settings{GitHub: config.GitHubSettings{ReleaseCount: 1, Proxy: scheme + "://user:private-password@" + address}}}
 		err = GitHubWithClient(t.Context(), client, httpClient, task, func(Progress) {}, io.Discard)
 		transport.CloseIdleConnections()
-		if err == nil || requests.Load() != 0 || AsFailure(err).Message != "GitHub API 查询失败，请检查网络或凭证" {
+		if err == nil || requests.Load() != 0 || AsFailure(err).Code != "GITHUB_PROXY" {
 			t.Fatal("unavailable proxy fell back or exposed credentials", requests.Load())
 		}
 	}

@@ -250,6 +250,9 @@ func (c Config) Validate(file string) error {
 	if c.Settings.GitHub.ReleaseCount < 1 || c.Settings.GitHub.ReleaseCount > 100 {
 		return errors.New("release_count 必须在 1–100 之间")
 	}
+	if strings.IndexFunc(c.Settings.GitHub.Token, unicode.IsSpace) >= 0 || strings.IndexFunc(c.Settings.GitHub.Token, unicode.IsControl) >= 0 {
+		return errors.New("github.token 不能包含空白或控制字符，请只填写 Token 本身")
+	}
 	if _, err := ParseProxyURL(c.Settings.GitHub.Proxy); err != nil {
 		return err
 	}
@@ -569,7 +572,12 @@ func (m *Manager) Save(c Config, revision string, tokenUpdate, proxyUpdate *stri
 	if revision != m.revision || digest(old) != m.revision {
 		return ErrConflict
 	}
-	// Account credentials are edited in YAML only, never through a browser save.
+	// Fixed deployment settings are edited in YAML only, never through a browser save.
+	c.Listen = m.cfg.Listen
+	c.Port = m.cfg.Port
+	c.Path = m.cfg.Path
+	c.MirrorRoot = m.cfg.MirrorRoot
+	c.TLS = m.cfg.TLS
 	c.Auth = m.cfg.Auth
 	c.Settings.GitHub.Token = m.cfg.Settings.GitHub.Token
 	if tokenUpdate != nil {

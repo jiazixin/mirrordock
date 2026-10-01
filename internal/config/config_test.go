@@ -99,10 +99,18 @@ func TestWritebackConflictAndSecrets(t *testing.T) {
 		t.Fatal("proxy credentials leaked")
 	}
 	c := m.Current()
+	c.Listen = "192.0.2.10"
 	c.Port = 8091
+	c.Path = "browser-data"
+	c.MirrorRoot = "browser-mirrors"
+	c.TLS = TLS{Cert: "browser-cert", Key: "browser-key"}
 	c.Auth = Auth{Username: "browser-override", Password: "browser-password"}
 	if err = m.Save(c, v.Revision, nil, nil); err != nil {
 		t.Fatal(err)
+	}
+	saved := m.Current()
+	if saved.Listen != v.Config.Listen || saved.Port != v.Config.Port || saved.Path != v.Config.Path || saved.MirrorRoot != v.Config.MirrorRoot || saved.TLS != v.Config.TLS || m.View().RestartRequired {
+		t.Fatal("browser save changed YAML-only deployment settings")
 	}
 	got, _ := os.ReadFile(file)
 	if !strings.Contains(string(got), "# keep me") || !strings.Contains(string(got), "secret") || !strings.Contains(string(got), "proxy-secret") || !strings.Contains(string(got), "yaml-auth-secret") || !strings.Contains(string(got), "username: operator") {
@@ -233,5 +241,17 @@ func TestExampleConfigurationLoads(t *testing.T) {
 	c.Sources[0].Schedule.Cron = "CRON_TZ=UTC 0 2 * * *"
 	if err = c.Validate(filepath.Join(t.TempDir(), "config.yaml")); err == nil {
 		t.Fatal("cron overrode process timezone")
+	}
+}
+
+func TestGitHubTokenRejectsWhitespaceWithoutExposingValue(t *testing.T) {
+	for _, token := range []string{" secret-token", "secret-token\n", "Bearer secret-token", "secret\ttoken", "secret\x00token"} {
+		c := Defaults()
+		c.Auth = Auth{Username: "operator", Password: "test-password"}
+		c.Settings.GitHub.Token = token
+		err := c.Validate(filepath.Join(t.TempDir(), "config.yaml"))
+		if err == nil || !strings.Contains(err.Error(), "github.token") || strings.Contains(err.Error(), "secret") {
+			t.Fatal("malformed token accepted or exposed")
+		}
 	}
 }
