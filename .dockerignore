@@ -1,0 +1,17 @@
+.git
+.cache
+bin
+data
+coverage
+test-results
+web/node_modules
+web/dist
+web/test-results
+web/playwright-report
+configs/*.local.yaml
+configs/config.yaml
+config.yaml
+.env*
+*.sqlite*
+*.log
+*.pem

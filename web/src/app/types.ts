@@ -1,0 +1,14 @@
+export type SourceType = 'rsync' | 'reposync' | 'github_release'
+export interface Source {
+  id: string; name: string; type: SourceType; enabled: boolean; dest: string; exclude: string[]; upstreams: Record<string, string>
+  rsync: { preserve_links: boolean | null; preserve_times: boolean | null; preserve_permissions: boolean | null; preserve_hardlinks: boolean | null; delete: boolean | null; uid: number | null; gid: number | null }
+  reposync: { repo_id: string; releasever: string; basearch: string; architectures: string[]; download_metadata: boolean | null; newest_only: boolean; delete: boolean | null; gpgcheck: boolean | null; gpg_keys: string[]; module_hotfixes: boolean }
+  github_release: { repository: string; release_count: number; asset_patterns: string[] }
+  schedule: { enabled: boolean; cron: string; overlap: string }
+}
+export interface Configuration { listen: string; port: number; path: string; mirror_root: string; tls: { cert: string; key: string }; settings: { task_timeout: string; rsync: { io_timeout: string; connect_timeout: string; limit_mb: number }; github: { release_count: number; include_prereleases: boolean; prune_old_releases: boolean; token: string; proxy: string } }; sources: Source[] }
+export interface ConfigView { config: Configuration; revision: string; token_configured: boolean; proxy_configured: boolean; restart_required: boolean; file: string }
+export interface Attempt { number: number; candidate: string; started_at: string; ended_at?: string; error_code: string; error: string; exit_code: number; log_cleared: boolean }
+export interface Run { id: number; source_id: string; name: string; type: SourceType; dest: string; state: string; trigger: string; created_at: string; started_at?: string; ended_at?: string; elapsed_seconds: number; budget_seconds: number; candidate_index: number; error_code: string; error: string; progress: { phase: string; bytes: number; total: number; percent: number | null; speed: number; eta_seconds: number | null; files: number; success: number; failed: number; skipped: number }; attempts: Attempt[]; events: { at: string; message: string }[]; snapshot: { source: Source; settings: Configuration['settings'] } }
+export interface Publication { source_id: string; dest: string; current: { id: string; directory: string; published_at: string }; previous: unknown[] }
+export interface SystemInfo { timezone: string; utc_offset_seconds: number; version: string; go: string; tls: boolean; publications: Publication[]; downloads: { active: number; requests: number; bytes: number; capacity: number }; schedules: Record<string, string> }

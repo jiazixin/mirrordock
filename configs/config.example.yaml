@@ -1,0 +1,139 @@
+# MirrorDock / 源仓：Go 1.27.1 + Vue 实现的完整注释配置。
+# 启动：mirrordock -f /path/to/config.yaml（或 --config）。
+# 时区使用程序启动时的时区，不在 YAML 中配置。
+# 相对文件路径以配置文件所在目录为基准。
+
+listen: "0.0.0.0"           # 监听所有 IPv4 网卡，供其他机器访问；仅本机可改 127.0.0.1
+port: 8080                   # 管理页面、API 与镜像下载共用的 HTTP/HTTPS 端口
+path: "../data"             # 数据库与日志目录，数据库文件固定为 data.sqlite
+mirror_root: "/srv/mirrors" # 镜像根目录；下载路径直接为 /<dest>/，无额外前缀
+# / 是镜像目录首页；/admin/ 是管理界面；/api/ 是管理接口。
+# dest 的目录段不能使用 admin、api、favicon.ico，以免与程序路由冲突。
+# 文件服务优先使用 Linux HTTP/1.1 sendfile；Go 原生 HTTPS 使用优化的 TLS 流式传输。
+# 下载缓存、缓冲与资源准入采用内置策略；不受同步任务并发数或 rsync limit_mb 限制。
+# 性能路径及压测目标见 docs/DESIGN.md 的 ADR-010；实测范围见 docs/ACCEPTANCE.md。
+
+# 两项都留空时使用 HTTP；两项填齐时在同一端口启用 HTTPS。
+# 只填写一项、证书与私钥不匹配或文件不可读时，启动报错。
+# 证书路径相对于配置文件目录；TLS 相关配置修改后重启生效。
+tls:
+  cert: ""                  # PEM 证书链文件，例如 ./certs/fullchain.pem
+  key: ""                   # PEM 私钥文件，例如 ./certs/privkey.pem
+
+settings:
+  task_timeout: "8h"        # 每轮任务的累计执行预算；切换 src 不重置，排队/暂停不计入
+  rsync:
+    io_timeout: "5m"        # 连续无数据传输的等待上限，超时后可切换下一来源
+    connect_timeout: "30s"  # 连接 rsync daemon 的等待上限
+    limit_mb: 0             # 每个 rsync 任务限速，单位 MB/s；0 不限速，可填小数
+  github:
+    release_count: 5        # 默认同步最近发布的 N 个 Release；单个源可覆盖
+    include_prereleases: false # 是否包含预发布版本；草稿始终排除
+    prune_old_releases: false  # false 保留旧版本；true 在本轮成功后清理旧版本
+    token: ""              # 直接填写 GitHub Token；空字符串使用未认证的公开访问
+    proxy: ""              # GitHub API 与附件下载共用；空字符串直连，不读取系统代理
+    # sing-box 同机 HTTP/mixed 入口可用 http://127.0.0.1:8081（换成实际监听端口）。
+    # 也支持 https://proxy.example:443、socks5://127.0.0.1:1080、socks5h://host:1080。
+    # http:// 是连接代理的协议；GitHub HTTPS 请求仍通过 CONNECT + TLS 加密。
+    # https:// 要求代理入口自身支持 TLS，并具有系统信任的有效证书。
+    # 可填 scheme://用户名:密码@host:port，特殊字符须 URL 编码；不会写入历史快照或日志。
+    # 代理失败时本轮报错，不自动直连。页面支持更新代理/显式清空，留空输入保留原值。
+
+# 记录和日志默认一直保留；页面“清理日志”手动清理已结束任务的原始日志。
+# SQLite 运行记录继续保留；进度保存间隔使用程序内置默认值。
+# type 决定同步方式，支持 rsync、reposync 与 github_release。
+sources:
+  - id: "almalinux-9"       # 唯一标识；修改显示名称时保持 id 不变
+    name: "AlmaLinux 9"
+    type: "rsync"
+    enabled: true           # false 时禁用该源的手动运行与自动计划
+    # 同一仓库的来源按 src 后的数字升序尝试，未配置的来源跳过。
+    src1: "rsync://rsync.repo.almalinux.org/almalinux/9/"
+    # src2/src3 是占位值；替换为实际镜像，或删除这两行。
+    src2: "rsync://mirror-2.example/almalinux/9/"
+    src3: "rsync://mirror-3.example/almalinux/9/"
+    dest: "almalinux/9"     # 最终目录为 /srv/mirrors/almalinux/9
+    exclude: ["isos/**", ".~tmp~"] # 所有候选来源共用的 rsync 排除规则
+    # 以下是内置默认值，可按源覆盖；省略整个 rsync 块时也采用这些默认值。
+    rsync:
+      preserve_links: true       # 保留符号链接
+      preserve_times: true       # 保留修改时间
+      preserve_permissions: true # 保留权限
+      preserve_hardlinks: true   # 保留硬链接
+      delete: true               # 默认开启，删除目标中上游已不存在的文件
+      # 可选：指定本地接收文件的 UID/GID，不填写时不做身份映射。
+      # 可只指定一项；0 是有效值，表示 root，并非“不设置”。
+      # 设置 UID 通常需要接收端以 root 运行；设置 GID 需要对应组权限。
+      # uid: 1000                # 对应 --owner --chown=1000（仅指定 UID 时）
+      # gid: 1000                # 对应 --group --chown=:1000（仅指定 GID 时）
+      # 两项同时填写时使用 --owner --group --chown=1000:1000。
+    schedule:
+      enabled: true        # false 时只允许手动运行
+      cron: "0 2 * * *"    # 五字段 cron，按程序启动时的时区解释：每天 02:00
+      overlap: "skip"     # 已有排队/执行/暂停任务时，跳过本次计划触发
+
+  - id: "docker-ce-el9-x86_64"
+    name: "Docker CE · EL9 · x86_64"
+    type: "rsync"
+    enabled: false         # 替换为你自己的 rsync 上游后再启用
+    src1: "rsync://mirror-1.example/docker-ce/linux/centos/9/x86_64/stable/"
+    src2: "rsync://mirror-2.example/docker-ce/linux/centos/9/x86_64/stable/"
+    src3: "rsync://mirror-3.example/docker-ce/linux/centos/9/x86_64/stable/"
+    dest: "docker-ce/el9/x86_64"
+    exclude: [".~tmp~"]
+    # rsync 块省略，继承上面列出的内置默认值。
+    schedule:
+      enabled: true
+      cron: "0 */6 * * *"  # 每 6 小时运行
+      overlap: "skip"
+
+  - id: "kubernetes"
+    name: "Kubernetes"
+    type: "rsync"
+    enabled: false         # 仅为字段案例，上游与同步范围由你填写
+    src1: "rsync://mirror-1.example/kubernetes/"
+    src2: "rsync://mirror-2.example/kubernetes/"
+    dest: "kubernetes"
+    exclude: [".~tmp~"]
+    schedule:
+      enabled: true
+      cron: "30 */6 * * *" # 每 6 小时的第 30 分钟运行
+      overlap: "skip"
+
+  # reposync 案例：NGINX 官方 Stable RPM 仓库，使用系统 dnf reposync。
+  # EL8/EL9 主机需要安装 dnf-plugins-core；不会改写宿主机 yum.repos.d。
+  - id: "nginx-el9-x86_64"
+    name: "NGINX Stable · EL9 · x86_64"
+    type: "reposync"       # 工具名称是 reposync，不是 repo-sync
+    enabled: false         # 案例默认关闭，确认本地依赖后启用
+    src1: "https://nginx.org/packages/centos/9/x86_64/" # RPM 仓库 baseurl
+    dest: "nginx/el9/x86_64" # 本地目录；源地址为 /nginx/el9/x86_64/
+    reposync:
+      repo_id: "nginx-stable"   # 任务私有 .repo 中的仓库 ID
+      releasever: "9"           # 固定 EL 主版本，不跟随宿主机版本
+      basearch: "x86_64"        # 仓库架构
+      architectures: ["x86_64", "noarch"] # 下载这两种架构的 RPM
+      download_metadata: true  # 同步 repodata 元数据
+      newest_only: false       # 下载完整包集合，保持与上游元数据一致
+      delete: true             # 删除本地已不在上游仓库中的 RPM 包
+      gpgcheck: true            # 检查 RPM 包签名
+      gpg_keys: ["https://nginx.org/keys/nginx_signing.key"] # 官方签名公钥
+      module_hotfixes: true     # 按官方 .repo 设置，避免模块过滤
+    schedule:
+      enabled: true
+      cron: "0 4 * * *"        # 每天 04:00，使用程序启动时区
+      overlap: "skip"
+
+  - id: "openlist"
+    name: "OpenList Releases"
+    type: "github_release"
+    enabled: true
+    dest: "github/openlist"
+    github_release:
+      repository: "OpenListTeam/OpenList" # go-github 查询，Go HTTP 下载
+      # release_count: 3   # 可选；不填时继承 settings.github.release_count
+      asset_patterns: ["*linux*amd64*", "*linux*arm64*", "*checksums*"] # 资产名 glob 筛选
+    schedule:
+      enabled: true
+      cron: "0 */4 * * *"  # 每 4 小时检查
+      overlap: "skip"
