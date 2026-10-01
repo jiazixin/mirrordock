@@ -3,6 +3,7 @@ package app
 import (
 	"mirrordock/internal/notifications"
 	"net/http"
+	"strconv"
 )
 
 func (a *App) notificationRoutes(api *http.ServeMux) {
@@ -40,12 +41,17 @@ func (a *App) notificationRoutes(api *http.ServeMux) {
 		respond(w, 200, map[string]bool{"ok": true})
 	})
 	api.HandleFunc("GET /api/notifications/records", func(w http.ResponseWriter, r *http.Request) {
-		records, err := a.Notifications.Records()
+		limit := 50
+		if r.URL.Query().Has("limit") {
+			limit, _ = strconv.Atoi(r.URL.Query().Get("limit"))
+		}
+		offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+		records, total, err := a.Notifications.RecordPage(limit, offset)
 		if err != nil {
 			respond(w, 500, map[string]string{"error": "发送记录读取失败"})
 			return
 		}
-		respond(w, 200, map[string]any{"items": records})
+		respond(w, 200, map[string]any{"items": records, "total": total})
 	})
 	api.HandleFunc("POST /api/notifications/timezone", func(w http.ResponseWriter, r *http.Request) {
 		var body struct {

@@ -358,42 +358,7 @@ tbody tr:last-child td {
   color:#767676;
   padding:12px 0
 }
-.pagination {
-  display:flex;
-  align-items:center;
-  gap:0
-}
-.pagination>span {
-  margin-right:15px;
-  font-variant-numeric:tabular-nums
-}
-.pagination button {
-  border:1px solid #e4e4e4;
-  background:white;
-  color:#454545;
-  width:30px;
-  height:30px;
-  display:grid;
-  place-items:center
-}
-.pagination button:first-of-type {
-  border-radius:6px 0 0 6px
-}
-.pagination button:last-of-type {
-  border-radius:0 6px 6px 0;
-  border-left:0
-}
-.pagination svg {
-  width:14px;
-  height:14px
-}
-.pagination button:disabled {
-  color:#cecece;
-  background:#fafafa
-}
-.pagination button:not(:disabled):hover {
-  background:#f4f4f4
-}
+
 .empty-state {
   text-align:center;
   padding:54px 20px
@@ -533,9 +498,7 @@ tbody tr:last-child td {
     font-size:11px;
     min-height:56px
   }
-  .pagination>span {
-    margin-right:8px
-  }
+
 }
 
 .project-table th:first-child { width:36% }

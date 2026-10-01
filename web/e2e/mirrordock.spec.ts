@@ -109,7 +109,7 @@ test('real configuration, rsync failover, publication, records and responsive UI
   const states=['succeeded','running','failed','paused','timed_out','interrupted','cancelled','queued','pausing']
   const displayRuns=states.map((state,index)=>({...realRuns.items[0],id:100-index,source_id:`display-${index%3}`,name:displayConfig.config.sources[index%3].name,type:types[index%3],state,elapsed_seconds:120,progress:{...realRuns.items[0].progress,phase:state==='running'?'transfer':'complete',percent:state==='running'?36:100,speed:state==='running'?35000:0,eta_seconds:state==='running'?240:null,skipped:2}}))
   await page.route('**/api/config',route=>route.fulfill({json:displayConfig}))
-  await page.route('**/api/runs?limit=100',route=>route.fulfill({json:{items:displayRuns}}))
+  await page.route('**/api/runs?*',route=>route.fulfill({json:{items:displayRuns,total:displayRuns.length}}))
   await page.route('**/api/events',route=>route.fulfill({contentType:'text/event-stream',body:''}))
   await page.reload();await expect(page.locator('.source-name')).toHaveCount(3)
   await expect(page.locator('.source-table td:nth-child(4) .badge')).toHaveCount(0)
@@ -122,7 +122,7 @@ test('real configuration, rsync failover, publication, records and responsive UI
   for(const state of states)await expect(page.locator(`.run-row .badge.${state}`)).toHaveCount(1)
   await page.screenshot({path:testInfo.outputPath('batches-tags.png'),fullPage:true})
   for(const width of [1024,736,375,320]){await page.setViewportSize({width,height:1000});for(const name of ['sources','batches']){await page.goto(base+'/admin/'+name);await expect(page.locator('.page-heading')).toBeVisible();expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBeTruthy();if(width===375)await page.screenshot({path:testInfo.outputPath(`${name}-tags-mobile.png`),fullPage:true})}}
-  await page.unroute('**/api/config');await page.unroute('**/api/runs?limit=100');await page.unroute('**/api/events')
+  await page.unroute('**/api/config');await page.unroute('**/api/runs?*');await page.unroute('**/api/events')
   await page.setViewportSize({width:1440,height:1000});await page.goto(base+'/admin/sources');expect(errors).toEqual([])
   await page.getByRole('button',{name:'退出登录'}).click();await expect(page.getByLabel('用户名',{exact:true})).toBeVisible();await page.getByLabel('用户名',{exact:true}).fill('mirror-admin');await page.getByLabel('管理员密码').fill('strong local password 123');await page.getByRole('button',{name:'登录管理台'}).click();await expect(page.locator('.account strong')).toHaveText('mirror-admin');expect(output).not.toContain('strong local password 123');expect(errors).toEqual([])
  } finally {await stop(app);await stop(daemon);await rm(dir,{recursive:true,force:true})}

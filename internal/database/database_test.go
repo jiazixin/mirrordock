@@ -38,3 +38,32 @@ func TestDurableRecords(t *testing.T) {
 		t.Fatal(n, err)
 	}
 }
+
+func TestRunPaginationFiltersBeforeCounting(t *testing.T) {
+	s, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	for i := range 125 {
+		trigger := "manual"
+		if i%2 == 0 {
+			trigger = "schedule"
+		}
+		if _, err := s.CreateRun("source", "succeeded", "2026-10-01T00:00:00Z", map[string]any{"trigger": trigger, "id": i + 1}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rows, total, err := s.ListRuns("succeeded", "source", 50, 100)
+	if err != nil || total != 125 || len(rows) != 25 {
+		t.Fatalf("last page: rows=%d total=%d err=%v", len(rows), total, err)
+	}
+	rows, total, err = s.ListRuns("succeeded", "source", 50, 50, RunFilter{From: "2026-09-30T00:00:00Z", Trigger: "manual"})
+	if err != nil || total != 62 || len(rows) != 12 {
+		t.Fatalf("filtered last page: rows=%d total=%d err=%v", len(rows), total, err)
+	}
+	rows, total, err = s.ListRuns("succeeded", "source", 50, 0, RunFilter{From: "2026-10-02T00:00:00Z"})
+	if err != nil || total != 0 || len(rows) != 0 {
+		t.Fatalf("empty page: rows=%d total=%d err=%v", len(rows), total, err)
+	}
+}

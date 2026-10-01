@@ -335,3 +335,22 @@ OCR 首次 `ocr review --audience agent ... --output` 在解析 endpoint 阶段�
 报告与命令输出：test-results/notification-ocr-preview.json、notification-ocr-rules.json、notification-ocr-review.json、notification-web-build.txt、notification-go-race.txt、notification-final-race.txt、notification-go-vet.txt、notification-linux-build.txt、notification-e2e.txt、notification-download-benchmark.txt；报告及生成物均忽略。配置方法、触发、重试/可能重复语义和凭据备份要求已更新 README 与配置案例。
 
 未验证：真实企业微信/钉钉/Telegram/Bark 接收和平台实际限制、Linux 实际启动/生产负载/发行版验收与 sendfile 系统调用、缺少系统时区文件的实际容器运行（已嵌入 tzdata 并完成 Linux 构建）、外部 OCR LLM 审查。没有推送、发布或外部消息发送。
+
+
+## 2026-10-01：管理分页与紧凑批次筛选
+
+本轮开始 Git 工作区无已有改动。批次四个筛选框桌面宽度为 150/180/150/150px，时间默认文案缩为“全部时间”；窄屏两列，320px 单列。批次、运行记录、同步源、计划管理、通知发送记录共用分页底栏：默认 50 条，可选 20/50/100 条，总数/页数/当前页条数、首尾页、相邻页、输入跳页；非法页码不提交，筛选与条数变化回首页，记录数缩减校正页码。批次和通知查询完整历史，来源过滤在 SQL 分页前应用，通知 API 返回 total 并限制每页最多 100 条。原 Records 内部最近 30 条辅助方法保持兼容，管理 API 使用新的 RecordPage。批次每 5 秒刷新当前页，只合并当前连接的 SSE 快照，避免旧缓存覆盖历史；后台成功刷新不清除用户操作错误。公开镜像取消既有分页，搜索/排序和 1000 项目录读取上限保留，文件下载热路径无修改。
+
+验证：
+
+- `npm --prefix web run build`：最终通过 vue-tsc 与 Vite，唯一输出 web/dist；构建临时 `/tmp/mirrordock-pagination-test` 用于隔离验收，并构建 bin/mirrordock 供更新使用。没有重启部署服务。
+- `GOCACHE="$PWD/.cache/go-build" go vet ./...`：通过，输出 `../test-results/pagination-go-vet.txt`。
+- `MIRRORDOCK_TEST_RSYNC="$PWD/.cache/rsync/rsync-3.5.1/rsync" GOCACHE="$PWD/.cache/go-build" go test -race ./internal/database ./internal/notifications ./internal/runs ./internal/app ./internal/mirrors`：五个受影响包通过，包含 125 条真实临时 SQLite 记录的末页/来源与时间筛选/空结果，以及通知排序、分页上限和负 offset；原有同步、管理鉴权、发布和受限下载回归保持。输出 `../test-results/pagination-go-race-final.txt`。
+- 使用上述临时二进制与隔离 rsync daemon，`npm --prefix web run test:e2e`：5/5 Chromium E2E 通过，29.9s。覆盖现有管理操作、通知、本次模拟 125 条记录的管理分页，以及公开目录全部 55 项显示且没有分页控件。输出 `../test-results/pagination-e2e-final.txt`。
+- 最后去掉批次刷新重复请求，并补充数量缩减自动校页/局部截图后，`npm --prefix web run test:e2e -- pagination.spec.ts`：1/1 通过，6.1s；覆盖 20/50/100 条、首尾/跳页、非法小数及越界页码、快速切换过滤时旧响应不覆盖新响应、来源过滤后完整总数、通知末页数据缩减后回首页、736/375/320px 无整页横向溢出。输出 `../test-results/pagination-e2e-footer.txt`；已实际查看批次筛选、桌面底栏和 320px 底栏截图（`../web/test-results/pagination-management-pagi-8cdca-izes-jump-and-mobile-layout/`）。
+
+初次相关 Go 检查被沙箱 bind 限制阻止，经自动审批允许隔离本地端口后重跑。首轮竞态测试发现原内部 Records 辅助方法的 30 条契约被改变，已保持其原行为；首轮浏览器验收的旧 mock 只覆盖 limit=100，已更新为分页查询响应并提供 total。长列表滚动后打开菜单会被滚动事件关闭，改为触发框仍在视口时重新定位、离开视口后关闭，修复后 E2E 通过。初次失败输出 `pagination-go-initial.txt`、`pagination-go-race.txt`、`pagination-e2e.txt` 不计为通过。
+
+使用 use-modern-go 的完整 Go 1.27.1 指南及 json_v2 explain。OCR 沿用项目此前外部调用被审批阻止后已允许的本地 delegate preview/rule 工作流，本轮没有尝试外部 LLM 调用或发送源码。当前 Codex 按规则审查全部 19 个生产源码，默认排除的 6 个测试源码（default_path）全部补充审查，4 个 Markdown（unsupported_ext，包括本节）全部核对；合计 **29/29 项、25/25 新增修改源码、跳过 0、覆盖 100%**。审查修复旧快照覆盖最新历史状态、后台刷新抹去操作错误、移动底栏负边距和重复刷新问题；没有遗留已确认的高/中严重度正确性、安全或性能问题。清单、规则、SHA256 和结构化报告为 `../test-results/ocr-pagination-preview.json`、`ocr-pagination-rules.json`、`ocr-pagination-review.json`。源码审查后运行对应最终测试。
+
+性能与未验证项：上述条数与耗时仅为 macOS 隔离功能验收数据，不是生产性能基准。本轮没有修改文件传输路径，也没有新增下载性能测量；已有 Linux sendfile/真实发行版/生产硬件吞吐未验证状态保持。未验证 Firefox/Safari、百万级历史数据查询性能及实际部署重启后的显示。未修改用户镜像、配置或凭证，未创建子代理、推送、发布或发送外部消息。

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { CircleHelp, Save, Send, RotateCcw } from '@lucide/vue'
+import Pagination from '../../components/Pagination.vue'
 import { api } from '../../app/api'
 import { state } from '../../app/state'
 import type { ConfigView } from '../../app/types'
@@ -23,6 +24,8 @@ const feedback = ref<Record<string, { error: boolean; text: string }>>({})
 const revision = ref('')
 const timezone = ref('UTC')
 const records = ref<DeliveryRecord[]>([])
+const page = ref(1), pageSize = ref(50), total = ref(0)
+let recordRevision = 0
 const error = ref('')
 const recordError = ref('')
 const refreshing = ref(false)
@@ -49,11 +52,17 @@ async function load() {
   catch (e) { if (!disposed) error.value = e instanceof Error ? e.message : '通知设置读取失败' }
 }
 async function refreshRecords() {
-  if (refreshing.value) return
+  const request = ++recordRevision
   refreshing.value = true
-  try { const result = await api<{ items: DeliveryRecord[] }>('/notifications/records'); if (!disposed) { records.value = result.items; recordError.value = '' } }
-  catch (e) { if (!disposed) recordError.value = e instanceof Error ? e.message : '发送记录读取失败' }
-  finally { refreshing.value = false }
+  try { const result = await api<{ items: DeliveryRecord[]; total: number }>(`/notifications/records?limit=${pageSize.value}&offset=${(page.value - 1) * pageSize.value}`)
+    if (!disposed && request === recordRevision) {
+      total.value = result.total
+      const last = Math.max(1, Math.ceil(result.total / pageSize.value))
+      if (page.value > last) { page.value = last; return }
+      records.value = result.items; recordError.value = ''
+    } }
+  catch (e) { if (!disposed && request === recordRevision) recordError.value = e instanceof Error ? e.message : '发送记录读取失败' }
+  finally { if (request === recordRevision) refreshing.value = false }
 }
 async function act(kind: string, operation: 'save' | 'test') {
   if (busy.value[kind]) return
@@ -79,8 +88,10 @@ async function act(kind: string, operation: 'save' | 'test') {
 const labels: Record<string, string> = { waiting: '等待发送', sending: '正在发送', sent: '已发送', failed: '发送失败', stopped: '已停止' }
 function channelName(kind: string) { return definitions.find(item => item.kind === kind)?.name ?? kind }
 function recordTime(value: string) { const date = new Date(value); return Number.isNaN(date.getTime()) ? '未记录' : zoneFormatter.value.format(date) }
+watch(pageSize, () => { page.value = 1 }, { flush: 'sync' })
+watch([page, pageSize], () => { records.value = []; void refreshRecords() })
 watch(() => state.config?.revision, next => { if (next && revision.value && next !== revision.value) void load() })
-onMounted(() => { void load(); void refreshRecords(); timer = setInterval(() => { void refreshRecords() }, 5000) })
+onMounted(() => { void load(); void refreshRecords(); timer = setInterval(() => { if (!refreshing.value) void refreshRecords() }, 5000) })
 onBeforeUnmount(() => { disposed = true; clearInterval(timer) })
 </script>
 
@@ -120,10 +131,10 @@ onBeforeUnmount(() => { disposed = true; clearInterval(timer) })
       </form>
     </article>
     <section class="notification-records">
-      <div class="records-heading"><h2>最近发送记录</h2><button class="button" :disabled="refreshing" @click="refreshRecords"><RotateCcw :size="16"/>{{ refreshing ? '刷新中…' : '刷新' }}</button></div>
+      <div class="records-heading"><h2>发送记录</h2><button class="button" :disabled="refreshing" @click="refreshRecords"><RotateCcw :size="16"/>{{ refreshing ? '刷新中…' : '刷新' }}</button></div>
       <div v-if="recordError" class="alert error" role="alert">{{ recordError }}</div>
-      <div class="panel table-scroll"><table><thead><tr><th>任务编号</th><th>渠道</th><th>状态</th><th>尝试次数</th><th>更新时间</th><th class="explanation">说明</th></tr></thead><tbody><tr v-for="record in records" :key="record.id"><td>#{{ record.run_id }}</td><td>{{ channelName(record.channel) }}</td><td><span class="delivery-state" :class="record.state">{{ labels[record.state] ?? record.state }}</span></td><td>{{ record.attempts }} / 3</td><td>{{ recordTime(record.updated_at) }}</td><td class="explanation">{{ record.error || '—' }}</td></tr><tr v-if="!records.length"><td colspan="6" class="notification-empty">暂无发送记录。保存并启用渠道后，新任务结束时会在这里显示结果。</td></tr></tbody></table></div>
-      <small>最近 30 条，每 5 秒自动刷新。响应丢失或重启恢复可能重复送达，可用任务编号识别。</small>
+      <div class="panel"><div class="table-scroll"><table><thead><tr><th>任务编号</th><th>渠道</th><th>状态</th><th>尝试次数</th><th>更新时间</th><th class="explanation">说明</th></tr></thead><tbody><tr v-for="record in records" :key="record.id"><td>#{{ record.run_id }}</td><td>{{ channelName(record.channel) }}</td><td><span class="delivery-state" :class="record.state">{{ labels[record.state] ?? record.state }}</span></td><td>{{ record.attempts }} / 3</td><td>{{ recordTime(record.updated_at) }}</td><td class="explanation">{{ record.error || '—' }}</td></tr><tr v-if="!records.length"><td colspan="6" class="notification-empty">暂无发送记录。保存并启用渠道后，新任务结束时会在这里显示结果。</td></tr></tbody></table></div><Pagination v-model:page="page" v-model:page-size="pageSize" :total="total" :count="records.length" :disabled="refreshing"/></div>
+      <small>默认每页 50 条，每 5 秒自动刷新。响应丢失或重启恢复可能重复送达，可用任务编号识别。</small>
     </section>
   </div>
 </template>

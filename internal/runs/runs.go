@@ -356,8 +356,8 @@ func (e *Engine) Get(id int64) (*Run, error) {
 	}
 	return &r, nil
 }
-func (e *Engine) List(state, source string, limit, offset int, times ...string) ([]*Run, int, error) {
-	records, total, err := e.store.ListRuns(state, source, limit, offset, times...)
+func (e *Engine) List(state, source string, limit, offset int, filters ...database.RunFilter) ([]*Run, int, error) {
+	records, total, err := e.store.ListRuns(state, source, limit, offset, filters...)
 	if err != nil {
 		return nil, 0, err
 	}

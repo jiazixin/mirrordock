@@ -164,8 +164,21 @@ td small{display:block;margin-top:5px;font-size:12px}
 .tabs button.active:after{content:"";position:absolute;height:2px;background:var(--blue);bottom:-1px;left:0;right:0}
 .record-reason{max-width:300px;color:#6b7280;font-size:12px;line-height:1.6}
 .record-reason strong{font-size:12px;color:#c37a82;margin-bottom:4px}
-.pagination{display:flex;gap:10px;align-items:center;justify-content:flex-end;padding:16px;border-top:1px solid var(--line)}
-.pagination>span{font-size:12px;color:#6b7280;margin-right:auto}
+.pagination{display:flex;flex-wrap:wrap;gap:16px;align-items:center;justify-content:space-between;padding:16px 20px;border-top:1px solid var(--line);font-size:13px;color:var(--muted)}
+.pagination-summary{font-size:12px;margin-right:auto}
+.pagination-controls,.pagination-buttons,.pagination-jump{display:flex;align-items:center;gap:8px}
+.pagination-controls{flex-wrap:wrap;gap:14px}
+.pagination .select-field{width:128px}
+.pagination .select-trigger{min-height:38px;font-size:13px}
+.pagination-position{white-space:nowrap;padding:0 6px;font-variant-numeric:tabular-nums}
+.pagination-position strong{color:var(--blue);font-weight:600}
+.pagination-jump input{width:52px;padding:9px 6px;text-align:center;font-variant-numeric:tabular-nums}
+.pagination-jump{white-space:nowrap}
+.batch-panel .pagination{margin:20px -24px -24px}
+.batch-panel .filters-grid{grid-template-columns:150px 180px 150px 150px;gap:14px}
+@media(max-width:1050px){.batch-panel .filters-grid{grid-template-columns:repeat(2,minmax(0,180px))}}
+@media(max-width:600px){.pagination-controls{width:100%;gap:12px}.pagination-buttons{gap:5px}.pagination-summary{width:100%}.batch-panel .filters-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:360px){.batch-panel .filters-grid{grid-template-columns:minmax(0,1fr)}}
 .cron-input{text-align:center;width:150px;font-family:monospace;font-size:12px}
 .toggle{border:0;border-radius:20px;width:35px;height:20px;background:#dfe5ef;position:relative;padding:2px}
 .toggle>span{display:block;background:#fff;height:16px;width:16px;border-radius:50%;transition:transform .2s}
@@ -285,6 +298,7 @@ td small{display:block;margin-top:5px;font-size:12px}
 .run-row{gap:10px}
 .run-row:before{left:64px}
 .batch-panel{padding:18px}
+.batch-panel .pagination{margin:20px -18px -18px}
 .run-duration{font-size:12px}
 }
 @media(max-width:480px){.page-content{padding:24px 13px}
@@ -300,6 +314,7 @@ td small{display:block;margin-top:5px;font-size:12px}
 .filter-toolbar .select-field{flex:1;width:auto;min-width:110px}
 .filters-grid{gap:12px}
 .batch-panel{padding:13px}
+.batch-panel .pagination{margin:20px -13px -13px;padding:16px 13px}
 .timeline{padding:14px 0 2px}
 .run-time{display:none}
 .run-row{padding:16px 8px}

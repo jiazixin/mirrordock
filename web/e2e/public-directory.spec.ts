@@ -47,7 +47,7 @@ async function expectHeaderLayout(page: Page) {
  }
 }
 
-test('public directory layout, icons, search, sorting, pagination and safe file links', async ({ page, request, browser }, testInfo) => {
+test('public directory layout, icons, search, sorting, unpaginated and safe file links', async ({ page, request, browser }, testInfo) => {
  const rsync = process.env.MIRRORDOCK_TEST_RSYNC
  test.skip(!rsync, 'Set MIRRORDOCK_TEST_RSYNC to a modern rsync executable')
  const root = path.resolve(import.meta.dirname, '../..')
@@ -137,19 +137,16 @@ test('public directory layout, icons, search, sorting, pagination and safe file 
    }
    await publicPage.setViewportSize({ width: 1440, height: 1000 })
    await publicPage.getByRole('link', { name: 'packages', exact: true }).click()
-   await expect(rows).toHaveCount(50)
-   await expect(publicPage.getByRole('status')).toHaveText('1–50 / 55 项')
-   await publicPage.getByRole('button', { name: '下一页', exact: true }).click()
-   await expect(rows).toHaveCount(5)
-   await expect(rows.first()).toContainText('package-051.rpm')
-   await publicPage.getByRole('button', { name: '上一页', exact: true }).click()
+   await expect(rows).toHaveCount(55)
+   await expect(publicPage.getByRole('status')).toHaveText('55 个条目')
+   await expect(publicPage.locator('.pagination')).toHaveCount(0)
    await publicPage.getByRole('button', { name: '大小', exact: false }).click()
    await expect(rows.first()).toContainText('package-001.rpm')
    await publicPage.getByRole('button', { name: '大小', exact: false }).click()
    await expect(rows.first()).toContainText('package-055.rpm')
    await search.fill('package-001')
    await expect(rows).toHaveCount(1)
-   await expect(publicPage.locator('.pagination')).toBeHidden()
+   await expect(publicPage.locator('.pagination')).toHaveCount(0)
    await navigation.getByRole('link', { name: 'mirror-client', exact: true }).click()
    await publicPage.getByRole('link', { name: 'releases', exact: true }).click()
    await expect(publicPage.getByRole('heading', { name: '目录为空' })).toBeVisible()

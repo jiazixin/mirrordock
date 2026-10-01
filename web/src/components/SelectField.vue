@@ -106,7 +106,10 @@ function outside(event: PointerEvent) {
   if (open.value && target && !trigger.value?.contains(target) && !menu.value?.contains(target)) close()
 }
 function scroll(event: Event) {
-  if (open.value && !(event.target instanceof Node && menu.value?.contains(event.target))) close()
+  if (!open.value || (event.target instanceof Node && menu.value?.contains(event.target))) return
+  const rect = trigger.value?.getBoundingClientRect()
+  if (!rect || rect.bottom <= 0 || rect.top >= window.innerHeight) close()
+  else place()
 }
 watch(() => props.disabled, value => { if (value) close() })
 watch(() => props.options, (options, before) => {

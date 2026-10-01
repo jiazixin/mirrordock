@@ -386,7 +386,20 @@ func (s *Service) Scan() error {
 	return nil
 }
 func (s *Service) Records() ([]Record, error) {
-	rows, err := s.store.DB.Query("SELECT id,channel,run_id,state,attempts,updated_at,error FROM notifications ORDER BY id DESC LIMIT 30")
+	return s.recordItems(30, 0)
+}
+
+func (s *Service) RecordPage(limit, offset int) ([]Record, int, error) {
+	var total int
+	if err := s.store.DB.QueryRow("SELECT count(*) FROM notifications").Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	records, err := s.recordItems(min(100, max(1, limit)), max(0, offset))
+	return records, total, err
+}
+
+func (s *Service) recordItems(limit, offset int) ([]Record, error) {
+	rows, err := s.store.DB.Query("SELECT id,channel,run_id,state,attempts,updated_at,error FROM notifications ORDER BY id DESC LIMIT ? OFFSET ?", limit, offset)
 	if err != nil {
 		return nil, err
 	}

@@ -161,7 +161,13 @@ func (s *Store) Run(id int64, out any) error {
 	}
 	return json.Unmarshal(b, out)
 }
-func (s *Store) ListRuns(state, source string, limit, offset int, times ...string) ([][]byte, int, error) {
+
+type RunFilter struct {
+	From    string
+	Trigger string
+}
+
+func (s *Store) ListRuns(state, source string, limit, offset int, filters ...RunFilter) ([][]byte, int, error) {
 	query := " WHERE 1=1"
 	args := []any{}
 	if state == "failure" {
@@ -174,9 +180,15 @@ func (s *Store) ListRuns(state, source string, limit, offset int, times ...strin
 		query += " AND source_id=?"
 		args = append(args, source)
 	}
-	if len(times) > 0 && times[0] != "" {
-		query += " AND created_at>=?"
-		args = append(args, times[0])
+	if len(filters) > 0 {
+		if filters[0].From != "" {
+			query += " AND created_at>=?"
+			args = append(args, filters[0].From)
+		}
+		if filters[0].Trigger != "" {
+			query += " AND json_extract(data, '$.trigger')=?"
+			args = append(args, filters[0].Trigger)
+		}
 	}
 	var total int
 	if err := s.DB.QueryRow("SELECT count(*) FROM runs"+query, args...).Scan(&total); err != nil {

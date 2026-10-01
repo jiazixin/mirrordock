@@ -288,7 +288,7 @@ func (a *App) listRuns(w http.ResponseWriter, r *http.Request) {
 		}
 		from = parsed.UTC().Format(time.RFC3339Nano)
 	}
-	rows, total, err := a.Runs.List(q.Get("state"), q.Get("source"), limit, max(0, offset), from)
+	rows, total, err := a.Runs.List(q.Get("state"), q.Get("source"), limit, max(0, offset), database.RunFilter{From: from, Trigger: q.Get("trigger")})
 	if err != nil {
 		failure(w, err)
 		return

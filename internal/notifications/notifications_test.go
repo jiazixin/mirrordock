@@ -46,6 +46,28 @@ func fixture(t *testing.T) (*Service, *config.Manager, *database.Store) {
 	t.Cleanup(func() { service.Close(); store.Close() })
 	return service, cfg, store
 }
+
+func TestRecordPage(t *testing.T) {
+	s, _, store := fixture(t)
+	for i := range 125 {
+		_, err := store.DB.Exec("INSERT INTO notifications(channel,run_id,event,title,body,failure,state,next_at,updated_at) VALUES('webhook',?,'batch.finished','fixture','fixture',0,'sent',0,'2026-10-01T00:00:00Z')", i+1)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	records, total, err := s.RecordPage(50, 100)
+	if err != nil || total != 125 || len(records) != 25 || records[0].RunID != 25 || records[24].RunID != 1 {
+		t.Fatalf("last page: records=%v total=%d err=%v", records, total, err)
+	}
+	records, total, err = s.RecordPage(1000, -1)
+	if err != nil || total != 125 || len(records) != 100 || records[0].RunID != 125 {
+		t.Fatalf("bounded page: records=%d total=%d err=%v", len(records), total, err)
+	}
+	records, total, err = s.RecordPage(50, 200)
+	if err != nil || total != 125 || len(records) != 0 {
+		t.Fatalf("empty page: records=%d total=%d err=%v", len(records), total, err)
+	}
+}
 func saveChannel(t *testing.T, s *Service, kind string, u Update) {
 	t.Helper()
 	u.Revision = s.cfg.View().Revision
