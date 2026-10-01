@@ -6,14 +6,12 @@ import (
 	"encoding/hex"
 	"fmt"
 	"golang.org/x/sys/unix"
-	"html/template"
 	"io"
 	"mime"
 	"net/http"
 	"net/url"
 	"os"
 	"path"
-	"slices"
 	"strings"
 	"sync"
 )
@@ -58,13 +56,6 @@ func hidden(p string) bool {
 	}
 	return false
 }
-
-type listingItem struct {
-	Name, URL string
-	Dir       bool
-}
-
-var listing = template.Must(template.New("listing").Parse(`<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><link rel="icon" type="image/x-icon" href="/favicon.ico?v=2"><title>MirrorDock · {{.Path}}</title><style>body{font:15px Georgia,"PingFang SC",serif;color:#20304b;background:#f7f9fc;margin:5% auto;max-width:960px;padding:24px}h1{font-size:28px}a{color:#315bea;text-decoration:none}li{padding:12px 0;border-bottom:1px solid #dfe6f1}ul{list-style:none;padding:0}small{color:#7f8da5}</style><small>MIRRORDOCK / PUBLIC MIRROR</small><h1>{{.Path}}</h1><ul>{{range .Items}}<li><a href="{{.URL}}">{{.Name}}{{if .Dir}}/{{end}}</a></li>{{end}}</ul><small>{{if .More}}目录条目超过上限，请通过明确文件路径下载。{{else}}已发布镜像 · 支持 HEAD / Range{{end}}</small></html>`))
 
 func (m *Manager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "GET" && r.Method != "HEAD" {
@@ -212,6 +203,12 @@ func (w *countWriter) ReadFrom(r io.Reader) (int64, error) {
 	return n, err
 }
 func (m *Manager) virtual(w http.ResponseWriter, r *http.Request, p string, table *routes) {
+	if r.Method != "HEAD" {
+		if !m.acquireListing(w) {
+			return
+		}
+		defer func() { <-m.listingGates }()
+	}
 	children := map[string]bool{}
 	prefix := p
 	if prefix != "" {
@@ -234,11 +231,19 @@ func (m *Manager) virtual(w http.ResponseWriter, r *http.Request, p string, tabl
 	}
 	items := []listingItem{}
 	for name := range children {
-		items = append(items, listingItem{Name: name, URL: r.URL.EscapedPath() + url.PathEscape(name) + "/", Dir: true})
+		items = append(items, newListingItem(name, r.URL.EscapedPath()+url.PathEscape(name)+"/", true, nil))
 	}
 	renderListing(w, r, items, false)
 }
 func (m *Manager) directory(w http.ResponseWriter, r *http.Request, f *os.File) {
+	if r.Method == "HEAD" {
+		renderListing(w, r, nil, false)
+		return
+	}
+	if !m.acquireListing(w) {
+		return
+	}
+	defer func() { <-m.listingGates }()
 	entries, err := f.ReadDir(1001)
 	if err != nil && err != io.EOF {
 		http.Error(w, "directory unavailable", 500)
@@ -253,21 +258,13 @@ func (m *Manager) directory(w http.ResponseWriter, r *http.Request, f *os.File) 
 		if hidden(e.Name()) {
 			continue
 		}
-		items = append(items, listingItem{Name: e.Name(), URL: r.URL.EscapedPath() + url.PathEscape(e.Name()), Dir: e.IsDir()})
+		u := r.URL.EscapedPath() + url.PathEscape(e.Name())
+		if e.IsDir() {
+			u += "/"
+		}
+		// DirEntry.Info uses lstat: listing metadata never follows symbolic links.
+		info, _ := e.Info()
+		items = append(items, newListingItem(e.Name(), u, e.IsDir(), info))
 	}
 	renderListing(w, r, items, more)
-}
-func renderListing(w http.ResponseWriter, r *http.Request, items []listingItem, more bool) {
-	slices.SortFunc(items, func(a, b listingItem) int { return strings.Compare(a.Name, b.Name) })
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'")
-	if r.Method == "HEAD" {
-		return
-	}
-	_ = listing.Execute(w, struct {
-		Path  string
-		Items []listingItem
-		More  bool
-	}{r.URL.Path, items, more})
 }

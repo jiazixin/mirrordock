@@ -47,6 +47,7 @@ type Manager struct {
 	active        atomic.Int64
 	gates         chan struct{}
 	metadataGates chan struct{}
+	listingGates  chan struct{}
 	requests      atomic.Int64
 	bytes         atomic.Int64
 	cache         *metadataCache
@@ -63,7 +64,7 @@ func New(root string, store *database.Store, sources []config.Source) (*Manager,
 	if err != nil {
 		return nil, err
 	}
-	m := &Manager{Root: canonical, store: store, gates: make(chan struct{}, 256), metadataGates: make(chan struct{}, 64), cache: newCache(8192)}
+	m := &Manager{Root: canonical, store: store, gates: make(chan struct{}, 256), metadataGates: make(chan struct{}, 64), listingGates: make(chan struct{}, 8), cache: newCache(8192)}
 	m.table.Store(&routes{entries: map[string]*opened{}})
 	ready := false
 	defer func() {

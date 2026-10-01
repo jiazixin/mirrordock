@@ -95,8 +95,8 @@ func TestWritebackConflictAndSecrets(t *testing.T) {
 	if v.Config.Settings.GitHub.Token != "" || !v.TokenConfigured {
 		t.Fatal("token leaked")
 	}
-	if v.Config.Settings.GitHub.Proxy != "" || !v.ProxyConfigured {
-		t.Fatal("proxy credentials leaked")
+	if v.Config.Settings.GitHub.Proxy != "http://user:proxy-secret@127.0.0.1:8081" || !v.ProxyConfigured {
+		t.Fatal("configured proxy missing from admin view")
 	}
 	c := m.Current()
 	c.Listen = "192.0.2.10"

@@ -95,7 +95,7 @@ Go 将字段生成到任务私有 .repo 与 DNF 配置中，仅启用选定仓�
 
 “前 N 个 tag”定义为最近发布的 N 个符合条件的 Release，按 `published_at` 降序；默认排除草稿和预发布。它与“没有 Release 的 git tag”不同。系统设置 `release_count` 默认 5，单个源可以覆盖。通过库分页取得列表，在 Go 内过滤、排序并选择资产，不把 API 返回顺序当作语义版本排序。每次运行固定 release/asset 清单，避免中途新版本改变总量。
 
-仅同步 Release assets，按 glob 筛选；移除源码压缩包选项及下载分支，不处理 Release 自动生成的 Source code (zip/tar.gz)，不查询或下载 zipball/tarball/archive 地址。用库获取资产响应流或下载重定向地址，由 Go HTTP 下载器写入 `.part` 暂存文件并统计已写字节。使用任务 context 取消查询和传输，连接/I/O 等待使用程序默认值，并把 API 限流响应转换为可见的等待/错误事件。Token 直接读取 settings.github.token，空值使用未认证公开访问，不提供 token_env 机制。settings.github.proxy 可配置 HTTP/HTTPS/SOCKS5/SOCKS5h，API 与附件下载共用，空值直连，不读取系统代理变量；故障不绕过代理。代理 URL 认证信息不进入读取 API、快照或日志。API 鉴权与下载重定向分开处理，不把 API Token 附加到第三方存储地址。
+仅同步 Release assets，按 glob 筛选；移除源码压缩包选项及下载分支，不处理 Release 自动生成的 Source code (zip/tar.gz)，不查询或下载 zipball/tarball/archive 地址。用库获取资产响应流或下载重定向地址，由 Go HTTP 下载器写入 `.part` 暂存文件并统计已写字节。使用任务 context 取消查询和传输，连接/I/O 等待使用程序默认值，并把 API 限流响应转换为可见的等待/错误事件。Token 直接读取 settings.github.token，空值使用未认证公开访问，不提供 token_env 机制。settings.github.proxy 可配置 HTTP/HTTPS/SOCKS5/SOCKS5h，API 与附件下载共用，空值直连，不读取系统代理变量；故障不绕过代理。按用户 2026-10-01 新要求，完整代理地址可通过受登录保护的配置 API 读取并直接编辑；代理认证仍不进入快照、审计或日志。API 鉴权与下载重定向分开处理，不把 API Token 附加到第三方存储地址。
 
 下载完成后验证期望大小，并在有可信 digest/校验清单时校验内容，成功后原子改名到最终文件。数据库记录 release ID、asset ID、更新时间、大小、digest、ETag/Last-Modified（可用时）及已完成结果；不能只凭同名文件存在跳过损坏或已替换的资产。
 
@@ -301,10 +301,15 @@ rsync 与 reposync 的原始 stdout/stderr 和 GitHub Runner 的 API/HTTP 事件
 | 导航 | 内容 |
 | --- | --- |
 | 同步源 | 源表格、类型、上游/本地目录、启用状态、最近运行、发布状态、下载链接、复制 baseurl、立即同步、新增/编辑 |
+| 系统配置 | 独立 `/admin/system` 页面；配置路径、实际生效的监听/存储/TLS/日志、OS/架构/Go/时区、解析后的环境检查状态，无原始 JSON |
 | 运行记录 | 成功/失败切换、源/类型/日期过滤、错误摘要、详情、重试与清理日志 |
 | 计划管理 | cron、程序启动时区（只读）、下次运行、启停、重叠策略、立即执行 |
 | 批次记录 | 日期时间线、运行状态、阶段、耗时、进度、预计剩余、暂停/继续/取消 |
 | 系统设置 | 同步执行 / rsync / GitHub Release 页签；累计超时、I/O 与连接超时、MB/s 限速、Release 数量、Token 与 proxy。监听、目录及 TLS 只用 YAML 配置，页面保存保留这些固定字段 |
+
+公开下载目录采用用户选定的文件列表方向：浅灰背景与分段类型筛选、白色圆角表格、细分隔线、小尺寸线性图标。列为名称、类型、大小和修改时间，目录优先；提供面包屑与上级目录、当前目录搜索、排序及分页。RPM/DEB、归档、JSON/XML 等元数据、签名、校验和及镜像文件共享图标体系。手机优先显示名称与大小。列表最多读取 1000 项，超过上限明确提示搜索范围，文件完整路径下载仍可使用。
+
+文件图标采用用户后续指定的 Phosphor Icons Regular 官方 SVG：统一单色、无底色块，桌面 22px、手机 20px，MD/PY/INI 使用带字母的文件图标；资源随 Go 程序嵌入并保留 MIT 授权，不依赖 CDN。
 
 记录详情使用右侧面板（窄屏改为顺序展开），含概览、脱敏配置快照、执行信息、来源切换尝试、错误码和可下载日志，错误时提供重试。rsync 与 reposync 展示实际命令、退出码与 stdout/stderr；GitHub 展示 API/HTTP 状态、资产 ID、下载进度与校验结果。rsync 错误至少区分连接失败、权限、磁盘不足、I/O 超时、任务总超时、部分传输及服务中断。
 
@@ -371,7 +376,7 @@ deploy/                       实际需要时添加 systemd / 容器定义
 2. 持久队列、目录锁、rsync Runner、多来源切换、进度解析、8h 累计预算、停止/暂停/继续/崩溃恢复。
 3. 程序启动时区、计划调度、Reposync 与 GitHub Runner、资产验证和重复同步跳过。
 4. 镜像发布、HTTP/HTTPS 文件服务、Range、路径与暂存隔离、TLS 配置及客户端源验证；验证 sendfile 路径并按第 11.1 节完成下载性能对照。
-5. Vue 五个页面、下载链接与发布状态、SSE、记录详情、手动清理日志、设置回写、单机部署。
+5. Vue 六个页面、下载链接与发布状态、SSE、记录详情、手动清理日志、设置回写、单机部署。
 
 关键验收使用临时目录与可控上游，不以完整发行版下载作为默认测试：
 

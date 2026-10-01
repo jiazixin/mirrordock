@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
-import { Save, RotateCcw, ShieldCheck, Settings2, CheckCircle2, ArrowDownUp } from '@lucide/vue'
+import { Save, RotateCcw, ShieldCheck, Settings2, ArrowDownUp } from '@lucide/vue'
 import { clone, state, saveConfiguration, perform, refresh, notify } from '../../app/state'
 import type { Configuration } from '../../app/types'
 import { api } from '../../app/api'
@@ -14,10 +14,7 @@ const activeTab = ref<(typeof tabs)[number]['id']>('execution')
 const draft = ref<Configuration>()
 const token = ref('')
 const clearToken = ref(false)
-const proxy = ref('')
-const clearProxy = ref(false)
 const busy = ref(false)
-const checks = ref<Record<string, unknown>>()
 watch(() => state.config?.revision, () => {
   if (state.config) draft.value = clone(state.config.config)
 }, { immediate: true })
@@ -38,14 +35,13 @@ async function save() {
   if (!draft.value) return
   busy.value = true
   try {
-    await saveConfiguration(draft.value, clearToken.value ? '' : token.value || undefined, clearProxy.value ? '' : proxy.value || undefined)
-    token.value = ''; clearToken.value = false; proxy.value = ''; clearProxy.value = false
+    await saveConfiguration(draft.value, clearToken.value ? '' : token.value || undefined, draft.value.settings.github.proxy)
+    token.value = ''; clearToken.value = false
   } finally { busy.value = false }
 }
 async function reload() {
   await api('/config/reload', 'POST'); await refresh(); notify('已重新载入磁盘配置')
 }
-async function check() { checks.value = await api('/system/checks') }
 </script>
 
 <template>
@@ -96,15 +92,10 @@ async function check() { checks.value = await api('/system/checks') }
       </article>
       <article class="panel setting-row">
         <div class="setting-description"><span class="setting-index">03 · 网络</span><h3>下载代理</h3><p>GitHub API 和附件下载共用此代理。</p><small>需要正向代理入口；http:// 用于 HTTP/mixed，https:// 要求代理入口本身支持 TLS，SOCKS 使用 socks5:// 或 socks5h://。未配置时直连，不读取系统代理。</small></div>
-        <div class="setting-controls"><label>GitHub 代理 · proxy<input v-model="proxy" type="password" autocomplete="new-password" :disabled="clearProxy" :placeholder="state.config?.proxy_configured ? '已配置，留空保留现有代理' : 'http://127.0.0.1:8081'"/><small>当前{{ state.config?.proxy_configured ? '已配置' : '未配置' }}。代理地址可能含密码，读取 API 不返回原值。保存后对下一次执行生效。</small></label><label class="check"><input v-model="clearProxy" type="checkbox"/>清空代理并直连</label></div>
+        <div class="setting-controls"><label>GitHub 代理 · proxy<input v-model="draft.settings.github.proxy" type="text" autocomplete="off" spellcheck="false" placeholder="http://127.0.0.1:8081"/><small>显示当前代理地址，可直接修改；留空并保存即直连。保存后对下一次执行生效。</small></label></div>
       </article>
     </div>
 
-    <section class="panel config-footer">
-      <div><span class="eyebrow">ACTIVE CONFIGURATION</span><code>{{ state.config?.file }}</code><small>设置写回当前 YAML · 时区：{{ state.info?.timezone }} · Go {{ state.info?.go }}</small><small>监听、目录与 TLS 证书仅在配置文件中修改，重启后生效。</small></div>
-      <button class="button" @click="perform(check)"><CheckCircle2 :size="16"/>检查运行环境</button>
-      <pre v-if="checks">{{ JSON.stringify(checks, null, 2) }}</pre>
-    </section>
   </section>
 </template>
 
@@ -123,8 +114,6 @@ async function check() { checks.value = await api('/system/checks') }
 .setting-controls label { font-size: 13px; }
 .setting-controls input:not([type=checkbox]) { max-width: 420px; }
 .setting-controls .check { font-weight: 400; color: var(--dark); }
-.config-footer { margin-top: 24px; }
-.config-footer code { overflow-wrap: anywhere; }
 @media (max-width: 1150px) { .setting-row { gap: 28px; padding: 24px; } }
 @media (max-width: 900px) { .setting-row { grid-template-columns: 1fr; gap: 24px; } .setting-controls input:not([type=checkbox]) { max-width: none; } }
 @media (max-width: 480px) { .settings-tabs { gap: 16px; } .settings-tabs button { font-size: 12px; gap: 5px; } .setting-row { padding: 22px 18px; } }

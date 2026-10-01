@@ -163,3 +163,54 @@ GitHub 错误现在区分 DNS、连接拒绝、EOF、TLS、代理认证、GitHub
 OCR 使用此前外部 LLM 被审批阻止后允许的本地 delegate preview/rule 工作流，本次未尝试外部 LLM。当前 Codex 已逐文件审查 **3/3 生产文件，跳过 0，覆盖率 100%**：internal/config/config.go、internal/sync/github.go、web/src/features/settings/Settings.vue。默认排除的 **4 个测试源码（default_path）**已另外全部审查：internal/config/config_test.go、internal/sync/github_test.go、internal/sync/proxy_test.go、web/e2e/mirrordock.spec.ts；所有新增/修改源码共 **7/7**。默认排除的五项 Markdown（unsupported_ext，包含本节验收）也已核对。已修复 token 重定向重新附加、包装取消错误携带 URL 的隐患，没有遗留确认的高/中严重度问题。清单、规则与 SHA256 覆盖结果见 ../test-results/ocr-github-settings-preview.json、ocr-github-settings-rules.json、ocr-github-settings-review.json；诊断脚本文本、最终测试输出及初次失败输出均保留在 test-results，均不提交。
 
 性能基准本轮未重复：没有新的性能数据。Docker、Linux 目标机实际运行、sendfile syscall、大附件持续传输与完整发行版验收未执行；Linux 交叉构建不等同目标平台运行。回归测试仅使用临时 YAML、目录、端口、rsync daemon 与可控 HTTP/代理上游；唯一针对真实服务的配置写入为用户授权的代理协议修正。
+
+## 独立系统配置页与代理直接编辑 · 2026-10-01
+
+已将系统设置底部的配置/运行环境区域移到独立侧栏页面 `/admin/system`。页面展示当前配置文件、实际生效的监听、数据目录/SQLite、镜像根、日志、TLS 路径，以及程序/Go/OS/架构/逻辑 CPU/启动时区；自动运行环境检查，将工具输出解析为版本和可用状态、目录权限及 GitHub 配置状态，不展示原始 JSON。固定部署字段取启动配置，重载 YAML 后继续展示旧的实际运行值并提示重启。检查失败会清除旧检查结果，显示失败和重试入口，避免把过期结果当成当前成功。
+
+用户本次明确要求下载代理读取并直接修改，覆盖此前隐藏地址的界面/API 协议：受登录保护且 no-store 的配置 API 返回完整代理 URL，页面明文回填；保存和刷新后继续显示，输入清空并保存即直连。Token/管理员密码继续不返回，代理仍不进入运行快照、日志或审计；其他页面保存保留已有代理，revision/注释保留/原子 YAML 写回继续有效。前文旧版的“读取 API 隐藏代理、空输入保留”验收为历史记录，当前行为以本节为准。
+
+| 检查 | 本次结果 |
+| --- | --- |
+| Web | 最终 `npm --prefix web run build` 通过，包括 Vue/TypeScript 类型检查；唯一输出为 web/dist。 |
+| Go | Go 1.27.1，仓库内 GOCACHE 下 `go vet ./...` 通过；现代 rsync 3.5.1 隔离 fixture 的 `go test -race ./...` 全部通过。新测试确认 YAML 重载后的运行信息仍使用启动配置，路径为实际解析后的路径，运行信息不返回凭证。 |
+| 浏览器 | 最终 Chromium E2E **1 passed（测试 10.5s，总计 10.9s）**。验证独立导航、解析后的环境字段/工具版本/可写状态、失败后清除旧结果与重试、代理明文读取/保存/刷新回填/清空直连、Token/密码隔离、注释保留及原有同步/发布/记录流程；六页在 1440/1024/736/375 宽度无整页横向溢出，没有脚本错误。已查看系统配置桌面和手机截图。 |
+| 构建 | 最终 Web 输出之后构建本机 bin/mirrordock 与 /tmp/mirrordock-system-test，隔离 E2E 使用后者。现有服务未重启，新界面需运行新二进制后生效。 |
+
+初次 Go 检查因系统构建缓存沙箱权限失败，改用仓库内 `.cache/go-build` 后 vet 通过。初次 race 测试因沙箱禁止本地 bind 失败，经审批允许隔离监听后执行；新增测试首轮因 macOS `/var` 到 `/private/var` 的真实路径解析导致预期路径断言失败，修正测试以已选配置文件的规范路径为基准，最终全量通过。这些失败不记为通过，初次监听失败输出保留于 `../test-results/system-go-test.txt`。
+
+OCR 沿用项目此前外部 LLM 调用被审批阻止后允许的 local delegate preview/rule 流程，本次未执行任何外部 OCR LLM 调用、未发送源码。当前 Codex 已按 OCR 规则审查全部 **11/11 新增或修改源码**（8 个生产文件、3 个测试文件），另核对 YAML 和 5 项 Markdown。默认预览的 9 项（含 YAML）全部审查；默认排除的 3 项测试（default_path）已补充审查，5 项文档（unsupported_ext）已核对；总计 **17/17，跳过 0，覆盖 100%**。检查范围包含配置鉴权与脱敏例外、快照脱敏、原子写回、启动环境/重载语义、前端错误与重试、响应式布局、测试隔离。已修复环境检查失败后保留旧结果的问题，无遗留确认的高/中严重度问题。覆盖清单、规则和文件 SHA256 见 `../test-results/ocr-system-preview.json`、`ocr-system-rules.json`、`ocr-system-review.json`。
+
+本轮未运行性能基准，没有新增吞吐数据；下载热路径、发布与缓冲实现未修改。Linux 实机、DNF reposync 插件/完整发行版、真实代理与 GitHub 网络连通性、sendfile 系统调用和生产吞吐未验证；环境页仅报告本机工具可执行性、写入权限及配置状态。测试只使用临时配置/目录、隔离端口、本地 rsync 与浏览器响应 fixture，没有修改用户配置、凭证或镜像，没有触发示例完整发行版同步。
+
+## 公开目录文件列表 · 2026-10-01
+
+按用户选中的文件管理参考图实施公开目录：浅灰背景、白色圆角表格、细分隔线、小尺寸线性图标、分段筛选与搜索。实际列为名称、类型、大小和修改时间，目录优先；显示面包屑与上级目录，支持名称/类型/大小/时间排序、当前已列出条目搜索、类型筛选及每页 50 项分页。目录、RPM/DEB、tar.gz/tar.xz/ZIP 等归档、JSON/XML/YAML、签名、校验和、ISO、文本和通用文件使用统一图标。手机保留名称和大小；未知虚拟目录大小/时间显示 `—`。
+
+页面继续由 Go 渲染，HTML/CSS/JS 为 mirrors 模块自身源码；Vue 构建仍唯一输出 web/dist，不依赖外部字体、脚本或图标服务。目录最多读取/展示 1000 项，超过时明确搜索范围；lstat 不跟随符号链接、不回显目标。新增 8 条独立目录资源池，饱和返回 503/Retry-After；目录 HEAD 不读取条目、不占池。包和仓库元数据下载不占目录池；原有受限根、ServeContent/ReadFrom、Range 和 ETag 路径不变。HTML 模板转义路径与文件名，静态脚本以 CSP SHA-256 哈希授权；无 JavaScript 时仍显示全部已列出链接。
+
+| 检查 | 本次结果 |
+| --- | --- |
+| Web / 构建 | `npm --prefix web run build`（Vue/TypeScript + Vite）和本机 Go 构建通过。新界面已构建到 bin/mirrordock，现有服务未重启。 |
+| Go | Go 1.27.1，`go vet ./...` 和现代 rsync 3.5.1 隔离 fixture 的 `go test -race ./...` 全部通过。新增检查覆盖复合扩展名/仓库元数据/签名、真实大小/时间、符号链接目标隔离、隐藏条目、1000 项上限、转义与 CSP 实际脚本哈希、HEAD 无条目读取、目录池饱和时文件下载和 HEAD 继续可用。原有下载/发布回归通过。 |
+| 浏览器 | Chromium E2E **2 passed（12.9s）**。公共目录新流程 3.2s，原系统配置/代理/同步流程 9.3s。无登录上下文验证根/虚拟父目录/实体目录、图标、筛选/搜索/空结果/清除、大小排序、55 项分页、真实文件下载、恶意文件名按文本显示、空目录和禁用 JavaScript 的 55 项链接。1440/1024/736/375 宽度无整页横向溢出、无脚本错误；已查看桌面和手机实际截图。 |
+| 本机合成基准 | Apple M2 Max / macOS arm64，1000 个临时空 RPM 文件的目录读取+lstat+模板渲染：68 次，16,361,273 ns/op（约 16.36ms）、7,540,715 B/op、158,968 allocs/op。分配量包含 httptest.ResponseRecorder 保存完整 HTML 的成本，不能解释为生产峰值内存或网络吞吐；没有 Linux 性能结论。 |
+
+结果文件为 `../test-results/directory-go-race.txt`、`directory-e2e.txt`、`directory-benchmark.txt`；截图在 `../web/test-results/public-directory-public-di-38c1e-ination-and-safe-file-links/`。初次无审批的本地下载测试被沙箱 bind 权限阻止，最终经审批以隔离监听运行；转义测试最初错误地编码整个请求路径导致 fixture URL 无效，已修正测试构造并通过。上述初次失败不算通过。
+
+OCR 沿用项目授权的本地 delegate preview/rule 工作流，本轮未执行外部 OCR LLM 调用、未发送源码。当前 Codex 已逐项按规则审查当前工作区全部 **26/26 项，跳过 0，覆盖 100%**：默认 15 项（14 个生产源码和 YAML），默认排除的 5 个测试源码（default_path）均补充审查，6 项文档（unsupported_ext）均核对；新增/修改源码合计 **19/19**。范围包含此前系统配置/代理修改与本次 public listing 的 Go/HTML/CSS/JS、所有对应测试。审查补充了目录 HEAD 避免枚举、目录独立资源池及虚拟列表上限，修复后执行上述最终检查；无遗留确认的高/中严重度问题。文件清单、规则与 SHA256 覆盖见 `../test-results/ocr-directory-preview.json`、`ocr-directory-rules.json`、`ocr-directory-review.json`。
+
+未执行 Linux 实机、生产磁盘目录基准、sendfile syscall、真实发行版验收或 Firefox/Safari 浏览器测试。本轮仅使用临时目录、隔离端口和可控本地 rsync，不修改用户镜像/凭证，不启动示例完整发行版同步；未重启部署服务、推送或发布。
+
+## 文件图标改为 Phosphor Regular · 2026-10-01
+
+按用户指定的 Phosphor Icons 截图替换文件列表图标：官方 Regular SVG、统一深灰、桌面 22px/手机 20px 的等比例尺寸，保留现有列表布局。目录、软件包、归档、元数据、签名、校验和、镜像、链接、文本及通用文件对应同系列图标；MD/PY/INI 使用带字母的文件图标，文件类型及筛选分类不变。固定官方 core 提交 `2b75f3ad12b420c9504ef05df8d2564a28f8500e`，13 个 SVG 对应 14 个类型映射；导入脚本校验几何元素、属性、颜色和模板标记，MIT 全文保留于嵌入模板。正常构建和页面无需联网获取图标。
+
+- `npm --prefix web run build`、本机二进制构建、`go vet ./internal/mirrors`、相关列表测试及 `go test -race ./internal/mirrors` 通过；本轮没有重复其他未变模块的全量 race 检查，上节全量结果仍对应上节版本。
+- 公共目录 Chromium E2E **1 passed（4.4s，测试 4.0s）**：现有搜索、筛选、排序、分页、文件名转义、公开下载及无脚本降级通过；1440/1024/736/375 布局无横向溢出、无脚本错误。已查看替换图标后的桌面/手机截图。
+- 本机 1000 项目录合成基准：Apple M2 Max / macOS arm64，74 次、15,966,083 ns/op（约 15.97ms）、7,538,722 B/op、158,965 allocs/op。包含 ResponseRecorder 保留 HTML 的成本，不代表峰值内存、网络吞吐或 Linux 性能，也不据此声称性能提升。
+- 官方图标首次读取因沙箱 DNS 权限失败，审批后读取；最初使用了不适用于仓库文件的 `file-regular.svg` 路径，404 后核实并改用仓库实际的 `assets/regular/<name>.svg`。正式导入完成，失败不计为通过。
+
+OCR 使用项目授权的本地 delegate preview/rule，无外部 LLM 调用或源码发送。当前工作区清单 **28/28 项覆盖，跳过 0**（21 个实现/工具/测试源码、YAML、6 项文档）；本轮重新审查变更的 5 个源码（listing.go、listing.html、listing.css、listing-icons.html、导入脚本）及 5 项文档，其余 18 项 SHA256 与此前 26 项审查结果一致并继承审查记录。默认排除的测试/文档均在覆盖记录中补充说明；检查 SVG 外链/脚本/模板注入、模板信任边界、授权信息、离线构建、分类兼容及 CSS 尺寸/颜色，无遗留确认的高/中问题。清单、规则、哈希及继承依据见 `../test-results/ocr-phosphor-preview.json`、`ocr-phosphor-rules.json`、`ocr-phosphor-review.json`；测试/性能输出为 `phosphor-go-race.txt`、`phosphor-e2e.txt`、`phosphor-benchmark.txt`。
+
+已构建 bin/mirrordock；现有服务未重启，新图标需运行新版二进制后生效。未执行 Linux 实机、sendfile syscall、生产镜像性能或 Firefox/Safari。测试仅使用临时目录、隔离本地端口和可控 rsync，没有修改用户镜像或凭证，没有推送或发布。

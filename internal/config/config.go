@@ -527,7 +527,6 @@ func (m *Manager) View() View {
 	configured := c.Settings.GitHub.Token != ""
 	proxyConfigured := c.Settings.GitHub.Proxy != ""
 	c.Settings.GitHub.Token = ""
-	c.Settings.GitHub.Proxy = ""
 	restart := c.Listen != m.startup.Listen || c.Port != m.startup.Port || c.Path != m.startup.Path || c.MirrorRoot != m.startup.MirrorRoot || c.TLS != m.startup.TLS || c.Auth != m.startup.Auth || c.Log != m.startup.Log
 	c.Auth.Password = ""
 	return View{Config: c, Revision: m.revision, TokenConfigured: configured, ProxyConfigured: proxyConfigured, RestartRequired: restart, File: m.file}

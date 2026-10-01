@@ -311,7 +311,25 @@ func (a *App) clearLogs(w http.ResponseWriter, r *http.Request) {
 func (a *App) info(w http.ResponseWriter, r *http.Request) {
 	_, offset := time.Now().In(a.location).Zone()
 	c := a.Config.Startup()
-	respond(w, 200, map[string]any{"timezone": a.location.String(), "utc_offset_seconds": offset, "version": "0.1.0", "go": strings.TrimPrefix(runtime.Version(), "go"), "tls": c.TLS.Cert != "", "publications": a.Mirrors.Publications(), "downloads": a.Mirrors.Stats(), "schedules": a.Runs.ScheduleInfo()})
+	file := a.Config.File()
+	data := config.Resolve(file, c.Path)
+	resolveOptional := func(value string) string {
+		if value == "" {
+			return ""
+		}
+		return config.Resolve(file, value)
+	}
+	respond(w, 200, map[string]any{
+		"timezone": a.location.String(), "utc_offset_seconds": offset, "version": "0.1.0",
+		"go": strings.TrimPrefix(runtime.Version(), "go"), "os": runtime.GOOS, "arch": runtime.GOARCH, "cpus": runtime.NumCPU(),
+		"tls": c.TLS.Cert != "", "publications": a.Mirrors.Publications(), "downloads": a.Mirrors.Stats(), "schedules": a.Runs.ScheduleInfo(),
+		"deployment": map[string]any{
+			"listen": net.JoinHostPort(c.Listen, strconv.Itoa(c.Port)), "data": data,
+			"database": filepath.Join(data, "data.sqlite"), "mirror_root": a.Mirrors.Root,
+			"log": map[string]string{"level": c.Log.Level, "format": c.Log.Format, "path": resolveOptional(c.Log.Path)},
+			"tls": map[string]string{"cert": resolveOptional(c.TLS.Cert), "key": resolveOptional(c.TLS.Key)},
+		},
+	})
 }
 func (a *App) checks(w http.ResponseWriter, r *http.Request) {
 	out := map[string]any{}

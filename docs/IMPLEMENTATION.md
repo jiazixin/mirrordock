@@ -12,13 +12,17 @@ MirrorDock 使用 Go 1.27.1、Vue 3 / TypeScript。配置字段沿用用户确�
 - `internal/observability`：根据顶层 log 构造 slog JSON/Text logger，info/标准输出/json 为默认，文件相对配置目录追加写入；启动前初始化，退出时关闭，HTTP 内部错误共用 logger。修改后重启生效，不改变任务日志及下载热路径。
 - `internal/app`：启动时加载 YAML 的 auth.username/auth.password，内存 bcrypt 校验值、12 小时 Cookie 会话、登录限流与同源写请求验证；管理 API、SSE、嵌入页面、HTTP/TLS 和连接无进展检测。无初始化码及设置密码 API，账号修改后重启生效。
 
+公开目录由 `internal/mirrors/listing.go` 与同模块嵌入的 HTML/CSS/JS 渲染，不经过 Vue 管理台或外部 CDN。目录请求对最多 1000 个条目读取 lstat 元数据，虚拟目录大小/时间未知时显示 `—`；目录 HEAD 只返回响应头。HTML 模板转义文件名及路径，脚本仅接收 DOM data 属性，CSP 以嵌入脚本的 SHA-256 哈希授权执行。当前已列出条目在浏览器内按名称/类型/大小/时间排序、搜索和筛选，每页 50 项；JavaScript 禁用时保留全部已列出链接。符号链接显示类型，不读取或回显目标。文件下载的 ServeContent/sendfile 路径不变。
+
+文件图标按用户选定的 Phosphor Regular 改为统一深灰、桌面 22px/手机 20px 的等比例 SVG。`scripts/import-directory-icons.py` 从固定提交导入 13 个官方 SVG、生成 14 个文件类型映射的 `listing-icons.html`；只允许 SVG 几何元素/属性及 none/currentColor，不接受脚本、外链或模板标记。模板保留官方 MIT 全文，构建与页面不需要联网。目录用 folder-simple，RPM/DEB 用 package，归档用 file-archive，JSON/XML 等用 file-code，签名用 file-lock，校验和用 file-magnifying-glass，MD/PY/INI 使用对应字母图标。
+
 目录布局依据根 `目录规范.md`，没有 `backend/`、额外根 Node 清单或第二份 Web 编译输出。
 
 ## 下载性能
 
 普通文件和单段 Range 保留真实 `*os.File` 和 `io.LimitedReader`，计数 ResponseWriter 实现并委托 `ReadFrom`。Go 标准库可继续选择 Linux HTTP/1.1 sendfile；TLS/HTTP2 使用标准库流式传输。下载热路径不读写 SQLite、YAML或正文日志，不整文件哈希，不动态压缩；ETag 对不可变代、路径、大小和时间生成，有界 LRU 8192 项。
 
-大文件下载池 256 条流、256 KiB 以下文件另有 64 条资源池、SSE 8 条、管理会话 32 条，TCP 连接按文件描述符限制预留资源并最多 4096；目录最多列出 1000 项。下载期间只有短路由引用锁，不持同步任务锁。每个请求固定发布根，引用释放后关闭旧根，旧代到期且无引用后才清理。大文件活动流超过 75% 内置容量时暂缓启动下一同步任务和旧代回收，已运行任务继续执行。同步进程在 Linux 尝试 nice=10 和 best-effort I/O priority=7，不改变下载连接。
+大文件下载池 256 条流、256 KiB 以下文件另有 64 条资源池、SSE 8 条、管理会话 32 条，TCP 连接按文件描述符限制预留资源并最多 4096；目录最多列出 1000 项，另设 8 条目录渲染资源池，饱和返回 503 和 Retry-After，不占包文件和仓库元数据的下载池。下载期间只有短路由引用锁，不持同步任务锁。每个请求固定发布根，引用释放后关闭旧根，旧代到期且无引用后才清理。大文件活动流超过 75% 内置容量时暂缓启动下一同步任务和旧代回收，已运行任务继续执行。同步进程在 Linux 尝试 nice=10 和 best-effort I/O priority=7，不改变下载连接。
 
 无进展监测每 30 秒读取一次活动 TCP 的内核统计。Linux 使用已确认字节、macOS 使用非重传发送字节；整个连接 5 分钟无进展才关闭，正常有进展的大文件不受固定总时长限制。HTTP/2 同连接有任一流持续传输时不会误关整条连接。这个机制不替换 TCP 连接或文件 Reader，因此不破坏 sendfile；不支持 socket 统计的平台不会假装具备该监测能力。
 
@@ -32,14 +36,14 @@ RPM metadata 支持 gzip/bzip2/xz/zstd，压缩索引流式读取，校验已声
 
 GitHub 的 `settings.github.proxy` 使用 Go 原生 HTTP/HTTPS/SOCKS5 代理，API 查询和资产下载共享本轮的连接池；每轮结束关闭空闲连接。空值直连，不使用代理环境变量，也不在故障时自动直连。代理认证遵循 URL userinfo，TLS 使用标准证书校验。代理与 Token 在每次实际执行时从当前配置读取，持久快照不存储二者。
 
-配置读取 API 不返回 Token 或完整代理地址。写配置时 `token_update=null` 保留已有 Token，空字符串显式清空；`proxy_update` 同样以 null 保留、空字符串清空；其他配置都带 revision。通过 UI 删除源只取消公开路由和计划，不删除既有镜像文件。删除/改变活动、暂停或中断任务的 dest 必须先取消该任务。
+配置读取 API 不返回 Token 或管理员密码；按用户授权返回完整代理地址供明文读取与修改，响应仍需鉴权且 no-store。写配置时 `token_update=null` 保留已有 Token，空字符串显式清空；`proxy_update` 同样以 null 保留、空字符串清空；其他配置都带 revision。通过 UI 删除源只取消公开路由和计划，不删除既有镜像文件。删除/改变活动、暂停或中断任务的 dest 必须先取消该任务。
 
 ## 实际范围
 
 运行记录当前按任务聚合，成功/失败页分页查询运行，详情显示 attempts、事件、日志和脱敏配置快照。GitHub 的资产完成事件保留在原始日志，尚未提供每资产的独立数据库检索页。reposync 的详细输出可查看日志，进度总量无法可靠取得时显示未知，不伪造百分比。
 
-参考图的布局已落实在 Vue 五个页面，采用钴蓝新 Logo 和本地 SVG 图标，不依赖远程字体/CDN。现版采用浅色主题。生产 Linux sendfile 系统调用、HTTPS/HTTP2 及完整 EL 包签名同步的实测边界以 `ACCEPTANCE.md` 为准。
+参考图的布局已落实在 Vue 六个页面，采用钴蓝新 Logo 和本地 SVG 图标，不依赖远程字体/CDN。现版采用浅色主题。生产 Linux sendfile 系统调用、HTTPS/HTTP2 及完整 EL 包签名同步的实测边界以 `ACCEPTANCE.md` 为准。
 
-系统设置分为同步执行、rsync、GitHub Release 三个页签，采用左侧说明、右侧输入布局，窄屏上下排列。监听、端口、数据库/日志目录、镜像根及 TLS 无页面输入，Config.Manager.Save 保留当前 YAML 中这些固定值；外部编辑仍由 revision 冲突保护，重新载入后需要重启。凭证字段切换页签保留草稿，保存后清空输入；显式清空时禁用对应输入。
+系统设置分为同步执行、rsync、GitHub Release 三个页签，采用左侧说明、右侧输入布局，窄屏上下排列。监听、端口、数据库/日志目录、镜像根及 TLS 无页面输入，Config.Manager.Save 保留当前 YAML 中这些固定值；外部编辑仍由 revision 冲突保护，重新载入后需要重启。Token 切换页签保留草稿，保存后清空输入，显式清空时禁用输入。代理直接回填当前地址，保存后继续显示，空字符串保存即直连。独立系统配置页 `/admin/system` 展示运行时字段和解析后的工具版本/权限状态，不显示 JSON；监听、存储、日志和 TLS 字段来自启动配置，重载后的待重启状态另行提示。
 
 GitHub API 与下载网络失败使用固定诊断消息，区分 DNS、TLS 证书、连接拒绝、EOF、代理认证及 GitHub 401/403/404/限流，不回显底层 URL 或上游任意正文。扫描和查询状态、失败摘要写入任务原始日志，未新增逐块日志；取消/截止错误保留 context sentinel，避免包装的签名 URL 泄露。认证 API 客户端禁止跨 origin 重定向，因为 SDK 的 auth transport 会对重定向重新附加 token；附件继续使用不含 token 的客户端。Token 校验拒绝空白与控制字符，不回显值。

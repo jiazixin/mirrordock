@@ -77,12 +77,12 @@ YAML
 用户已确定的 YAML 协议优先于目录规范的默认协议：不用 `CONFIG_FILE` 或环境变量覆盖字段，GitHub 凭证直接放 `settings.github.token`。没有 version、timezone、maxconcurrent、exec、token_env 或 records 字段。进程启动环境/系统时区决定调度与显示时区；可在启动环境设置 `TZ=Asia/Shanghai`，不使用浏览器自动时区。
 
 - `listen`、`port`、`path`、`mirror_root`、TLS、`auth`、`log` 修改后需要重启。其余修改对新任务/计划生效，当前任务保留脱敏配置快照。Token 在每次实际执行时读取当前配置。
-- 系统设置按“同步执行 / rsync / GitHub Release”分类，采用说明与输入分列的表单；监听、端口、数据/镜像目录和 TLS 仅在 YAML 修改，页面/API 保存其他配置时保留这些值。
+- 系统设置按“同步执行 / rsync / GitHub Release”分类，采用说明与输入分列的表单；独立“系统配置”页（`/admin/system`）展示配置文件、当前进程生效的监听/存储/TLS/日志与运行环境，自动检查本机工具和目录权限，以字段与状态展示结果；监听、端口、数据/镜像目录和 TLS 仅在 YAML 修改，页面/API 保存其他配置时保留这些值。
 - 页面写回 YAML，保留现有注释，通过 revision 防止覆盖另一位管理员/磁盘编辑；保存使用同目录临时文件、fsync 与 rename。外部修改后点击“重新载入配置”。文件及其父目录必须允许程序身份写入，不能只挂载不可替换的单个配置文件。
 - rsync 来源使用 `src1`、`src2`、`src3` 等，按数字升序尝试；连接/网络类错误切换，磁盘与权限类错误停止。失败切换和暂停继续共享默认 8h 累计运行预算，排队/暂停不计时，超时后先 TERM，最多 10 秒后 KILL 进程组。
 - `rsync.delete` 和保留 links/times/perms/hardlinks 默认 true。`limit_mb` 是每个上游任务的十进制 MB/s，0 不限速；不限制公开下载。UID/GID 可只填一项，0 有效；跨 UID 映射通常需要 root，程序不自动提权。
 - GitHub 最近 N 个 Release 按发布时间从新到旧，源内 `release_count: 0`/省略继承系统设置；仅下载附件，不请求自动源码 ZIP/TAR。glob 可限制架构。Token 读取 API 不返回值，留空输入框保留已有值，页面提供显式清空选项。
-- GitHub 的 `settings.github.proxy` 支持 `http://`、`https://`、`socks5://`、`socks5h://`，API 与附件共用；空字符串直连，不读取代理环境变量。sing-box 同机部署建议填其 HTTP/mixed 入口，如 `http://127.0.0.1:8081`，端口换成实际监听值；异机部署填可达地址。GitHub 的 HTTPS 会通过 HTTP CONNECT 隧道，`https://` 表示代理入口本身使用 TLS，需有效证书。支持 URL 中填写用户名/密码，特殊字符须 URL 编码；读取 API/运行快照不返回完整代理地址，页面留空保留、勾选清空后直连。代理不可用不会绕过代理；设置修改对下一次实际执行生效，不改变已建立的下载连接。
+- GitHub 的 `settings.github.proxy` 支持 `http://`、`https://`、`socks5://`、`socks5h://`，API 与附件共用；空字符串直连，不读取代理环境变量。sing-box 同机部署建议填其 HTTP/mixed 入口，如 `http://127.0.0.1:8081`，端口换成实际监听值；异机部署填可达地址。GitHub 的 HTTPS 会通过 HTTP CONNECT 隧道，`https://` 表示代理入口本身使用 TLS，需有效证书。支持 URL 中填写用户名/密码，特殊字符须 URL 编码；按用户要求，受登录保护的配置读取 API 返回完整代理地址，页面明文回填并可直接修改，留空保存后直连；运行快照、审计和日志仍不保存代理凭证。代理不可用不会绕过代理；设置修改对下一次实际执行生效，不改变已建立的下载连接。
 - GitHub 查询失败在运行详情和原始日志中区分认证/权限、限流、DNS、连接拒绝、TLS 和 EOF，不输出凭证或签名下载 URL。`https://` 代理必须有 TLS 入口；HTTP/mixed 使用 `http://`，SOCKS 入口使用 `socks5://`/`socks5h://`，GitHub 加速网站不能直接当作正向代理地址。
 - cron 使用五字段和程序时区；同源已有排队、运行、暂停或中断任务时跳过重叠触发。内置两个同步 worker，不增加并发配置字段。
 - 数据库、配置、TLS 私钥与镜像根必须隔离；dest 必须规范相对目录，不能包含保留的 admin/api/favicon.ico/内部目录或互相嵌套。服务仅公开配置中的已发布源，不把整个磁盘根暴露出来。
@@ -90,6 +90,10 @@ YAML
 TLS 两项留空提供 HTTP，填齐提供同端口 HTTPS。证书链和私钥必须有效且匹配；配置或证书更换后重启。Go 原生 TLS 支持 HTTP/2，HTTPS 不宣称使用 sendfile。
 
 ## 下载与发布
+
+公开目录使用浅灰工具栏与白色文件表格，显示名称、类型、大小及修改时间，提供统一的目录、RPM/DEB、压缩包、元数据、签名和校验和图标。支持当前目录搜索、类型筛选、排序及每页 50 项分页；目录最多读取 1000 项，超出时明确提示，其他文件仍可通过完整路径下载。修改时间使用程序启动时区；禁用 JavaScript 时仍能浏览已列出的全部链接。
+
+文件列表使用 [Phosphor Icons](https://github.com/phosphor-icons/core) 的 Regular 单色 SVG，固定上游提交，MIT 授权全文随 `internal/mirrors/listing-icons.html` 一起嵌入。图标无需 CDN 或额外 npm 依赖；只在更新图标源码时运行 `python3 scripts/import-directory-icons.py`（需访问官方仓库），正常构建不联网下载图标。
 
 `/` 为公开目录首页，`/<dest>/` 直接提供镜像，支持 GET、HEAD、单段/多段 Range、ETag 与条件请求；未知镜像文件返回 404。管理 API 使用 Cookie 鉴权及同源写入验证。公开文件强制附件下载、nosniff 和 sandbox，私有工作目录、续传片段、数据库和配置不对外提供。
 

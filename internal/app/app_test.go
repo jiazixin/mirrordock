@@ -145,12 +145,15 @@ func TestAdminAuthenticationWritebackAndPublicIsolation(t *testing.T) {
 	res = request("GET", "/api/config", "", "")
 	b, _ = io.ReadAll(res.Body)
 	res.Body.Close()
-	if strings.Contains(string(b), "secret-token") || strings.Contains(string(b), "proxy-password") || strings.Contains(string(b), "correct password 123") || strings.Contains(string(b), `"password"`) {
+	if strings.Contains(string(b), "secret-token") || strings.Contains(string(b), "correct password 123") || strings.Contains(string(b), `"password"`) {
 		t.Fatal("token leaked")
 	}
 	var view config.View
 	if err = json.Unmarshal(b, &view); err != nil {
 		t.Fatal(err)
+	}
+	if view.Config.Settings.GitHub.Proxy != "http://user:proxy-password@127.0.0.1:8081" {
+		t.Fatal("admin view omitted configured proxy")
 	}
 	view.Config.Settings.GitHub.ReleaseCount = 8
 	view.Config.Auth.Username = "browser-override"
@@ -297,5 +300,60 @@ func TestTCPStallWatcherPreservesActiveProgress(t *testing.T) {
 	client.SetReadDeadline(time.Now().Add(time.Second))
 	if _, err = client.Read(buf); err != io.EOF {
 		t.Fatal("stalled connection not closed", err)
+	}
+}
+
+func TestSystemInfoUsesStartupDeployment(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "config.yaml")
+	original := "listen: 127.0.0.1\nport: 8080\npath: ./data\nmirror_root: ./mirror\nauth:\n  username: operator\n  password: startup-password\nsettings:\n  github:\n    token: startup-token\n    proxy: http://user:proxy-password@127.0.0.1:8081\nsources: []\n"
+	if err := os.WriteFile(file, []byte(original), 0600); err != nil {
+		t.Fatal(err)
+	}
+	a, err := Open(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close(context.Background())
+	updated := strings.ReplaceAll(original, "8080", "8090")
+	updated = strings.ReplaceAll(updated, "./data", "./new-data")
+	if err := os.WriteFile(file, []byte(updated), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Config.Reload(); err != nil {
+		t.Fatal(err)
+	}
+	if !a.Config.View().RestartRequired {
+		t.Fatal("deployment change did not require restart")
+	}
+	recorder := httptest.NewRecorder()
+	a.info(recorder, httptest.NewRequest("GET", "/api/system/info", nil))
+	var info struct {
+		OS         string `json:"os"`
+		Arch       string `json:"arch"`
+		CPUs       int    `json:"cpus"`
+		Deployment struct {
+			Listen     string     `json:"listen"`
+			Data       string     `json:"data"`
+			Database   string     `json:"database"`
+			MirrorRoot string     `json:"mirror_root"`
+			Log        config.Log `json:"log"`
+			TLS        config.TLS `json:"tls"`
+		} `json:"deployment"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &info); err != nil {
+		t.Fatal(err)
+	}
+	if info.OS == "" || info.Arch == "" || info.CPUs < 1 {
+		t.Fatal("runtime fields missing")
+	}
+	canonicalDir := filepath.Dir(a.Config.File())
+	if info.Deployment.Listen != "127.0.0.1:8080" || info.Deployment.Data != filepath.Join(canonicalDir, "data") || info.Deployment.Database != filepath.Join(canonicalDir, "data", "data.sqlite") || info.Deployment.MirrorRoot != filepath.Join(canonicalDir, "mirror") || info.Deployment.Log != config.Defaults().Log || info.Deployment.TLS != (config.TLS{}) {
+		t.Fatal("runtime deployment does not match startup configuration")
+	}
+	for _, secret := range []string{"startup-password", "startup-token", "proxy-password"} {
+		if strings.Contains(recorder.Body.String(), secret) {
+			t.Fatal("deployment info exposed a credential")
+		}
 	}
 }
