@@ -4,7 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 
@@ -17,6 +19,7 @@ CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY);
 CREATE TABLE IF NOT EXISTS runs (id INTEGER PRIMARY KEY AUTOINCREMENT, source_id TEXT NOT NULL, state TEXT NOT NULL, created_at TEXT NOT NULL, data BLOB NOT NULL);
 CREATE INDEX IF NOT EXISTS runs_source_state ON runs(source_id,state);
 CREATE INDEX IF NOT EXISTS runs_state_id ON runs(state,id DESC);
+CREATE INDEX IF NOT EXISTS runs_created_at ON runs(created_at);
 CREATE TABLE IF NOT EXISTS run_results (id INTEGER PRIMARY KEY, data BLOB NOT NULL);
 CREATE TABLE IF NOT EXISTS publications (source_id TEXT PRIMARY KEY, data BLOB NOT NULL);
 CREATE TABLE IF NOT EXISTS app_state (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -33,9 +36,15 @@ CREATE INDEX IF NOT EXISTS notifications_due ON notifications(state,next_at,id);
 
 INSERT OR IGNORE INTO schema_migrations(version) VALUES(1);
 INSERT OR IGNORE INTO schema_migrations(version) VALUES(2);
+INSERT OR IGNORE INTO schema_migrations(version) VALUES(3);
 `
 
-type Store struct{ DB *sql.DB }
+type Store struct {
+	DB *sql.DB
+	// ReadDB isolates bounded analytics queries from the single writer pool.
+	// WAL allows a consistent read snapshot while task facts continue to persist.
+	ReadDB *sql.DB
+}
 
 func Open(dir string) (*Store, error) {
 	if err := os.MkdirAll(dir, 0700); err != nil {
@@ -54,9 +63,26 @@ func Open(dir string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
-	return &Store{DB: db}, nil
+	file, err := filepath.Abs(filepath.Join(dir, "data.sqlite"))
+	if err != nil {
+		db.Close()
+		return nil, err
+	}
+	readURL := &url.URL{Scheme: "file", Path: file, RawQuery: "mode=ro"}
+	reader, err := sql.Open("sqlite", readURL.String())
+	if err != nil {
+		db.Close()
+		return nil, err
+	}
+	reader.SetMaxOpenConns(1)
+	if _, err = reader.Exec("PRAGMA busy_timeout=5000; PRAGMA query_only=ON;"); err != nil {
+		reader.Close()
+		db.Close()
+		return nil, err
+	}
+	return &Store{DB: db, ReadDB: reader}, nil
 }
-func (s *Store) Close() error { return s.DB.Close() }
+func (s *Store) Close() error { return errors.Join(s.ReadDB.Close(), s.DB.Close()) }
 func (s *Store) State(key string) (string, error) {
 	var v string
 	err := s.DB.QueryRow("SELECT value FROM app_state WHERE key=?", key).Scan(&v)

@@ -468,3 +468,12 @@ SQLite `run_results` 在任务进入首次终态时，与任务结果同一事�
 每次最多 10 秒，响应最多 64 KiB，禁止重定向，所有适配按业务响应校验；Bark 提取 Key 并保留服务路径前缀转换为 /push JSON，按官方协议传字符串 isArchive="1"，钉钉按 timestamp + 换行 + secret 的 HMAC-SHA256/base64 签名协议发送。重试总计 3 次，退避 30/60 秒；启动恢复未确认发送态，可能重复送达。关闭与仅失败过滤停止等待项；已领取开始发送的请求允许完成。浏览器登录同步时区，使用内嵌 tzdata，正文快照包含当时偏移与时区名称。
 
 通知 API 路由为 GET /api/notifications、PUT /api/notifications/{channel}、POST /api/notifications/{channel}/test、GET /api/notifications/records、POST /api/notifications/timezone，全部复用现有 Cookie、同源及 CSRF 防护。测试使用已保存配置，可在关闭自动通知时执行，直接返回独立测试结果；自动通知经持久 worker 队列发送。功能和备份操作见 README，检查范围以 ACCEPTANCE 为准。
+
+
+## 14. 运行分析（2026-10-01）
+
+侧栏分析分组新增 `/admin/analytics/rsync` 和 `/admin/analytics/github`。共享 `web/src/features/analytics/Analytics.vue` 与响应式 SVG 趋势组件，沿用钴蓝品牌、白底细边框和现有字体；支持 7/30/90 天及源筛选、手动刷新。统计卡、运行堆叠柱图/处理量折线/耗时折线、结果环图、错误码条形图和前 20 源排行；Rsync 来源可靠性、GitHub 资产完成/复用与重试补充指标。暂无数据、无样本和失败重试有明确状态；旧请求取消并防止覆盖新筛选，卸载取消，无新轮询或图表依赖。
+
+受鉴权 GET `/api/analytics?type=rsync|github_release&days=7|30|90&source=<id>` 投影 SQLite runs，按创建日期归入启动时区，完整范围聚合，不读取日志或向 Go 载入完整配置快照，不返回 URL/凭证/原始错误。来源与错误分别限制 20/8 项，日序列固定最多 90 项；独立只读连接单并发、WAL 一致事务，创建时间索引和 5 秒请求超时，不占用持久任务单写连接，不更改公开下载路径。数据库初始化增加 schema version 3 时间索引，保留旧记录。
+
+成功率 = 成功 /（成功 + 失败 + 超时 + 中断），平均耗时只取已开始且有正累计耗时的这些结果，不含排队/暂停；取消和未结束单列。文件/资产/字节只取成功任务最终快照，不推算真实网络量、文件失败数、复用节省流量或 Release 数。GitHub 复用属于完成数；跨任务同资产允许重复计数。Rsync 备用源成功依据最终候选索引，失败尝试排除 PAUSED/PAUSING/CANCELLED/INTERRUPTED；自动重试任务依据持久 retry_count。清理日志与删除源定义不删除统计事实。设计/检查计划见 [运行分析计划](plans/2026-10-01-sync-analytics.md)，实际验证见 ACCEPTANCE。

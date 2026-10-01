@@ -169,6 +169,7 @@ func (a *App) Handler() http.Handler {
 	api.HandleFunc("GET /api/config", func(w http.ResponseWriter, r *http.Request) { respond(w, 200, a.Config.View()) })
 	api.HandleFunc("PUT /api/config", a.saveConfig)
 	api.HandleFunc("POST /api/config/reload", a.reload)
+	api.HandleFunc("GET /api/analytics", a.analytics)
 	api.HandleFunc("GET /api/runs", a.listRuns)
 	api.HandleFunc("GET /api/runs/{id}", a.getRun)
 	api.HandleFunc("POST /api/sources/{id}/run", a.enqueue)

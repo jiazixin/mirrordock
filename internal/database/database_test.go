@@ -1,7 +1,9 @@
 package database
 
 import (
+	"context"
 	"testing"
+	"time"
 )
 
 func TestDurableRecords(t *testing.T) {
@@ -65,5 +67,35 @@ func TestRunPaginationFiltersBeforeCounting(t *testing.T) {
 	rows, total, err = s.ListRuns("succeeded", "source", 50, 0, RunFilter{From: "2026-10-02T00:00:00Z"})
 	if err != nil || total != 0 || len(rows) != 0 {
 		t.Fatalf("empty page: rows=%d total=%d err=%v", len(rows), total, err)
+	}
+}
+
+func TestReadSnapshotDoesNotOccupyWriterAndCannotWrite(t *testing.T) {
+	s, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	tx, err := s.ReadDB.BeginTx(t.Context(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	var before int
+	if err := tx.QueryRow("SELECT COUNT(*) FROM runs").Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	// A held read transaction must not occupy the writer connection or block WAL.
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	if _, err := s.DB.ExecContext(ctx, "INSERT INTO runs(source_id,state,created_at,data) VALUES('fixture','queued','now','{}')"); err != nil {
+		t.Fatal("reader blocked writes", err)
+	}
+	var during int
+	if err := tx.QueryRow("SELECT COUNT(*) FROM runs").Scan(&during); err != nil || during != before {
+		t.Fatal("inconsistent read snapshot", during, err)
+	}
+	if _, err := tx.Exec("DELETE FROM runs"); err == nil {
+		t.Fatal("read-only pool allowed writes")
 	}
 }

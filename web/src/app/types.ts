@@ -13,3 +13,14 @@ export interface Run { id: number; source_id: string; name: string; type: Source
 export interface Publication { source_id: string; dest: string; current: { id: string; directory: string; published_at: string }; previous: unknown[] }
 export interface SystemInfo { timezone: string; utc_offset_seconds: number; version: string; go: string; os: string; arch: string; cpus: number; tls: boolean; deployment: { listen: string; data: string; database: string; mirror_root: string; log: Configuration['log']; tls: Configuration['tls'] }; publications: Publication[]; downloads: { active: number; requests: number; bytes: number; capacity: number }; schedules: Record<string, string> }
 export interface SystemChecks { rsync: { available: boolean; version: string }; dnf: { available: boolean; version: string }; config_writable: boolean; mirror_writable: boolean; github_token_configured: boolean; github_proxy_configured: boolean }
+export interface AnalyticsStats {
+  runs: number; succeeded: number; failed: number; cancelled: number; active: number
+  duration_samples: number; elapsed_seconds: number; bytes: number; files: number; completed: number; reused: number
+  attempts: number; failed_attempts: number; retried_runs: number; fallback_succeeded: number
+}
+export interface AnalyticsDay extends AnalyticsStats { date: string }
+export interface AnalyticsSource extends AnalyticsStats { id: string; name: string }
+export interface Analytics {
+  type: 'rsync' | 'github_release'; from: string; until: string; timezone: string
+  summary: AnalyticsStats; days: AnalyticsDay[]; sources: AnalyticsSource[]; errors: { code: string; count: number }[]
+}

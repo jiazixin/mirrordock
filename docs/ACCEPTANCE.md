@@ -471,3 +471,26 @@ OCR 沿用项目已记录的外部审批限制，使用 `open-code-review` / `op
 审查使用项目已有外部 OCR LLM 审批受阻后允许的本地 delegate preview/rule 工作流，由当前 Codex 按规则审查全部 **14/14 修改源码**（8 个生产文件、6 个测试文件），另核对 YAML 与 5 项 Markdown，总计 **20/20，跳过 0，覆盖 100%**。默认 preview 的 9 项均审查；默认排除的 6 项测试（default_path）补充审查，5 项文档（unsupported_ext）核对。已修复小数截断、单次请求超时误作为任务总超时、DNF 永久错误优先级和 Rsync 认证错误被退出摘要覆盖的问题；无遗留确认的高/中严重度问题。覆盖清单、排除原因、规则与最终文件 SHA256 见 `../test-results/retry-ocr-preview.json`、`retry-ocr-rules.json`、`retry-ocr-review.json`。本轮未执行外部 OCR LLM 调用，未向外部服务发送源码。
 
 本轮未新增性能测量：公开下载热路径、受限文件根及发布代实现未修改；既有合成吞吐不能当成本次结果。Linux 实机 DNF/发行版签名同步、真实 GitHub/代理长时间网络中断、生产吞吐与 sendfile syscall 未验证。本轮所有测试使用临时配置/数据库/镜像目录、随机本机端口和可控上游；没有修改用户配置、镜像或凭证，未启动完整发行版同步、创建子代理、推送或发布。
+
+## 2026-10-01：Rsync 与 GitHub Release 运行分析
+
+本轮开始工作区干净。侧栏新增“分析”分组与 Rsync / GitHub Release 两页，支持近 7/30/90 天、同步源筛选和手动刷新。公共统计为运行次数、成功率、平均累计执行耗时和成功任务处理量；图表包含按日堆叠运行次数、处理量/耗时折线、结果环图、错误码条形图、前 20 源排行。Rsync 展示来源/失败尝试、备用源最终成功和自动重试任务；GitHub 展示已验证资产、新增/续传与完整复用分布、重试任务。保留现有字体、钴蓝品牌和紧凑 UI，没有新增 npm 依赖或轮询。
+
+数据按任务创建日期归入启动时区（含今天截至更新时间），SQL 汇总完整窗口，日志清理和源配置删除不删除事实。成功率分母包含成功/失败/超时/中断，排除取消及未结束；耗时只统计已开始且有正累计时长的这些结果，不含排队/暂停。文件/资产/字节只累计成功任务最终快照，未知统计不推算；处理量不是实际网络流量，GitHub 复用包含在完成数中，同一资产可跨任务重复计数。接口只返回聚合值、源标识/历史名称和错误码，不返回配置快照、原始错误、URL、Token 或代理认证。时间边界兼容整秒与纳秒 UTC 时间字符串、启动时区和 DST。
+
+数据库增加创建时间索引（schema version 3）和独立单连接只读池，WAL 一致事务汇总日序列、源排行和错误；请求 context 最长 5 秒，只读池等待计入超时。Go 只保留最多 90 天、20 源、8 错误的结果，SQL 扫描/聚合的工作量仍随窗口内记录规模增加，未声称 SQLite 总内存或响应时间固定。专门测试确认持有只读快照时写连接仍能保存事实、快照不随并发写入改变、只读池拒绝写入。公开下载处理链、受限文件根和 sendfile/TLS 路径未改。
+
+最终检查：
+
+- `npm --prefix web run build`：Vue 类型检查/Vite 构建通过，唯一输出 `web/dist/`；[构建日志](../test-results/analytics-build-final.txt)。CSS 47.30 kB / gzip 9.97 kB，JS 211.18 kB / gzip 75.82 kB，是产物大小而非渲染基准。
+- Go **1.27.1 darwin/arm64**：`GOCACHE="$PWD/.cache/go-build" MIRRORDOCK_TEST_RSYNC="$PWD/.cache/rsync/rsync-3.5.1/rsync" go test -race ./...` 全套通过；app 45.680s、database 2.219s、runs 8.314s，其余包见 [竞态日志](../test-results/analytics-go-race.txt)，未改包允许复用成功缓存。`go vet ./...` 通过（[日志](../test-results/analytics-vet.txt)），`git diff --check` 通过。
+- Web 预构建后 `go build -trimpath -o bin/mirrordock ./cmd/mirrordock` 和 `/private/tmp/mirrordock-analytics` 嵌入构建通过，未重启用户服务。
+- 新 Go 测试覆盖超过分页上限的 125 条成功任务、完整窗口计数、成功/超时/取消/暂停排除口径、来源尝试/重试/备用源、GitHub 完成与复用、不存在/历史源筛选、未来纳秒/窗口前纳秒排除、午夜/DST、返回边界、鉴权/参数/SQL 参数化和无敏感字段。源/错误排行分别限制 20/8 项。
+- `MIRRORDOCK_TEST_BINARY=/private/tmp/mirrordock-analytics MIRRORDOCK_TEST_RSYNC="$PWD/.cache/rsync/rsync-3.5.1/rsync" npm --prefix web run test:e2e -- --output=test-results/analytics-final`：**8 passed（57.5s）**，见 [完整浏览器回归](../test-results/analytics-e2e-all.txt)。分析使用真实临时服务验证空结果，再拦截聚合 API 注入合成图表数据；不是真实 GitHub/生产历史数据。覆盖 7/30/90 天、源筛选/过期请求、图表指标切换、聚焦日期、资产复用口径、路由切换、错误重试及 1440/1024/736/375/320px 无整页横向溢出。既有回归覆盖隔离 rsync 失败切换/发布、记录/分页/日志/通知/提示和公开目录。
+- 已查看最终桌面两页及 320px 手机截图：[Rsync](../web/test-results/analytics-final/analytics-analytics-charts-c67ff-pty-error-and-mobile-states/rsync-desktop.png)、[GitHub](../web/test-results/analytics-final/analytics-analytics-charts-c67ff-pty-error-and-mobile-states/github-desktop.png)、[手机](../web/test-results/analytics-final/analytics-analytics-charts-c67ff-pty-error-and-mobile-states/github-320.png)。首轮截图发现窄屏 SVG 坐标文字随整体缩放过小，已用 ResizeObserver 按容器宽度绘制，再复测；次数轴使用整数刻度。首次 Chromium 因沙箱 MachPort 权限失败，测试未执行（[初次失败日志](../test-results/analytics-e2e-initial.txt)），经自动审批允许隔离浏览器/随机本机端口后通过，不将初次失败记为通过。
+
+性能数据：`go test ./internal/runs -run '^$' -bench BenchmarkAnalytics5000Runs -benchmem -benchtime=3x`，Apple M2 Max / macOS / Go 1.27.1 / 临时 SQLite / 5000 条合成成功任务 / 30 天 / 单源，最终三次平均 **953.30 ms/op、2,341,874 B/op、35,216 allocs/op**（[日志](../test-results/analytics-bench-final.txt)）。这是本机完整分析函数的平均耗时与累计分配，不是 p95、峰值内存、Linux/生产响应时延或镜像吞吐保证。记录规模增大可能命中查询超时，页面提示重试/缩小范围；没有测量生产历史、高并发管理请求或同步下载竞争下的分析延迟。
+
+OCR 沿用项目已经记录的外部 LLM 自动审批限制，使用 `open-code-review` / `open-code-review-delegate` 本地 preview/rule，由当前 Codex 逐文件审查；本轮未调用外部 OCR LLM、未发送源码。全部 **13/13 新增或修改源码**（9 个生产文件、4 个测试）及 4 份文档核对，总计 **17/17、跳过 0、覆盖 100%**。OCR 的 4 个 `default_path` 测试排除项已补充审查，4 个 `unsupported_ext` 文档另行核对。审查聚合与窗口一致性、结果口径、SQL 参数化、只读池/事务与关闭、上下文超时、凭证投影、路由鉴权、Vue 文本转义/请求竞态/卸载、SVG 轴/手机可读性、测试隔离。已修复午夜小数秒边界、分析占用写连接和手机坐标过小，无遗留确认的高/中严重度正确性、安全或性能问题。清单、规则、覆盖与最终 SHA256 见 [preview](../test-results/analytics-ocr-preview.json)、[rules](../test-results/analytics-ocr-rules.json)、[审查报告](../test-results/analytics-ocr-review.json)。
+
+未验证：Linux 实机/sendfile syscall、真实发行版同步/签名验收、生产吞吐、真实 GitHub/代理历史数据、Safari/Firefox，以及用户部署服务重启后的显示。本轮未执行新下载性能基准；没有修改用户配置/镜像/凭证，未创建子代理、推送、发布或发送外部消息。

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { useRoute } from 'vue-router'
-import { FolderSync, Layers3, ScrollText, Clock3, Settings2, LogOut, Menu, ExternalLink } from '@lucide/vue'
+import { FolderSync, Layers3, ScrollText, Clock3, Settings2, LogOut, Menu, ExternalLink, ChartColumn, ChartNoAxesCombined } from '@lucide/vue'
 import { ref, onBeforeUnmount } from 'vue'
 import ToastStack from '../components/ToastStack.vue'
 import { state, dismissToast } from '../app/state'
@@ -9,7 +9,7 @@ const emit = defineEmits<{ logout: [] }>()
 const route = useRoute()
 const mobile = ref(false)
 onBeforeUnmount(() => { state.toasts = [] })
-const links = [{ path: '/sources', label: '同步源', icon: FolderSync, group: '工作台' }, { path: '/batches', label: '批次记录', icon: Layers3, group: '任务记录' }, { path: '/records', label: '运行记录', icon: ScrollText }, { path: '/schedules', label: '计划管理', icon: Clock3, group: '运行管理' }, { path: '/settings', label: '系统设置', icon: Settings2, group: '系统' }]
+const links = [{ path: '/sources', label: '同步源', icon: FolderSync, group: '工作台' }, { path: '/batches', label: '批次记录', icon: Layers3, group: '任务记录' }, { path: '/records', label: '运行记录', icon: ScrollText }, { path: '/schedules', label: '计划管理', icon: Clock3, group: '运行管理' }, { path: '/analytics/rsync', label: 'Rsync 分析', icon: ChartColumn, group: '分析' }, { path: '/analytics/github', label: 'GitHub Release 分析', icon: ChartNoAxesCombined }, { path: '/settings', label: '系统设置', icon: Settings2, group: '系统' }]
 </script>
 
 <template>
