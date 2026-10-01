@@ -5,21 +5,20 @@ import (
 	"crypto/subtle"
 	"encoding/base64"
 	"errors"
-	"golang.org/x/crypto/bcrypt"
-	"mirrordock/internal/database"
+	"mirrordock/internal/config"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
-	"unicode/utf8"
+
+	"golang.org/x/crypto/bcrypt"
 )
 
 type session struct{ expires time.Time }
 type auth struct {
 	mu           sync.Mutex
-	store        *database.Store
-	setupCode    string
-	passwordHash string
+	username     string
+	passwordHash []byte
 	sessions     map[string]session
 	attempts     int
 	window       time.Time
@@ -32,16 +31,12 @@ func randomToken() string {
 	}
 	return base64.RawURLEncoding.EncodeToString(b)
 }
-func newAuth(store *database.Store) (*auth, error) {
-	hash, err := store.State("admin_password")
+func newAuth(credentials config.Auth) (*auth, error) {
+	hash, err := bcrypt.GenerateFromPassword([]byte(credentials.Password), 12)
 	if err != nil {
 		return nil, err
 	}
-	a := &auth{store: store, passwordHash: hash, sessions: map[string]session{}}
-	if hash == "" {
-		a.setupCode = randomToken()
-	}
-	return a, nil
+	return &auth{username: credentials.Username, passwordHash: hash, sessions: map[string]session{}}, nil
 }
 func (a *auth) authorized(r *http.Request) bool {
 	cookie, err := r.Cookie("mirrordock_session")
@@ -57,7 +52,6 @@ func (a *auth) authorized(r *http.Request) bool {
 	delete(a.sessions, cookie.Value)
 	return false
 }
-func (a *auth) initialized() bool { a.mu.Lock(); defer a.mu.Unlock(); return a.passwordHash != "" }
 func (a *auth) limited() bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -69,32 +63,9 @@ func (a *auth) limited() bool {
 	a.attempts++
 	return a.attempts > 10
 }
-func (a *auth) setup(code, password string) error {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if a.passwordHash != "" || subtle.ConstantTimeCompare([]byte(a.setupCode), []byte(code)) != 1 {
-		return errors.New("初始化码无效或已完成初始化")
-	}
-	if utf8.RuneCountInString(password) < 12 || len(password) > 72 {
-		return errors.New("密码至少 12 个字符，最多 72 字节")
-	}
-	hash, err := bcrypt.GenerateFromPassword([]byte(password), 12)
-	if err != nil {
-		return err
-	}
-	if err = a.store.SetState("admin_password", string(hash)); err != nil {
-		return err
-	}
-	a.passwordHash = string(hash)
-	a.setupCode = ""
-	return nil
-}
-func (a *auth) login(password string) (string, error) {
-	a.mu.Lock()
-	hash := a.passwordHash
-	a.mu.Unlock()
-	if hash == "" || len(password) > 72 || bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)) != nil {
-		return "", errors.New("密码错误")
+func (a *auth) login(username, password string) (string, error) {
+	if len(password) > 72 || bcrypt.CompareHashAndPassword(a.passwordHash, []byte(password)) != nil || subtle.ConstantTimeCompare([]byte(a.username), []byte(username)) != 1 {
+		return "", errors.New("用户名或密码错误")
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()

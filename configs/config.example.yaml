@@ -13,6 +13,12 @@ mirror_root: "/srv/mirrors" # 镜像根目录；下载路径直接为 /<dest>/�
 # 下载缓存、缓冲与资源准入采用内置策略；不受同步任务并发数或 rsync limit_mb 限制。
 # 性能路径及压测目标见 docs/DESIGN.md 的 ADR-010；实测范围见 docs/ACCEPTANCE.md。
 
+# 管理账号由配置文件定义，修改后重启生效；页面保存其他设置会保留此段。
+# username 与 password 均不能为空；password 最多 72 字节，不返回读取 API。
+auth:
+  username: "admin"
+  password: "请替换为你的密码"
+
 # 两项都留空时使用 HTTP；两项填齐时在同一端口启用 HTTPS。
 # 只填写一项、证书与私钥不匹配或文件不可读时，启动报错。
 # 证书路径相对于配置文件目录；TLS 相关配置修改后重启生效。

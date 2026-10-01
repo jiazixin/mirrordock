@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json/v2"
 	"errors"
 	"os"
 	"path/filepath"
@@ -20,7 +21,7 @@ func TestDefaultsAndCandidates(t *testing.T) {
 func TestWritebackConflictAndSecrets(t *testing.T) {
 	dir := t.TempDir()
 	file := filepath.Join(dir, "config.yaml")
-	b := []byte("# keep me\nlisten: 127.0.0.1\nport: 8080\npath: ./data\nmirror_root: ./mirror\nsettings:\n  github:\n    token: secret\n    proxy: http://user:proxy-secret@127.0.0.1:8081\nsources: []\n")
+	b := []byte("# keep me\nlisten: 127.0.0.1\nport: 8080\npath: ./data\nmirror_root: ./mirror\nauth:\n  username: operator\n  password: yaml-auth-secret\nsettings:\n  github:\n    token: secret\n    proxy: http://user:proxy-secret@127.0.0.1:8081\nsources: []\n")
 	if err := os.WriteFile(file, b, 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -29,6 +30,13 @@ func TestWritebackConflictAndSecrets(t *testing.T) {
 		t.Fatal(err)
 	}
 	v := m.View()
+	if v.Config.Auth.Password != "" || v.RestartRequired || m.Current().Auth.Password != "yaml-auth-secret" || m.Startup().Auth.Password != "yaml-auth-secret" {
+		t.Fatal("authentication lost during cloning, leaked, or incorrectly requires restart")
+	}
+	encoded, err := json.Marshal(m.Current())
+	if err != nil || strings.Contains(string(encoded), "yaml-auth-secret") || strings.Contains(string(encoded), `"password"`) {
+		t.Fatal("JSON exposed auth password", err)
+	}
 	if v.Config.Settings.GitHub.Token != "" || !v.TokenConfigured {
 		t.Fatal("token leaked")
 	}
@@ -37,11 +45,12 @@ func TestWritebackConflictAndSecrets(t *testing.T) {
 	}
 	c := m.Current()
 	c.Port = 8091
+	c.Auth = Auth{Username: "browser-override", Password: "browser-password"}
 	if err = m.Save(c, v.Revision, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	got, _ := os.ReadFile(file)
-	if !strings.Contains(string(got), "# keep me") || !strings.Contains(string(got), "secret") || !strings.Contains(string(got), "proxy-secret") {
+	if !strings.Contains(string(got), "# keep me") || !strings.Contains(string(got), "secret") || !strings.Contains(string(got), "proxy-secret") || !strings.Contains(string(got), "yaml-auth-secret") || !strings.Contains(string(got), "username: operator") {
 		t.Fatal(string(got))
 	}
 	if !errors.Is(m.Save(c, v.Revision, nil, nil), ErrConflict) {
@@ -65,6 +74,67 @@ func TestWritebackConflictAndSecrets(t *testing.T) {
 	if err = m.Save(m.View().Config, m.View().Revision, nil, new("")); err != nil || m.View().ProxyConfigured {
 		t.Fatal("cannot clear proxy", err)
 	}
+	if m.Current().Auth != (Auth{Username: "operator", Password: "yaml-auth-secret"}) {
+		t.Fatal("unrelated saves changed account credentials")
+	}
+}
+
+func TestAuthenticationValidation(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "config.yaml")
+	for _, auth := range []Auth{{}, {Username: "admin"}, {Password: "test-secret"}, {Username: " admin", Password: "test-secret"}, {Username: "admin\n", Password: "test-secret"}, {Username: "admin\x1b", Password: "test-secret"}, {Username: strings.Repeat("a", 129), Password: "test-secret"}, {Username: "admin", Password: "  "}, {Username: "admin", Password: strings.Repeat("a", 73)}, {Username: "admin", Password: strings.Repeat("密", 25)}} {
+		c := Defaults()
+		c.Auth = auth
+		c.Path, c.MirrorRoot = "./data", "./mirror"
+		err := c.Validate(file)
+		if err == nil || strings.Contains(err.Error(), "test-secret") {
+			t.Fatal("invalid authentication accepted or secret exposed")
+		}
+	}
+	c := Defaults()
+	c.Auth = Auth{Username: "管理员", Password: "请替换为你的密码"}
+	c.Path, c.MirrorRoot = "./data", "./mirror"
+	if err := c.Validate(file); err != nil {
+		t.Fatal("non-ASCII credentials rejected", err)
+	}
+	if _, err := Parse([]byte("listen: 127.0.0.1\npath: ./data\nmirror_root: ./mirror\nsources: []\n"), file); err == nil {
+		t.Fatal("missing authentication accepted")
+	}
+}
+
+func TestAuthenticationReloadAndWriteback(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "config.yaml")
+	text := "listen: 127.0.0.1\npath: ./data\nmirror_root: ./mirror\nauth:\n  username: operator\n  password: first-secret # preserve account comment\nsources: []\n"
+	if err := os.WriteFile(file, []byte(text), 0600); err != nil {
+		t.Fatal(err)
+	}
+	m, err := Open(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated := strings.Replace(text, "first-secret", "second-secret", 1)
+	if err := os.WriteFile(file, []byte(updated), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Reload(); err != nil {
+		t.Fatal(err)
+	}
+	view := m.View()
+	if !view.RestartRequired || view.Config.Auth.Password != "" || m.Startup().Auth.Password != "first-secret" || m.Current().Auth.Password != "second-secret" {
+		t.Fatal("password reload did not preserve startup account or require restart")
+	}
+	if err := m.Save(view.Config, view.Revision, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	written, err := os.ReadFile(file)
+	if err != nil || !strings.Contains(string(written), "second-secret") || !strings.Contains(string(written), "# preserve account comment") {
+		t.Fatal("save lost reloaded password or comment", err)
+	}
+	if err := os.WriteFile(file, []byte(strings.Replace(updated, "second-secret", "\"\"", 1)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Reload(); err == nil || m.Current().Auth.Password != "second-secret" {
+		t.Fatal("invalid reload replaced the active configuration")
+	}
 }
 
 func TestGitHubProxyValidation(t *testing.T) {
@@ -83,6 +153,7 @@ func TestUnsafeConfig(t *testing.T) {
 	file := filepath.Join(t.TempDir(), "config.yaml")
 	for _, dest := range []string{"../escape", "admin/evil", "api", "favicon.ico", ".internal", "a/../b"} {
 		c := Defaults()
+		c.Auth = Auth{Username: "admin", Password: "fixture-password"}
 		c.Path = "./data"
 		c.MirrorRoot = "./mirror"
 		c.Sources = []Source{{ID: "test", Name: "Test", Type: "rsync", Dest: dest, Upstreams: map[string]string{"src1": "rsync://localhost/test/"}}}

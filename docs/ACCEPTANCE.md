@@ -2,6 +2,8 @@
 
 验收日期：2026-10-01。工具链为 Go **1.27.1**；本机为 macOS / arm64、Apple M2 Max。本文区分实际执行的检查与目标 Linux 服务器上尚未执行的验收。
 
+各节记录对应当时版本；当前管理账号协议以末尾“配置账号与移除顶部栏追加验收”为准，前文初始化管理员的测试属于历史记录。
+
 ## 已执行
 
 | 检查 | 结果与范围 |
@@ -79,3 +81,40 @@ Vue 类型检查与 Vite 生产构建、`go vet ./...`、使用隔离 rsync daem
 OCR 本地 delegate 复审本次 **14 个可审查文件，14/14，跳过 0**。为避免枚举用户新同步到项目目录的镜像文件，只将变化的源码与必要测试/资产复制到临时审查目录运行 preview/rule；没有复制用户配置、凭证或镜像文件。默认排除的 6 个文档/测试/图标另行检查，没有遗留确认的高/中严重度问题；外部 LLM 调用未执行。清单、规则和 SHA256 见 `../test-results/ocr-ui-preview.json`、`ocr-ui-rules.json`、`ocr-ui-review.json`。
 
 所有同步测试仍使用临时目录与隔离端口，用户配置、镜像数据与正在运行的服务未修改或重启。新静态资源嵌入新二进制，需切换到新程序并重启才对现有服务生效；Linux 交叉编译不能替代目标平台运行验收。
+
+## 数据库自动初始化追加验收 · 2026-10-01
+
+删除独立的 `migrations/` SQL 文件及嵌入包，初始化语句直接内置在 `internal/database/database.go`，仍由 `database.Open` 在启动时执行。逐句核对与原 SQL 一致，现有表、索引、schema 版本和记录保持原样；无需手动执行 SQL。同步移除 Dockerfile 的旧 COPY，更新 README、设计、实现说明与实施计划；目录基线保持原文。
+
+应用 `use-modern-go` 的 Go 1.27.1 完整指南。Vue 类型检查与 Vite 构建、`GOCACHE="$PWD/.cache/go-build" go vet ./...`、`GOCACHE="$PWD/.cache/go-build" MIRRORDOCK_TEST_RSYNC="$PWD/.cache/rsync/rsync-3.5.1/rsync" go test -race ./...` 均通过；数据库持久记录测试验证新库初始化、保存运行与关闭后重新读取，真实 rsync 使用隔离 daemon。
+
+将当前已跟踪源码（含本次修改、排除已删除文件）复制到临时目录，不含用户配置、镜像、node_modules、dist 或旧二进制。在副本 `web/` 执行 `npm ci` 和 `npm run build`，再从副本根执行 `go build -trimpath -o mirrordock-init-check ./cmd/mirrordock`，通过。用新二进制及临时空源 YAML 启动两次：首次自动生成 `data.sqlite`、全部四张业务/schema 表与两项运行索引；文件权限 0600、WAL 正常；停机后插入的临时状态在第二次启动后仍保留。两次 `/api/auth/status`、`/admin/`、`/` 均返回 200，SIGTERM 退出码均为 0。原始启动结果见 `../test-results/init-smoke.json`。
+
+初次使用 `--prefix` 安装临时副本依赖失败，报 `Missing: web@0.1.0 from lock file`；改在副本的真实 `web/` 工作目录安装后通过，未修改依赖清单或锁文件。首次 Go 检查因默认缓存写权限及本地测试监听被沙箱限制而失败；改用仓库缓存，并经自动审批允许本地测试端口后重跑通过。沙箱内依赖下载未完成，停止该临时目录的安装进程，经自动审批允许依赖下载后安装成功；这些初次失败不作为通过记录。
+
+OCR 本地 delegate 审查覆盖 `internal/database/database.go`、`Dockerfile`，**2/2，跳过 0**，未发现确认的高/中严重度问题。默认排除的两项已删除 SQL/Go 文件（`deleted`）及五项 Markdown 文档（`unsupported_ext`，包含本节验收记录）另行检查；初始化内容完整保留，构建与文档不再依赖旧目录。审查仅使用隔离临时副本；外部 LLM 调用沿用此前被审批阻止后的本地工作流，本次未尝试。清单、规则与结构化结果见 `../test-results/ocr-init-preview.json`、`ocr-init-rules.json`、`ocr-init-review.json`。
+
+Docker 守护进程仍不可用，本次容器构建/启动未执行；Linux 运行、浏览器 E2E 和下载性能基准未重复，本次修改未涉及下载或前端源码。用户配置、镜像与现有运行服务未修改。
+
+## 配置账号与移除顶部栏追加验收 · 2026-10-01
+
+管理账号改为必填的 YAML `auth.username`、`auth.password`，启动时生成内存中的 bcrypt 校验值；删除初始化码、设置密码接口、终端初始化提示以及 SQLite 密码读取/写入。旧库中已有的密码记录不参与认证，原有运行记录保留。缺失账号配置时启动报错，错误不包含密码。用户名支持中文，最多 128 字节且不允许首尾空白或控制字符；密码非空且最多 72 字节，示例采用用户指定字段与中文提示。
+
+密码不参与配置的 JSON 编码，内部复制显式保留完整账号。配置读取 API 隐藏密码，页面保存其他设置不能覆盖或清空 `auth`，保留 YAML 注释。账号在启动时加载，修改 YAML 并重新载入会标记重启生效；重启前仍使用原账号，重启后旧账号和旧会话失效。登录保留统一错误、请求限流、同源校验和 HttpOnly / SameSite 会话 Cookie。侧栏显示实际登录用户名。
+
+删除截图圈出的整条顶部栏及对应样式，包括面包屑、LOCAL MIRROR 和时区。手机使用独立按钮打开侧栏，选择页面后收起；已检查桌面和手机截图。
+
+| 检查 | 本次实际结果 |
+| --- | --- |
+| Vue 类型检查与 Web 构建 | `npm --prefix web run build` 通过；真实 `web/dist/` 输出先构建，再嵌入测试二进制。 |
+| Go 静态检查与竞态测试 | 使用仓库 GOCACHE 的 `go vet ./...`、带隔离 rsync 3.5.1 fixture 的 `go test -race ./...` 全部通过；app 包本次用时 34.365s。 |
+| 账号与配置回归 | 覆盖空配置与长度/控制字符校验、中文账号、JSON 脱敏、浏览器保存保留账号和注释、非法重载保留当前值、旧 SQLite 密码不覆盖 YAML、账号重启生效与会话失效。 |
+| 浏览器 E2E | 最终 **1 passed（测试 7.5s，总计 7.9s）**，无跳过。覆盖错误用户名、正确自定义账号、退出后再次登录、API 不返回密码、保存设置保留密码，以及原有真实 rsync 失败切换、发布、Range 下载和记录。 |
+| 响应式页面 | 五页在 1440/1024/736/375 宽度均无顶部栏、无整页横向溢出、无页面脚本错误；375 宽度下验证导航打开、选择页面后侧栏实际移出视口。 |
+| 本机与 Linux 构建 | 临时目录中的本机二进制、`CGO_ENABLED=0 GOOS=linux GOARCH=amd64` 交叉构建均通过；未替换现有二进制或服务。 |
+
+首轮浏览器测试通过（8.8s），但手机截图捕获了侧栏收起动画中间状态；补充侧栏实际位置断言及最终重新登录后的脚本错误检查，再次执行通过后更新截图。截图位于 `../web/test-results/mirrordock-real-configurat-8d275-n-records-and-responsive-UI/`。
+
+按 `use-modern-go` 的 Go 1.27.1 指南实施，使用 OCR 本地 delegate 的 preview/rule 逐文件审查本次 **11 个生产文件，11/11，跳过 0**，没有遗留确认的高/中严重度问题。OCR 默认排除的五项测试（`default_path`）与六项 Markdown 文档（`unsupported_ext`，含本节）另行检查。隔离审查副本以本轮修改前源码为基线，仅复制跟踪源码和新增测试/计划，没有复制用户配置、凭证或镜像。清单、规则与 SHA256 报告为 `../test-results/ocr-auth-preview.json`、`ocr-auth-rules.json`、`ocr-auth-review.json`。外部 LLM 调用未执行，沿用此前自动审批拒绝后允许的本地审查流程。
+
+测试全部使用临时配置、目录、隔离端口和受控本地上游；用户配置、镜像数据及正在运行的服务未修改或重启。采用新程序前，现有 YAML 必须补上 `auth` 并设置自己的密码，账号与新界面在新二进制重启后生效。本次未重复 Docker、目标 Linux 运行、下载性能基准或实际发行版全量同步；下载热路径未修改，交叉编译不等同 Linux 运行验收。

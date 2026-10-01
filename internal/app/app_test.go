@@ -14,6 +14,7 @@ import (
 	"io"
 	"math/big"
 	"mirrordock/internal/config"
+	"mirrordock/internal/database"
 	"net"
 	"net/http"
 	"net/http/cookiejar"
@@ -28,8 +29,20 @@ import (
 func TestAdminAuthenticationWritebackAndPublicIsolation(t *testing.T) {
 	dir := t.TempDir()
 	file := filepath.Join(dir, "config.yaml")
-	text := "# preserve comment\nlisten: 127.0.0.1\nport: 8080\npath: ./data\nmirror_root: ./mirror\nsettings:\n  github:\n    token: secret-token\n    proxy: http://user:proxy-password@127.0.0.1:8081\nsources: []\n"
+	text := "# preserve comment\nlisten: 127.0.0.1\nport: 8080\npath: ./data\nmirror_root: ./mirror\nauth:\n  username: operator\n  password: correct password 123\nsettings:\n  github:\n    token: secret-token\n    proxy: http://user:proxy-password@127.0.0.1:8081\nsources: []\n"
 	if err := os.WriteFile(file, []byte(text), 0600); err != nil {
+		t.Fatal(err)
+	}
+	// A password row from an older version must not override YAML credentials.
+	legacy, err := database.Open(filepath.Join(dir, "data"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := legacy.SetState("admin_password", "old-inert-hash"); err != nil {
+		legacy.Close()
+		t.Fatal(err)
+	}
+	if err := legacy.Close(); err != nil {
 		t.Fatal(err)
 	}
 	a, err := Open(file)
@@ -89,30 +102,50 @@ func TestAdminAuthenticationWritebackAndPublicIsolation(t *testing.T) {
 	if res.StatusCode != http.StatusNotFound {
 		t.Fatal("missing icon served as SPA")
 	}
-	body, _ := json.Marshal(map[string]string{"code": a.SetupCode(), "password": "correct password 123"})
-	res = request("POST", "/api/auth/setup", string(body), "https://other.example")
+	body, _ := json.Marshal(map[string]string{"username": "operator", "password": "correct password 123"})
+	res = request("POST", "/api/auth/login", string(body), "https://other.example")
 	res.Body.Close()
 	if res.StatusCode != 403 {
 		t.Fatal("cross origin mutation", res.StatusCode)
 	}
-	res = request("POST", "/api/auth/setup", string(body), server.URL)
+	for _, invalid := range []string{`{"password":"correct password 123"}`, `{"username":"admin","password":"correct password 123"}`, `{"username":"operator","password":"wrong password"}`} {
+		res = request("POST", "/api/auth/login", invalid, server.URL)
+		b, _ := io.ReadAll(res.Body)
+		res.Body.Close()
+		if res.StatusCode != 401 || !strings.Contains(string(b), "用户名或密码错误") {
+			t.Fatal("invalid account accepted or exposed", res.StatusCode)
+		}
+	}
+	res = request("GET", "/api/auth/status", "", "")
 	b, _ := io.ReadAll(res.Body)
 	res.Body.Close()
-	if res.StatusCode != 200 {
-		t.Fatal(res.StatusCode, string(b))
+	if strings.Contains(string(b), "username") || strings.Contains(string(b), "initialized") {
+		t.Fatal("anonymous status exposed an account or obsolete setup state")
 	}
-	res = request("POST", "/api/auth/login", `{"password":"correct password 123"}`, server.URL)
+	res = request("POST", "/api/auth/login", string(body), server.URL)
 	res.Body.Close()
 	if res.StatusCode != 200 {
 		t.Fatal("login failed", res.StatusCode)
 	}
-	if a.SetupCode() != "" {
-		t.Fatal("setup code reused")
+	cookies := res.Cookies()
+	if len(cookies) != 1 || !cookies[0].HttpOnly || cookies[0].SameSite != http.SameSiteStrictMode || cookies[0].Path != "/api/" {
+		t.Fatal("session cookie protections missing")
+	}
+	res = request("GET", "/api/auth/status", "", "")
+	b, _ = io.ReadAll(res.Body)
+	res.Body.Close()
+	if !strings.Contains(string(b), `"username":"operator"`) {
+		t.Fatal("authenticated status omitted configured username")
+	}
+	res = request("POST", "/api/auth/setup", "{}", server.URL)
+	res.Body.Close()
+	if res.StatusCode != http.StatusNotFound {
+		t.Fatal("obsolete setup endpoint still available", res.StatusCode)
 	}
 	res = request("GET", "/api/config", "", "")
 	b, _ = io.ReadAll(res.Body)
 	res.Body.Close()
-	if strings.Contains(string(b), "secret-token") || strings.Contains(string(b), "proxy-password") {
+	if strings.Contains(string(b), "secret-token") || strings.Contains(string(b), "proxy-password") || strings.Contains(string(b), "correct password 123") || strings.Contains(string(b), `"password"`) {
 		t.Fatal("token leaked")
 	}
 	var view config.View
@@ -120,6 +153,7 @@ func TestAdminAuthenticationWritebackAndPublicIsolation(t *testing.T) {
 		t.Fatal(err)
 	}
 	view.Config.Settings.GitHub.ReleaseCount = 8
+	view.Config.Auth.Username = "browser-override"
 	payload, _ := json.Marshal(map[string]any{"config": view.Config, "revision": view.Revision, "proxy_update": "socks5://user:new-proxy-secret@127.0.0.1:1080"})
 	res = request("PUT", "/api/config", string(payload), server.URL)
 	b, _ = io.ReadAll(res.Body)
@@ -133,7 +167,7 @@ func TestAdminAuthenticationWritebackAndPublicIsolation(t *testing.T) {
 		t.Fatal("stale configuration accepted", res.StatusCode)
 	}
 	written, _ := os.ReadFile(file)
-	if !strings.Contains(string(written), "# preserve comment") || !strings.Contains(string(written), "secret-token") || !strings.Contains(string(written), "new-proxy-secret") {
+	if !strings.Contains(string(written), "# preserve comment") || !strings.Contains(string(written), "secret-token") || !strings.Contains(string(written), "new-proxy-secret") || !strings.Contains(string(written), "correct password 123") || !strings.Contains(string(written), "username: operator") {
 		t.Fatal("lost comment or token")
 	}
 	for _, path := range []string{"/data.sqlite", "/.mirrordock/work/1", "/config.yaml", "/missing.rpm"} {
@@ -178,7 +212,7 @@ func TestTLSHTTP2PublicDownload(t *testing.T) {
 	os.WriteFile(certFile, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0600)
 	os.WriteFile(keyFile, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER}), 0600)
 	file := filepath.Join(dir, "config.yaml")
-	os.WriteFile(file, []byte("listen: 127.0.0.1\nport: 8080\npath: ./data\nmirror_root: ./mirror\ntls:\n  cert: ./cert.pem\n  key: ./key.pem\nsources:\n  - id: repo\n    name: Repo\n    type: rsync\n    dest: repo\n    src1: rsync://localhost/repo/\n"), 0600)
+	os.WriteFile(file, []byte("listen: 127.0.0.1\nport: 8080\npath: ./data\nmirror_root: ./mirror\nauth:\n  username: operator\n  password: correct password 123\ntls:\n  cert: ./cert.pem\n  key: ./key.pem\nsources:\n  - id: repo\n    name: Repo\n    type: rsync\n    dest: repo\n    src1: rsync://localhost/repo/\n"), 0600)
 	a, err := Open(file)
 	if err != nil {
 		t.Fatal(err)

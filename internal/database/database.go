@@ -5,11 +5,22 @@ import (
 	"database/sql"
 	"encoding/json/v2"
 	"fmt"
-	"mirrordock/migrations"
-	_ "modernc.org/sqlite"
 	"os"
 	"path/filepath"
+
+	_ "modernc.org/sqlite"
 )
+
+// initialSchema is applied on every open; existing tables and records are preserved.
+const initialSchema = `
+CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY);
+CREATE TABLE IF NOT EXISTS runs (id INTEGER PRIMARY KEY AUTOINCREMENT, source_id TEXT NOT NULL, state TEXT NOT NULL, created_at TEXT NOT NULL, data BLOB NOT NULL);
+CREATE INDEX IF NOT EXISTS runs_source_state ON runs(source_id,state);
+CREATE INDEX IF NOT EXISTS runs_state_id ON runs(state,id DESC);
+CREATE TABLE IF NOT EXISTS publications (source_id TEXT PRIMARY KEY, data BLOB NOT NULL);
+CREATE TABLE IF NOT EXISTS app_state (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+INSERT OR IGNORE INTO schema_migrations(version) VALUES(1);
+`
 
 type Store struct{ DB *sql.DB }
 
@@ -22,7 +33,7 @@ func Open(dir string) (*Store, error) {
 		return nil, err
 	}
 	db.SetMaxOpenConns(1)
-	if _, err = db.Exec("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000; PRAGMA synchronous=FULL;" + migrations.Initial); err != nil {
+	if _, err = db.Exec("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000; PRAGMA synchronous=FULL;" + initialSchema); err != nil {
 		db.Close()
 		return nil, err
 	}

@@ -120,6 +120,16 @@ rsync 的 srcN 与 exclude 位于源级，reposync 类型的 src1 同样位于�
 
 ### ADR-004：YAML 是配置唯一真源，SQLite 保存运行事实
 
+管理账号同样以 YAML 为唯一来源：
+
+```yaml
+auth:
+  username: "admin"
+  password: "请替换为你的密码"
+```
+
+两个字段必须非空；用户名最多 128 字节且不允许首尾空白或控制字符，密码最多 72 字节。程序启动时从配置生成内存中的 bcrypt 校验值，登录要求用户名与密码匹配；没有初始化码、设置密码 API 或 SQLite 密码回退。账号修改后重启生效，会话随重启失效；外部修改并重新载入配置时标记需要重启。读取 API 隐藏密码，页面保存其他设置时保留完整 auth，不通过页面修改账号。
+
 源定义、系统设置、计划存于 YAML；状态、执行历史、日志索引、资产清单和配置变更审计存于 SQLite。数据库中的执行配置快照用于追溯历史，不作为另一份可编辑源配置。
 
 Web 新增 RockyLinux 时更新启动时选定的 config.yaml。流程：校验字段和目录 → 对配置管理器加锁 → 检查文件 revision/hash → 按 YAML 节点修改并尽量保留注释 → 在同目录写临时文件并 fsync → 原子 rename → fsync 目录 → 更新内存配置 → 更新 scheduler → 写审计结果 → 返回新 revision。配置不可写时保存失败，不能假装成功。API 使用 revision 防止两个浏览器或人工编辑覆盖对方修改；文件路径为 symlink 时要明确处理，不盲目替换链接。
@@ -261,6 +271,8 @@ Go 负责截止时间与上下文取消。rsync 与 reposync 需要进程组终�
 
 数据库建议使用 database/sql 搭配 pure Go SQLite 驱动，启用 WAL、foreign_keys 与 busy_timeout。写事务保持短小，状态转换立即提交，进度批量节流。数据库存储在本地文件系统；按部署磁盘特性决定同步等级并记录，备份使用 SQLite 一致性备份方式，不直接复制仍在写入的单个 data.sqlite。
 
+数据库初始化语句内置在 `internal/database`，程序启动时自动创建数据库、表和索引，重复启动保留已有记录，无需独立 SQL 文件或手动初始化。
+
 | 表 | 主要字段/职责 |
 | --- | --- |
 | runs | id、source_id/name/type、trigger、state、phase、created/started/finished_at、active/paused/queued_ms、百分比精度、字节/文件数、退出码、错误码、parent_run_id、完整非密钥配置快照 |
@@ -280,7 +292,7 @@ rsync 与 reposync 的原始 stdout/stderr 和 GitHub Runner 的 API/HTTP 事件
 
 ## 8. 页面与视觉方案
 
-保留截图的应用侧栏、顶部面包屑、页面标题和说明、筛选栏、按日期分组的批次时间线、成功/失败标签页以及行尾详情按钮。截图最左侧属于浏览器的侧栏不属于系统页面，不复制。原图的模型、token、视频相关菜单替换为同步概念。
+保留截图的应用侧栏、页面标题和说明、筛选栏、按日期分组的批次时间线、成功/失败标签页以及行尾详情按钮。按用户要求移除整个顶部面包屑、LOCAL MIRROR 和时区栏，手机保留独立的侧栏导航按钮。截图最左侧属于浏览器的侧栏不属于系统页面，不复制。原图的模型、token、视频相关菜单替换为同步概念。
 
 暂定品牌：MirrorDock，中文“源仓”。Logo 使用两块相扣的镜像切片与双向连接，体现上游和本地的同步。主色钴蓝 #315BEF，背景冷灰 #F7F8FC，正文深墨 #1D263B；绿色用于成功、琥珀色用于暂停/等待、红色用于失败。保持轻边框、细图标、适量留白，避免大块装饰抢占数据密度。深色主题保留相同状态语义。
 
@@ -335,7 +347,7 @@ internal/runs/                队列、状态、worker、目录锁、记录
 internal/scheduler/           cron 与重叠处理
 internal/sync/                runner、rsync、reposync、github
 internal/mirrors/             发布快照、受限文件根、元数据缓存与 sendfile/TLS 下载
-internal/database/            SQLite、迁移与事务
+internal/database/            SQLite、自动初始化与事务
 web/src/app/                  路由、API 与状态
 web/src/layouts/              应用外壳
 web/src/features/             sources、runs、schedules、settings
@@ -345,7 +357,6 @@ web/src/assets/               Logo 等源码资源
 web/dist/                     Vue 唯一构建输出
 web/embed.go                  Go embed 前端输出
 configs/config.example.yaml
-migrations/                   SQL schema
 docs/DESIGN.md
 deploy/                       实际需要时添加 systemd / 容器定义
 ```
@@ -354,7 +365,7 @@ deploy/                       实际需要时添加 systemd / 容器定义
 
 ## 11. 实施顺序与验收
 
-1. Go 启动参数、YAML 校验/原子写回、SQLite 迁移、源管理 API；验证新增 RockyLinux 后重启仍存在。
+1. Go 启动参数、YAML 校验/原子写回、SQLite 自动初始化、源管理 API；验证新增 RockyLinux 后重启仍存在。
 2. 持久队列、目录锁、rsync Runner、多来源切换、进度解析、8h 累计预算、停止/暂停/继续/崩溃恢复。
 3. 程序启动时区、计划调度、Reposync 与 GitHub Runner、资产验证和重复同步跳过。
 4. 镜像发布、HTTP/HTTPS 文件服务、Range、路径与暂存隔离、TLS 配置及客户端源验证；验证 sendfile 路径并按第 11.1 节完成下载性能对照。

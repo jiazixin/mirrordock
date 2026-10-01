@@ -2,7 +2,7 @@ import { reactive } from 'vue'
 import { api } from './api'
 import type { ConfigView, Configuration, Publication, Run, SystemInfo } from './types'
 
-export const state = reactive({ config: null as ConfigView | null, runs: [] as Run[], info: null as SystemInfo | null, error: '', notice: '', connected: false, revision: 0 })
+export const state = reactive({ config: null as ConfigView | null, runs: [] as Run[], info: null as SystemInfo | null, username: '', error: '', notice: '', connected: false, revision: 0 })
 let stream: EventSource | null = null
 export async function refresh() { const [config, runs, info] = await Promise.all([api<ConfigView>('/config'), api<{ items: Run[] }>('/runs?limit=100'), api<SystemInfo>('/system/info')]); state.config = config; state.runs = runs.items; state.info = info; state.revision++ }
 export async function saveConfiguration(config: Configuration, token?: string, proxy?: string) { if (!state.config) return; state.config = await api<ConfigView>('/config', 'PUT', { config, revision: state.config.revision, token_update: token ?? null, proxy_update: proxy ?? null }); await refresh(); notify('配置已写回 YAML' + (state.config?.restart_required ? '，部分设置重启生效' : '')) }

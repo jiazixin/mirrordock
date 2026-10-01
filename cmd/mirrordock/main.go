@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"flag"
-	"fmt"
 	"log/slog"
 	"mirrordock/internal/app"
 	"net/http"
@@ -48,9 +47,6 @@ func main() {
 	if err != nil {
 		slog.Error("启动失败", "error", err)
 		os.Exit(1)
-	}
-	if code := application.SetupCode(); code != "" {
-		fmt.Fprintf(os.Stderr, "首次启动：访问 /admin/，使用初始化码设置管理员密码：\n%s\n", code)
 	}
 	slog.Info("MirrorDock 已启动", "address", application.Server.Addr, "admin", "/admin/", "config", application.Config.File())
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

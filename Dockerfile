@@ -11,7 +11,6 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY cmd/ cmd/
 COPY internal/ internal/
-COPY migrations/ migrations/
 COPY web/embed.go web/embed.go
 COPY --from=web /build/web/dist web/dist
 RUN CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /mirrordock ./cmd/mirrordock

@@ -25,7 +25,7 @@ func testEngine(t *testing.T, timeout string, runner syncer.Runner) (*Engine, *c
 	t.Helper()
 	dir := t.TempDir()
 	file := filepath.Join(dir, "config.yaml")
-	text := fmt.Sprintf("listen: 127.0.0.1\nport: 8080\npath: ./data\nmirror_root: ./mirror\nsettings:\n  task_timeout: %s\n  github:\n    token: top-secret\n    proxy: http://user:proxy-secret@127.0.0.1:8081\nsources:\n  - id: test\n    name: Test\n    type: rsync\n    enabled: true\n    dest: test\n    src1: rsync://localhost/one/\n    src2: rsync://localhost/two/\n", timeout)
+	text := fmt.Sprintf("listen: 127.0.0.1\nport: 8080\npath: ./data\nmirror_root: ./mirror\nauth:\n  username: admin\n  password: run-fixture-password\nsettings:\n  task_timeout: %s\n  github:\n    token: top-secret\n    proxy: http://user:proxy-secret@127.0.0.1:8081\nsources:\n  - id: test\n    name: Test\n    type: rsync\n    enabled: true\n    dest: test\n    src1: rsync://localhost/one/\n    src2: rsync://localhost/two/\n", timeout)
 	if err := os.WriteFile(file, []byte(text), 0600); err != nil {
 		t.Fatal(err)
 	}

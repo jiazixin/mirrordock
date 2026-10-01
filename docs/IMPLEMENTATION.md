@@ -5,11 +5,11 @@ MirrorDock 使用 Go 1.27.1、Vue 3 / TypeScript。配置字段沿用用户确�
 ## 模块与数据
 
 - `internal/config`：严格 YAML 校验、srcN 数字排序、路径隔离、注释保留、revision 冲突、0600 原子写回和 TLS 配对验证。
-- `internal/database`：纯 Go SQLite、WAL、同步等级 FULL、短事务。运行主记录以带结构化字段的 JSON 存储，attempts/events/快照聚合在一条运行记录内；发布指针和管理员密码哈希分别存储。当前没有另建设计中建议的每种明细表。
+- `internal/database`：纯 Go SQLite、WAL、同步等级 FULL、短事务。数据库及表、索引在启动时自动初始化，建表语句直接内置在该包中，重复打开保留已有数据。运行主记录以带结构化字段的 JSON 存储，attempts/events/快照聚合在一条运行记录内；发布指针单独存储，数据库不再参与管理员密码认证。当前没有另建设计中建议的每种明细表。
 - `internal/sync`：系统 rsync 的参数、CR/LF 进度、进程组停止；DNF 4 私有 repo 配置；go-github v88 与流式附件下载、有效 Range 续传、身份侧车文件、可用 SHA-256 校验。不请求自动源码归档。
 - `internal/runs`：两个内置 worker、同源排他、五字段 cron、8h 默认累计预算、暂停/取消/继续、重启恢复和日志脱敏。预算覆盖准备到发布，排队和暂停不计入。异常断电最多丢失一个 5 秒进度检查点；正常关闭会保存实际执行时间。
 - `internal/mirrors`：私有工作目录、reflink 优先、独立复制回退、RPM/APT 索引及包大小校验、原子持久发布指针、旧代读取与 24 小时回收保护。
-- `internal/app`：一次性终端初始化码、bcrypt、12 小时 Cookie 会话、同源写请求验证；管理 API、SSE、嵌入页面、HTTP/TLS 和连接无进展检测。
+- `internal/app`：启动时加载 YAML 的 auth.username/auth.password，内存 bcrypt 校验值、12 小时 Cookie 会话、登录限流与同源写请求验证；管理 API、SSE、嵌入页面、HTTP/TLS 和连接无进展检测。无初始化码及设置密码 API，账号修改后重启生效。
 
 目录布局依据根 `目录规范.md`，没有 `backend/`、额外根 Node 清单或第二份 Web 编译输出。
 

@@ -33,6 +33,9 @@ listen: 127.0.0.1
 port: 8080
 path: ../data/state
 mirror_root: ../data/mirrors
+auth:
+  username: "admin"
+  password: "请替换为你的密码"
 tls:
   cert: ""
   key: ""
@@ -51,7 +54,9 @@ YAML
 ./bin/mirrordock --config configs/config.local.yaml
 ```
 
-访问 `http://127.0.0.1:8080/admin/`，使用启动终端打印的一次性初始化码设置至少 12 字符的管理员密码。管理员密码以 bcrypt 哈希存入 SQLite；初始化码不会通过 API 返回。重启后使用原密码登录，会话需要重新建立。
+替换配置中的密码后启动，访问 `http://127.0.0.1:8080/admin/`，使用 `auth.username` 与 `auth.password` 登录。账号在 YAML 中定义，程序启动时生成内存中的 bcrypt 校验值，不再使用初始化码或 SQLite 管理员密码。两个字段必须非空，用户名最多 128 字节且不能包含首尾空白或控制字符，密码最多 72 字节。旧配置需要补上 `auth`，缺失时启动报错。
+
+修改账号或密码后重启生效，重启后需要重新登录。配置读取 API 不返回密码，页面保存同步源、计划和系统设置会保留完整 `auth`；账号只能编辑 YAML 修改。管理台已移除顶部面包屑、LOCAL MIRROR 与时区栏，手机使用导航按钮打开侧栏。
 
 新增源后执行一次同步，成功校验才发布。示例中的 Docker CE、Kubernetes、AlmaLinux 备用域名需要替换为自己的上游。示例有已开启的自动计划；正式采用案例配置前先确定目录、上游与计划。程序不会依据源名称替你选择 rsync/reposync。
 
@@ -59,9 +64,11 @@ YAML
 
 `-f <文件>` 和 `--config <文件>` 等价；两者同时指定不同文件会报错。没有参数读取工作目录 `config.yaml`，文件不存在就报错，不自动覆盖或生成。所有相对路径以被选中的配置文件目录为基准，数据库固定为 `<path>/data.sqlite`，日志在 `<path>/logs/<run-id>/<attempt>.log`。
 
+程序启动时自动创建数据库和所需表、索引，初始化语句内置在 `internal/database`，无需手动执行 SQL。已有数据库重复启动会保留原有记录。
+
 用户已确定的 YAML 协议优先于目录规范的默认协议：不用 `CONFIG_FILE` 或环境变量覆盖字段，GitHub 凭证直接放 `settings.github.token`。没有 version、timezone、maxconcurrent、exec、token_env 或 records 字段。进程启动环境/系统时区决定调度与显示时区；可在启动环境设置 `TZ=Asia/Shanghai`，不使用浏览器自动时区。
 
-- `listen`、`port`、`path`、`mirror_root`、TLS 修改后需要重启。其余修改对新任务/计划生效，当前任务保留脱敏配置快照。Token 在每次实际执行时读取当前配置。
+- `listen`、`port`、`path`、`mirror_root`、TLS、`auth` 修改后需要重启。其余修改对新任务/计划生效，当前任务保留脱敏配置快照。Token 在每次实际执行时读取当前配置。
 - 页面写回 YAML，保留现有注释，通过 revision 防止覆盖另一位管理员/磁盘编辑；保存使用同目录临时文件、fsync 与 rename。外部修改后点击“重新载入配置”。文件及其父目录必须允许程序身份写入，不能只挂载不可替换的单个配置文件。
 - rsync 来源使用 `src1`、`src2`、`src3` 等，按数字升序尝试；连接/网络类错误切换，磁盘与权限类错误停止。失败切换和暂停继续共享默认 8h 累计运行预算，排队/暂停不计时，超时后先 TERM，最多 10 秒后 KILL 进程组。
 - `rsync.delete` 和保留 links/times/perms/hardlinks 默认 true。`limit_mb` 是每个上游任务的十进制 MB/s，0 不限速；不限制公开下载。UID/GID 可只填一项，0 有效；跨 UID 映射通常需要 root，程序不自动提权。
@@ -104,6 +111,7 @@ Go 测试使用临时目录和本地 HTTP 上游。真实 rsync 协议与浏览�
 ```sh
 MIRRORDOCK_TEST_RSYNC=/usr/bin/rsync go test -race ./...
 # 先构建 bin/mirrordock 与 Web，并安装 Playwright 的 Chromium
+# 测试可设置 MIRRORDOCK_TEST_BINARY 使用独立的临时二进制，避免替换正在使用的程序
 (cd web && npm exec -- playwright install chromium)
 MIRRORDOCK_TEST_RSYNC=/usr/bin/rsync npm --prefix web run test:e2e
 ```
@@ -124,14 +132,13 @@ docker run --rm --name mirrordock -p 8080:8080 -e TZ=Asia/Shanghai \
 
 systemd 定义在 [deploy/mirrordock.service](deploy/mirrordock.service)。默认以 mirrordock 用户运行；预先创建配置、数据和镜像目录并赋予所需读写权限。不要在这一身份下配置映射为其他 UID 后再期待自动提权。根据实际部署修改路径与用户，端口 <1024 另需相应绑定权限。生产管理会话需要保密时启用上述 TLS 配置。
 
-记录和任务日志永久保留，页面“清理日志”只删除已结束尝试的原始日志，保留历史、状态和错误摘要；活动与暂停日志不会删除。为数据目录和暂存/发布代预留容量，reflink 不可用时复制会占用额外正文空间。备份最简单的方式是先正常停止服务，再一起备份 YAML、完整 state 目录和镜像根；运行期间需采用 SQLite 一致性备份，不能只复制正在写入的 data.sqlite。忘记管理员密码时可停服后用 SQLite 删除 app_state 的 admin_password 行，下次启动重新生成初始化码。
+记录和任务日志永久保留，页面“清理日志”只删除已结束尝试的原始日志，保留历史、状态和错误摘要；活动与暂停日志不会删除。为数据目录和暂存/发布代预留容量，reflink 不可用时复制会占用额外正文空间。备份最简单的方式是先正常停止服务，再一起备份 YAML、完整 state 目录和镜像根；运行期间需采用 SQLite 一致性备份，不能只复制正在写入的 data.sqlite。忘记管理员密码时修改 YAML 的 auth.password，再重启服务；无需编辑数据库。
 
 ## 实际目录
 
 ```text
 cmd/mirrordock/           CLI 入口
 internal/{config,database,sync,runs,mirrors,app}/
-migrations/              唯一 SQL schema 与 embed
 configs/                 注释案例；本地配置被忽略
 deploy/                  systemd 定义
 scripts/                 Logo 衍生 favicon 生成工具
@@ -143,4 +150,4 @@ data/                    本地持久数据（忽略）
 test-results/            Go/OCR 运行报告（忽略）
 ```
 
-目录例外：无额外业务目录。`web/embed.go` 用于嵌入 Vite 唯一输出，`migrations/embed.go` 嵌入唯一 SQL 来源，均属于实际使用的 Go 包；配置文件选择和直接 YAML Token 协议是用户明确确认的协议例外，详见“配置约定”。协作规则见 [AGENTS.md](AGENTS.md)，目录基线仍只在 [目录规范.md](目录规范.md) 维护。
+目录例外：无额外业务目录。`web/embed.go` 用于嵌入 Vite 唯一输出，属于实际使用的 Go 包；数据库初始化内置在 `internal/database`。配置文件选择和直接 YAML Token 协议是用户明确确认的协议例外，详见“配置约定”。协作规则见 [AGENTS.md](AGENTS.md)，目录基线仍只在 [目录规范.md](目录规范.md) 维护。

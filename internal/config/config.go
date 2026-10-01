@@ -21,6 +21,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/robfig/cron/v3"
 	"gopkg.in/yaml.v3"
@@ -29,6 +30,10 @@ import (
 type TLS struct {
 	Cert string `yaml:"cert" json:"cert"`
 	Key  string `yaml:"key" json:"key"`
+}
+type Auth struct {
+	Username string `yaml:"username" json:"username"`
+	Password string `yaml:"password" json:"-"`
 }
 type RsyncSettings struct {
 	IOTimeout      string  `yaml:"io_timeout" json:"io_timeout"`
@@ -96,6 +101,7 @@ type Config struct {
 	Port       int      `yaml:"port" json:"port"`
 	Path       string   `yaml:"path" json:"path"`
 	MirrorRoot string   `yaml:"mirror_root" json:"mirror_root"`
+	Auth       Auth     `yaml:"auth" json:"auth"`
 	TLS        TLS      `yaml:"tls" json:"tls"`
 	Settings   Settings `yaml:"settings" json:"settings"`
 	Sources    []Source `yaml:"sources" json:"sources"`
@@ -147,6 +153,8 @@ func Clone(c Config) Config {
 	b, _ := json.Marshal(c)
 	var out Config
 	_ = json.Unmarshal(b, &out)
+	// Passwords are omitted from JSON, but internal copies retain credentials.
+	out.Auth = c.Auth
 	return out
 }
 func (s Source) Candidates() []string {
@@ -198,6 +206,12 @@ func Within(root, p string) bool {
 }
 
 func (c Config) Validate(file string) error {
+	if strings.TrimSpace(c.Auth.Username) == "" || strings.TrimSpace(c.Auth.Username) != c.Auth.Username || len(c.Auth.Username) > 128 || strings.IndexFunc(c.Auth.Username, unicode.IsControl) >= 0 {
+		return errors.New("auth.username 必须非空，最多 128 字节，不能包含首尾空白或控制字符")
+	}
+	if strings.TrimSpace(c.Auth.Password) == "" || len(c.Auth.Password) > 72 {
+		return errors.New("auth.password 必须非空，最多 72 字节")
+	}
 	if net.ParseIP(c.Listen) == nil && c.Listen != "localhost" {
 		return errors.New("listen 必须是 IP 地址或 localhost")
 	}
@@ -454,7 +468,8 @@ func (m *Manager) View() View {
 	proxyConfigured := c.Settings.GitHub.Proxy != ""
 	c.Settings.GitHub.Token = ""
 	c.Settings.GitHub.Proxy = ""
-	restart := c.Listen != m.startup.Listen || c.Port != m.startup.Port || c.Path != m.startup.Path || c.MirrorRoot != m.startup.MirrorRoot || c.TLS != m.startup.TLS
+	restart := c.Listen != m.startup.Listen || c.Port != m.startup.Port || c.Path != m.startup.Path || c.MirrorRoot != m.startup.MirrorRoot || c.TLS != m.startup.TLS || c.Auth != m.startup.Auth
+	c.Auth.Password = ""
 	return View{Config: c, Revision: m.revision, TokenConfigured: configured, ProxyConfigured: proxyConfigured, RestartRequired: restart, File: m.file}
 }
 func (m *Manager) Reload() error {
@@ -497,6 +512,8 @@ func (m *Manager) Save(c Config, revision string, tokenUpdate, proxyUpdate *stri
 	if revision != m.revision || digest(old) != m.revision {
 		return ErrConflict
 	}
+	// Account credentials are edited in YAML only, never through a browser save.
+	c.Auth = m.cfg.Auth
 	c.Settings.GitHub.Token = m.cfg.Settings.GitHub.Token
 	if tokenUpdate != nil {
 		c.Settings.GitHub.Token = *tokenUpdate

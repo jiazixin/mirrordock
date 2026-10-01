@@ -84,7 +84,7 @@ func Open(file string) (*App, error) {
 		fail()
 		return nil, err
 	}
-	auth, err := newAuth(store)
+	auth, err := newAuth(c.Auth)
 	if err != nil {
 		m.Close()
 		store.Close()
@@ -96,7 +96,6 @@ func Open(file string) (*App, error) {
 	a.workers.Go(a.watchConnections)
 	return a, nil
 }
-func (a *App) SetupCode() string { a.auth.mu.Lock(); defer a.auth.mu.Unlock(); return a.auth.setupCode }
 func (a *App) Serve() error {
 	a.Runs.Start()
 	c := a.Config.Startup()
@@ -123,9 +122,13 @@ func (a *App) Handler() http.Handler {
 	mux := http.NewServeMux()
 	api := http.NewServeMux()
 	api.HandleFunc("GET /api/auth/status", func(w http.ResponseWriter, r *http.Request) {
-		respond(w, 200, map[string]bool{"initialized": a.auth.initialized(), "authenticated": a.auth.authorized(r)})
+		authorized := a.auth.authorized(r)
+		status := map[string]any{"authenticated": authorized}
+		if authorized {
+			status["username"] = a.auth.username
+		}
+		respond(w, 200, status)
 	})
-	api.HandleFunc("POST /api/auth/setup", a.setup)
 	api.HandleFunc("POST /api/auth/login", a.login)
 	api.HandleFunc("POST /api/auth/logout", a.logout)
 	api.HandleFunc("GET /api/config", func(w http.ResponseWriter, r *http.Request) { respond(w, 200, a.Config.View()) })
@@ -150,7 +153,7 @@ func (a *App) Handler() http.Handler {
 			respond(w, 403, map[string]string{"error": "请求未通过同源校验"})
 			return
 		}
-		public := r.URL.Path == "/api/auth/status" || r.URL.Path == "/api/auth/setup" || r.URL.Path == "/api/auth/login"
+		public := r.URL.Path == "/api/auth/status" || r.URL.Path == "/api/auth/login"
 		if !public && !a.auth.authorized(r) {
 			respond(w, 401, map[string]string{"error": "请先登录"})
 			return
@@ -181,44 +184,26 @@ func failure(w http.ResponseWriter, err error) {
 	}
 	respond(w, status, map[string]string{"error": err.Error()})
 }
-func (a *App) setup(w http.ResponseWriter, r *http.Request) {
-	if a.auth.limited() {
-		respond(w, 429, map[string]string{"error": "尝试过多，一分钟后重试"})
-		return
-	}
-	var body struct {
-		Code     string `json:"code"`
-		Password string `json:"password"`
-	}
-	if err := decode(w, r, &body); err != nil {
-		failure(w, err)
-		return
-	}
-	if err := a.auth.setup(body.Code, body.Password); err != nil {
-		failure(w, err)
-		return
-	}
-	respond(w, 200, map[string]bool{"ok": true})
-}
 func (a *App) login(w http.ResponseWriter, r *http.Request) {
 	if a.auth.limited() {
 		respond(w, 429, map[string]string{"error": "尝试过多，一分钟后重试"})
 		return
 	}
 	var body struct {
+		Username string `json:"username"`
 		Password string `json:"password"`
 	}
 	if err := decode(w, r, &body); err != nil {
 		failure(w, err)
 		return
 	}
-	token, err := a.auth.login(body.Password)
+	token, err := a.auth.login(body.Username, body.Password)
 	if err != nil {
 		respond(w, 401, map[string]string{"error": err.Error()})
 		return
 	}
 	http.SetCookie(w, &http.Cookie{Name: "mirrordock_session", Value: token, Path: "/api/", HttpOnly: true, Secure: r.TLS != nil, SameSite: http.SameSiteStrictMode, MaxAge: 43200})
-	respond(w, 200, map[string]bool{"ok": true})
+	respond(w, 200, map[string]any{"ok": true, "username": a.auth.username})
 }
 func (a *App) logout(w http.ResponseWriter, r *http.Request) {
 	a.auth.logout(r)

@@ -14,7 +14,7 @@
 
 ### Task 1: 配置与持久化
 
-- 创建 `internal/config/config.go`、`internal/config/config_test.go`、`internal/database/database.go`、`internal/database/database_test.go`、`migrations/001-initial.sql`。
+- 创建 `internal/config/config.go`、`internal/config/config_test.go`、`internal/database/database.go`、`internal/database/database_test.go`；数据库初始化语句内置在 `internal/database`。
 - 先验证缺省选项、srcN 数字顺序、保留路径、Token 脱敏和文件 revision 冲突，再实现 YAML 注释保留与 fsync/rename。
 - 实现运行、尝试、事件、发布指针与管理员持久化；事务短小，恢复活动运行为 interrupted，暂停不丢预算。
 - 验证：`go test ./internal/config ./internal/database`。
@@ -36,7 +36,7 @@
 ### Task 4: API 与实际 Vue 页面
 
 - 创建 `internal/app/`、`cmd/mirrordock/main.go`、`web/embed.go`。
-- 管理员首次初始化使用终端一次性 setup code，密码哈希与会话鉴权；写操作检查同源/CSRF。公共下载不经过管理鉴权。
+- 管理员账号使用 YAML 的 auth.username/auth.password，启动时生成内存 bcrypt 校验值并使用 Cookie 会话鉴权；写操作检查同源/CSRF。公共下载不经过管理鉴权。
 - 创建 `web/src/app/`、`layouts/`、`features/`、`components/`、`styles/` 和 Logo，落实参考图的侧栏、筛选、时间线与成功/失败记录。
 - 配置编辑、立即同步、暂停继续、详情日志、清理日志、SSE、计划和 TLS 字段全部接实际 API。
 - 验证：`npm --prefix web run check`、`npm --prefix web run build`、`go test ./...`、浏览器端到端测试。
