@@ -3,10 +3,13 @@ package syncer
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"mirrordock/internal/config"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -103,8 +106,19 @@ func TestSystemRsyncProtocol(t *testing.T) {
 	var log bytes.Buffer
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
-	if err = (SystemRunner{}).Run(ctx, task, func(Progress) {}, &log); err != nil {
+	var progress Progress
+	if err = (SystemRunner{}).Run(ctx, task, func(p Progress) { progress = p }, &log); err != nil {
 		t.Fatal(err, log.String())
+	}
+	if progress.ReceivedBytes == nil || *progress.ReceivedBytes == 0 {
+		t.Fatal("missing actual received bytes", progress, log.String())
+	}
+	firstBytes := *progress.ReceivedBytes
+	if err = (SystemRunner{}).Run(ctx, task, func(p Progress) { progress = p }, &log); err != nil {
+		t.Fatal(err, log.String())
+	}
+	if progress.ReceivedBytes == nil || *progress.ReceivedBytes >= firstBytes {
+		t.Fatal("incremental sync counted full file size", progress)
 	}
 	got, err := os.ReadFile(filepath.Join(dest, "package.rpm"))
 	if err != nil || string(got) != payload {
@@ -201,5 +215,97 @@ func TestRsyncCommandRetainsAuthenticationFailureBeforeExitSummary(t *testing.T)
 	err := command(t.Context(), "rsync", nil, func(Progress) {}, io.Discard)
 	if err == nil || AsFailure(err).Retryable || !strings.Contains(err.Error(), "auth failed") {
 		t.Fatal("lost auth diagnostic", err)
+	}
+}
+
+func TestReceivedStatsDoNotUseFileProgress(t *testing.T) {
+	_, cancel := context.WithCancelCause(t.Context())
+	defer cancel(nil)
+	var got Progress
+	out := processOutput{name: "rsync", log: io.Discard, cancel: cancel, emit: func(p Progress) { got = p }}
+	out.scan(strings.NewReader("1,000,000 100% 1.0MB/s 0:00:00\nTotal transferred file size: 1,000,000 bytes\nMatched data: 999,000 bytes\n"))
+	if got.ReceivedBytes != nil {
+		t.Fatal("logical progress claimed network bytes", got)
+	}
+	out.scan(strings.NewReader("Total bytes received: 1,234\n1,000,000 100% 1.0MB/s 0:00:00\n"))
+	if got.ReceivedBytes == nil || *got.ReceivedBytes != 1234 || got.Bytes != 1000000 {
+		t.Fatal(got)
+	}
+}
+
+func TestReposyncImportsKeysBeforeDownloadInPrivateRoot(t *testing.T) {
+	dir := t.TempDir()
+	trace := filepath.Join(dir, "trace")
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("MIRRORDOCK_KEY_TRACE", trace)
+	for name, script := range map[string]string{
+		"rpmkeys": "#!/bin/sh\nprintf '%s\\n' \"$@\" >\"$MIRRORDOCK_KEY_TRACE\"\ncat \"$4\" >>\"$MIRRORDOCK_KEY_TRACE\"\n",
+		"dnf":     "#!/bin/sh\nprintf '\\ndnf invoked\\n' >>\"$MIRRORDOCK_KEY_TRACE\"\n",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(script), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, "fixture-public-key") }))
+	defer server.Close()
+	task := Task{Directory: filepath.Join(dir, "work"), Candidate: server.URL, Source: config.Source{Type: "reposync", RepoSync: config.RepoSync{RepoID: "fixture", Releasever: "9", Basearch: "aarch64", GPGKeys: []string{server.URL + "/key.asc"}}}}
+	if err := (SystemRunner{}).Run(t.Context(), task, func(Progress) {}, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(trace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(string(data), "\n")
+	if len(lines) != 7 || lines[0] != "--root" || lines[2] != "--import" || lines[4] != "fixture-public-key" || lines[5] != "dnf invoked" {
+		t.Fatal(string(data))
+	}
+	private := filepath.Dir(lines[1])
+	if !config.Within(dir, private) || filepath.Base(lines[1]) != "root" || filepath.Dir(lines[3]) != private {
+		t.Fatal("keyring escaped private workspace", string(data))
+	}
+	if _, err := os.Stat(private); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("private keyring not removed", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "rpmkeys"), []byte("#!/bin/sh\necho invalid-key >&2\nexit 1\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	os.Remove(trace)
+	if err := (SystemRunner{}).Run(t.Context(), task, func(Progress) {}, io.Discard); err == nil || AsFailure(err).Retryable {
+		t.Fatal("invalid key import was accepted or retried", err)
+	}
+	if _, err := os.Stat(trace); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("dnf ran after key import failure", err)
+	}
+}
+
+func TestRepoKeyDownloadLimitsAndFailures(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		status int
+		bytes  int
+		retry  bool
+	}{
+		{"empty", 200, 0, false},
+		{"oversize", 200, (1 << 20) + 1, false},
+		{"unavailable", 503, 0, true},
+		{"missing", 404, 0, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(tc.status)
+				fmt.Fprint(w, strings.Repeat("x", tc.bytes))
+			}))
+			defer server.Close()
+			err := importRepoKeys(t.Context(), t.TempDir(), []string{server.URL}, func(Progress) {}, io.Discard)
+			if err == nil || AsFailure(err).Code != "GPG_KEY_DOWNLOAD" || AsFailure(err).Retryable != tc.retry {
+				t.Fatal(err)
+			}
+		})
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := importRepoKeys(ctx, t.TempDir(), []string{"http://127.0.0.1:1/key.asc?credential=private"}, func(Progress) {}, io.Discard); !errors.Is(err, context.Canceled) {
+		t.Fatal(err)
 	}
 }

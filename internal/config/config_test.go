@@ -9,6 +9,46 @@ import (
 	"testing"
 )
 
+func TestDestinationSymlinkAliasesCannotOverlap(t *testing.T) {
+	dir := t.TempDir()
+	root := filepath.Join(dir, "mirror")
+	if err := os.MkdirAll(filepath.Join(root, "original", "nested"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("original", filepath.Join(root, "alias")); err != nil {
+		t.Fatal(err)
+	}
+	for _, destination := range []string{"alias", "alias/nested"} {
+		c := Defaults()
+		c.Auth = Auth{Username: "admin", Password: "fixture"}
+		c.Path, c.MirrorRoot = "./state", "./mirror"
+		c.Sources = []Source{
+			{ID: "first", Name: "First", Type: "rsync", Dest: "original", Upstreams: map[string]string{"src1": "rsync://localhost/repo/"}},
+			{ID: "second", Name: "Second", Type: "rsync", Dest: destination, Upstreams: map[string]string{"src1": "rsync://localhost/repo/"}},
+		}
+		if err := c.Validate(filepath.Join(dir, "config.yaml")); err == nil {
+			t.Fatal("overlapping symlink destination accepted", destination)
+		}
+		c.Sources[1].Dest = "independent"
+		if err := c.Validate(filepath.Join(dir, "config.yaml")); err != nil {
+			t.Fatal("independent destination rejected", err)
+		}
+	}
+}
+
+func TestSourceNumericBounds(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "config.yaml")
+	base := "auth:\n  username: admin\n  password: fixture\npath: ./state\nmirror_root: ./mirror\nsources:\n  - id: repo\n    name: Repo\n    type: rsync\n    dest: repo\n    src1: rsync://localhost/repo/\n"
+	for _, extra := range []string{"    src9999999999999999999999999: rsync://localhost/repo/\n", "    rsync:\n      uid: 4294967295\n", "    rsync:\n      gid: -1\n"} {
+		if _, err := Parse([]byte(base+extra), file); err == nil {
+			t.Fatal("invalid numeric bound accepted", extra)
+		}
+	}
+	if _, err := Parse([]byte(base+"    rsync:\n      uid: 4294967294\n      gid: 0\n"), file); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestDefaultsAndCandidates(t *testing.T) {
 	if Defaults().Log != (Log{Level: "info", Format: "json"}) {
 		t.Fatal("wrong logging defaults")

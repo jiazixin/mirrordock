@@ -7,6 +7,8 @@ import (
 	"io"
 	"math"
 	"mirrordock/internal/config"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -15,16 +17,18 @@ import (
 )
 
 type Progress struct {
-	Phase   string   `json:"phase"`
-	Bytes   int64    `json:"bytes"`
-	Total   int64    `json:"total"`
-	Percent *float64 `json:"percent"`
-	Speed   float64  `json:"speed"`
-	ETA     *float64 `json:"eta_seconds"`
-	Files   int      `json:"files"`
-	Success int      `json:"success"`
-	Failed  int      `json:"failed"`
-	Skipped int      `json:"skipped"`
+	ReceivedBytes      *int64   `json:"received_bytes"`
+	ReceivedIncomplete bool     `json:"received_incomplete,omitzero"`
+	Phase              string   `json:"phase"`
+	Bytes              int64    `json:"bytes"`
+	Total              int64    `json:"total"`
+	Percent            *float64 `json:"percent"`
+	Speed              float64  `json:"speed"`
+	ETA                *float64 `json:"eta_seconds"`
+	Files              int      `json:"files"`
+	Success            int      `json:"success"`
+	Failed             int      `json:"failed"`
+	Skipped            int      `json:"skipped"`
 }
 type Task struct {
 	Source    config.Source
@@ -128,6 +132,11 @@ func reposync(ctx context.Context, t Task, emit func(Progress), log io.Writer) e
 		return err
 	}
 	defer os.RemoveAll(private)
+	if config.DefaultBool(cfg.GPGCheck) {
+		if err := importRepoKeys(ctx, private, cfg.GPGKeys, emit, log); err != nil {
+			return err
+		}
+	}
 	repoDir := filepath.Join(private, "repos")
 	if err = os.Mkdir(repoDir, 0700); err != nil {
 		return err
@@ -159,6 +168,58 @@ func reposync(ctx context.Context, t Task, emit func(Progress), log io.Writer) e
 	}
 	fmt.Fprintf(log, "dnf %s\n", strings.Join(args, " "))
 	return command(ctx, "dnf", args, emit, log)
+}
+
+// Reposync verifies against the installroot RPM database but does not import
+// gpgkey URLs itself. Keep key downloads bounded and the keyring task-private.
+func importRepoKeys(ctx context.Context, private string, keys []string, emit func(Progress), log io.Writer) error {
+	const maxKeyBytes = 1 << 20
+	transport := &http.Transport{
+		Proxy:               http.ProxyFromEnvironment,
+		DialContext:         (&net.Dialer{Timeout: 30 * time.Second}).DialContext,
+		TLSHandshakeTimeout: 30 * time.Second, ResponseHeaderTimeout: 30 * time.Second,
+		IdleConnTimeout: 30 * time.Second, MaxIdleConns: 4, MaxIdleConnsPerHost: 2,
+	}
+	defer transport.CloseIdleConnections()
+	client := &http.Client{Transport: transport, Timeout: 30 * time.Second}
+	args := []string{"--root", filepath.Join(private, "root"), "--import"}
+	for i, address := range keys {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, address, nil)
+		if err != nil {
+			return &Failure{Code: "GPG_KEY_DOWNLOAD", Message: "GPG 公钥地址无效"}
+		}
+		res, err := client.Do(req)
+		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return httpNetworkError(err, "", "GPG_KEY_DOWNLOAD", "GPG 公钥下载")
+		}
+		if res.StatusCode != http.StatusOK {
+			res.Body.Close()
+			return &Failure{Code: "GPG_KEY_DOWNLOAD", Message: fmt.Sprintf("GPG 公钥下载 HTTP %d", res.StatusCode), Retryable: transientHTTP(res.StatusCode)}
+		}
+		data, err := io.ReadAll(io.LimitReader(res.Body, maxKeyBytes+1))
+		res.Body.Close()
+		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return httpNetworkError(err, "", "GPG_KEY_DOWNLOAD", "GPG 公钥读取")
+		}
+		if len(data) == 0 || len(data) > maxKeyBytes {
+			return &Failure{Code: "GPG_KEY_DOWNLOAD", Message: "GPG 公钥必须非空且不超过 1 MiB"}
+		}
+		file := filepath.Join(private, fmt.Sprintf("key-%d.asc", i))
+		if err := os.WriteFile(file, data, 0600); err != nil {
+			return err
+		}
+		args = append(args, file)
+	}
+	if _, err := fmt.Fprintln(log, "rpmkeys: 将配置的公钥导入任务私有 RPM 数据库"); err != nil {
+		return err
+	}
+	return command(ctx, "rpmkeys", args, emit, log)
 }
 func AsFailure(err error) *Failure {
 	if e, ok := errors.AsType[*Failure](err); ok {

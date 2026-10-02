@@ -15,6 +15,43 @@ import (
 	"time"
 )
 
+func TestImportDatabaseFailureRestoresOriginalDirectory(t *testing.T) {
+	dir := t.TempDir()
+	store, err := database.Open(filepath.Join(dir, "data"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if _, err := store.DB.Exec("CREATE TRIGGER reject_publication BEFORE INSERT ON publications BEGIN SELECT RAISE(ABORT,'fixture failure'); END"); err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(dir, "mirror")
+	local := filepath.Join(root, "repo")
+	if err := os.MkdirAll(local, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(local, "package.rpm"), []byte("original"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	manager, err := New(root, store, []config.Source{{ID: "repo", Type: "rsync", Dest: "repo"}})
+	if err == nil {
+		manager.Close()
+		t.Fatal("import should fail")
+	}
+	data, readErr := os.ReadFile(filepath.Join(local, "package.rpm"))
+	if readErr != nil || string(data) != "original" {
+		t.Fatal("original mirror orphaned", readErr)
+	}
+	if _, err := store.DB.Exec("DROP TRIGGER reject_publication"); err != nil {
+		t.Fatal(err)
+	}
+	manager, err = New(root, store, []config.Source{{ID: "repo", Type: "rsync", Dest: "repo"}})
+	if err != nil {
+		t.Fatal("next startup could not import", err)
+	}
+	defer manager.Close()
+}
+
 func testManager(t *testing.T) (*Manager, config.Source) {
 	t.Helper()
 	dir := t.TempDir()

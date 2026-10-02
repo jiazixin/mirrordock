@@ -39,7 +39,7 @@ func TestAnalyticsAuthenticationValidationAndEmptyResponse(t *testing.T) {
 	if w := request("/api/analytics?type=rsync", false); w.Code != 401 {
 		t.Fatal(w.Code)
 	}
-	for _, path := range []string{"/api/analytics", "/api/analytics?type=unknown", "/api/analytics?type=rsync&days=0", "/api/analytics?type=rsync&days=abc", "/api/analytics?type=github_release&days=8"} {
+	for _, path := range []string{"/api/runs?range=invalid", "/api/analytics", "/api/analytics?type=unknown", "/api/analytics?type=rsync&days=0", "/api/analytics?type=rsync&days=abc", "/api/analytics?type=github_release&days=8"} {
 		if w := request(path, true); w.Code != 400 {
 			t.Fatal(path, w.Code)
 		}
@@ -62,6 +62,23 @@ func TestAnalyticsAuthenticationValidationAndEmptyResponse(t *testing.T) {
 		r := runs.Run{SourceID: "fixture", Name: "fixture", Type: kind, State: "succeeded", CreatedAt: now, StartedAt: now, ElapsedSeconds: 5, RetryCount: 2}
 		if _, err := a.Store.CreateRun(r.SourceID, r.State, now.Format(time.RFC3339Nano), &r); err != nil {
 			t.Fatal(err)
+		}
+	}
+
+	for _, key := range []string{"1h", "12h", "24h", "3d", "7d", "30d", "month", "yesterday"} {
+		w := request("/api/runs?range="+key, true)
+		var page struct {
+			Total int `json:"total"`
+		}
+		if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &page) != nil {
+			t.Fatal(key, w.Code, w.Body.String())
+		}
+		want := 3
+		if key == "yesterday" {
+			want = 0
+		}
+		if page.Total != want {
+			t.Fatal(key, page.Total, want)
 		}
 	}
 	w = request("/api/analytics?type=reposync&days=7&source=fixture", true)

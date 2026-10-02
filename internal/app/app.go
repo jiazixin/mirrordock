@@ -274,6 +274,15 @@ func (a *App) reload(w http.ResponseWriter, r *http.Request) {
 }
 func (a *App) listRuns(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
+	if q.Get("latest") == "1" {
+		rows, err := a.Runs.Latest()
+		if err != nil {
+			failure(w, err)
+			return
+		}
+		respond(w, 200, map[string]any{"items": rows, "total": len(rows)})
+		return
+	}
 	limit, _ := strconv.Atoi(q.Get("limit"))
 	limit = min(100, max(1, limit))
 	if q.Get("limit") == "" {
@@ -289,7 +298,19 @@ func (a *App) listRuns(w http.ResponseWriter, r *http.Request) {
 		}
 		from = parsed.UTC().Format(time.RFC3339Nano)
 	}
-	rows, total, err := a.Runs.List(q.Get("state"), q.Get("source"), limit, max(0, offset), database.RunFilter{From: from, Trigger: q.Get("trigger")})
+	filter := database.RunFilter{From: from, Trigger: q.Get("trigger")}
+	if key := q.Get("range"); key != "" {
+		start, end, err := runTimeRange(key, time.Now(), a.location)
+		if err != nil {
+			failure(w, err)
+			return
+		}
+		filter.From = start.UTC().Format(time.RFC3339Nano)
+		if !end.IsZero() {
+			filter.Until = end.UTC().Format(time.RFC3339Nano)
+		}
+	}
+	rows, total, err := a.Runs.List(q.Get("state"), q.Get("source"), limit, max(0, offset), filter)
 	if err != nil {
 		failure(w, err)
 		return
@@ -380,7 +401,7 @@ func (a *App) info(w http.ResponseWriter, r *http.Request) {
 }
 func (a *App) checks(w http.ResponseWriter, r *http.Request) {
 	out := map[string]any{}
-	for _, name := range []string{"rsync", "dnf"} {
+	for _, name := range []string{"rsync", "dnf", "rpmkeys"} {
 		ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
 		b, err := exec.CommandContext(ctx, name, "--version").CombinedOutput()
 		cancel()
@@ -424,7 +445,10 @@ func (a *App) events(w http.ResponseWriter, r *http.Request) {
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 	for {
-		items, _, err := a.Runs.List("", "", 50, 0)
+		if !a.auth.authorized(r) {
+			return
+		}
+		items, err := a.Runs.Latest()
 		if err != nil {
 			return
 		}

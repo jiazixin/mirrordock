@@ -125,9 +125,13 @@ func (o *processOutput) scan(reader io.Reader) {
 			o.last = line
 		}
 		if p, ok := ParseProgress(line); ok {
+			p.ReceivedBytes = o.progress.ReceivedBytes
 			p.Files = o.progress.Files
 			p.Success = o.progress.Success
 			o.progress = p
+			o.emit(o.progress)
+		} else if n, ok := statNumber(line, "Total bytes received:"); ok && o.name == "rsync" {
+			o.progress.ReceivedBytes = new(n)
 			o.emit(o.progress)
 		} else if n, ok := statNumber(line, "Number of files:"); ok {
 			o.progress.Files = int(n)

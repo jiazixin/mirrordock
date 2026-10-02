@@ -1,14 +1,14 @@
 # MirrorDock · 源仓
 
-Go **1.27.1** + Vue 3 的软件源同步与 HTTP/HTTPS 镜像服务。Linux 是生产目标平台，macOS 可开发和验证。rsync 调用系统工具，GitHub Release 使用 `google/go-github` 和 Go 下载器，可选 DNF 4 reposync；无需 gh。
+Go **1.27.1** + Vue 3 的软件源同步与 HTTP/HTTPS 镜像服务。生产目标为 Linux，macOS 用于开发和本机验证。支持系统 rsync、可选 DNF 4 reposync、GitHub Release assets 下载；管理台位于 `/admin/`，管理 API 位于 `/api/`，公开镜像直接使用 `/<dest>/`。
 
-提供同步源管理、手动/cron 执行、srcN 失败切换、累计超时、暂停/继续、SQLite 运行记录、成功/失败分页、原始日志详情与手动清理。公开镜像直接使用 `/docker-ce/`、`/almalinux/` 等 dest 路径；管理台在 `/admin/`。页面参考用户截图，采用新的钴蓝配色和 MirrorDock Logo。
+支持手动和 cron 同步、备用来源、累计超时、自动重试、暂停/继续/取消、SQLite 历史、日志详情与手动清理、运行分析及任务结果通知。同步成功并校验后发布，失败保留上一发布代。当前验收结果与部署环境待验项见 [ACCEPTANCE.md](docs/ACCEPTANCE.md)。
 
 ## 安装与构建
 
-需要 Go 1.27.1、Node.js >=22.12（建议 Node 24）、npm。生产 rsync 使用包含发行版安全补丁的 **3.1+** 版本；启用 reposync 时需要 EL8/EL9 的 DNF 4 和 `dnf-plugins-core`。macOS 自带的旧 rsync 不支持本项目参数，请使用现代版本。
+需要 Go 1.27.1、Node.js >=22.12、npm。部署 rsync 应为包含发行版安全补丁的 **3.1+** 版本；macOS 自带旧版本不支持所需参数。Reposync 针对 EL8/EL9 的 DNF 4、`dnf-plugins-core` 和开启 GPG 检查时所需的 `rpmkeys`，不承诺兼容 DNF5。GitHub 下载不需要 gh。
 
-从仓库根执行，必须先构建真实 Vue 输出，再编译 Go：
+从仓库根执行，必须先生成 Web，再编译 Go：
 
 ```sh
 npm --prefix web ci
@@ -17,26 +17,13 @@ mkdir -p bin
 go build -trimpath -o bin/mirrordock ./cmd/mirrordock
 ```
 
-`web/dist/` 是唯一 Web 构建输出，由 `web/embed.go` 嵌入二进制，不提交 Git。干净检出直接 `go build` / `go test ./...` 会因没有嵌入文件失败，因此这些入口都需要上述 Web 预构建；容器构建已显式包含这一步。
+`web/dist/` 是唯一 Web 输出，由 `web/embed.go` 嵌入二进制，不提交 Git。干净检出直接执行 Go 构建或全量测试会因缺少嵌入文件失败。容器构建也先构建 Web。管理页面按路由加载，资源随二进制发布，无 CDN 或远程字体。
 
-Logo 的唯一设计源为 `web/src/assets/logo.svg`；侧栏与登录页直接使用矢量图。`web/public/favicon.ico` 从同一 SVG 生成，包含 16、32、48、64、128、256 像素六个尺寸，管理台与公开目录使用相同图标。修改 Logo 后用安装了 Pillow 的 Python 执行 `python3 scripts/generate-favicon.py`，再按上述顺序构建；普通构建使用已保存的 ICO，不需要 Python。重启新二进制后页面与图标更新。
-
-管理列表（批次、运行记录、同步源、计划、通知发送记录）统一默认每页 50 条，可选 20/50/100 条，支持首尾页及输入跳页；批次和通知可查看完整历史，批次筛选采用紧凑宽度。公开镜像目录不分页。
-
-管理台操作反馈统一从右上角滑入浮动提示，5 秒后自动关闭，底部细条从满宽持续缩短；支持手动关闭，最多同时显示三条，手机自动适应宽度。表单校验、运行错误详情和长期配置说明保留在相关内容中。
-
-管理台参考用户提供的旧项目 `a/web`，采用浅灰侧栏、白色内容区、紧凑表格与表单尺度；保留钴蓝品牌，标题使用 600 字重，正文与控件使用 400/500 字重。所有页面共用系统字体，所有选择框统一为自定义组件；支持方向键、Home/End、Enter、Escape、Tab 和点击外部关闭，菜单随视口定位并避开弹窗裁切。
-同步源表格分为来源、目标、最近运行和状态，已取消镜像发布列。同步方式筛选框采用紧凑宽度，最近运行日期和时间分两行显示；状态、时间、数值及对应表头居中，名称/来源/目录内容左对齐；同步源前三列表头和运行记录的名称/结果表头左对齐，操作按钮右对齐，详情标题与按钮对齐。下拉菜单宽度与选择框一致。计划管理同步源表头左对齐，操作表头与立即同步按钮居中，下次运行日期/时间分行并加深日期。公开列表排序箭头置于标题右侧，不参与文字居中。状态统一为浅底色、细边框的小圆角标签，批次使用日期分组时间线；rsync / reposync / GitHub Release 分别用蓝 / 橙 / 紫区分。公开镜像从侧栏“浏览镜像目录”进入。
-
-## 运行分析
-
-侧栏“分析”提供 **Rsync 分析**、**Reposync分析** 和 **Release分析**，可筛选近 7/30/90 天和同步源，手动刷新。展示运行次数、成功率、平均累计执行耗时、成功任务处理量，配合按日趋势（次数/处理量/耗时）、结果环图、失败原因条形图及前 20 同步源排行。Rsync 补充来源尝试、失败尝试、备用源最终成功和自动重试任务；GitHub 补充已验证资产、新增/续传与完整复用数量。Reposync 展示执行/失败尝试、自动重试任务，源排行补充重试任务数；趋势仅次数与耗时，包数、复用量、处理字节尚无可靠统计，暂不展示。
-
-按任务创建日期和程序启动时区统计全部 SQLite 历史，不受运行列表分页或日志清理影响，含今天截至更新时间；取消和未结束不计入成功率。文件/字节仅累计成功任务的最终执行器快照，处理量包含复用/增量语义，不代表网络流量。GitHub 复用包含在完成资产数中，同一资产可跨任务重复计入；未知统计不推算。耗时不含排队/暂停。独立只读连接与 5 秒查询超时保护写入连接；数据密集时可能返回重试提示。
+Logo 唯一源为 `web/src/assets/logo.svg`。修改后用安装了 Pillow 的 Python 执行 `python3 scripts/generate-favicon.py`，再构建；普通构建不需要 Python。公开目录 Phosphor Regular 图标随 `internal/mirrors/listing-icons.html` 嵌入，包含 MIT 授权；`scripts/import-directory-icons.py` 仅用于从固定上游提交重新导入。
 
 ## 首次启动
 
-完整源案例和每个字段的注释在 [configs/config.example.yaml](configs/config.example.yaml)。开始本机试用时可以创建空源配置，之后从页面新增：
+所有字段与源案例见 [configs/config.example.yaml](configs/config.example.yaml)。本机试用可先用空源配置：
 
 ```sh
 cat > configs/config.local.yaml <<'YAML'
@@ -45,158 +32,129 @@ port: 8080
 path: ../data/state
 mirror_root: ../data/mirrors
 auth:
-  username: "admin"
-  password: "请替换为你的密码"
-log:
-  level: info
-  path: ""
-  format: json
-tls:
-  cert: ""
-  key: ""
-settings:
-  retry_count: 3
-  task_timeout: 8h
-  rsync:
-    io_timeout: 5m
-    connect_timeout: 30s
-    limit_mb: 0
-  github:
-    release_count: 5
-    token: ""
-    proxy: ""
+  username: admin
+  password: 请替换为你的密码
 sources: []
 YAML
 ./bin/mirrordock --config configs/config.local.yaml
 ```
 
-替换配置中的密码后启动，访问 `http://127.0.0.1:8080/admin/`，使用 `auth.username` 与 `auth.password` 登录。账号在 YAML 中定义，程序启动时生成内存中的 bcrypt 校验值，不再使用初始化码或 SQLite 管理员密码。两个字段必须非空，用户名最多 128 字节且不能包含首尾空白或控制字符，密码最多 72 字节。旧配置需要补上 `auth`，缺失时启动报错。
+替换密码后访问 `http://127.0.0.1:8080/admin/`。账号来自 YAML，密码启动时生成内存 bcrypt 校验值；无初始化码、数据库管理员密码或设置密码 API。用户名必须非空、最多 128 字节，无首尾空白或控制字符；密码必须非空且最多 72 字节。修改账号后重启，原会话失效。配置读取 API 不返回管理员密码。
 
-修改账号或密码后重启生效，重启后需要重新登录。配置读取 API 不返回密码，页面保存同步源、计划和系统设置会保留完整 `auth`；账号只能编辑 YAML 修改。管理台已移除顶部面包屑、LOCAL MIRROR 与时区栏，手机使用导航按钮打开侧栏。
+页面新增源后手动执行一次同步。案例的上游和自动计划必须逐项确认；不要直接运行完整案例配置进行测试。程序按 `type` 选择执行器，不依据名称推断工具。
 
-新增源后执行一次同步，成功校验才发布。示例中的 Docker CE、Kubernetes、AlmaLinux 备用域名需要替换为自己的上游。示例有已开启的自动计划；正式采用案例配置前先确定目录、上游与计划。程序不会依据源名称替你选择 rsync/reposync。
+## 配置协议
 
-## 配置约定
+`-f <文件>` 与 `--config <文件>` 等价，同时指定不同文件报错。无参数读取工作目录 `config.yaml`，不存在就报错，不生成或覆盖。相对路径以配置文件目录为基准，数据库为 `<path>/data.sqlite`，任务日志为 `<path>/logs/<run-id>/<attempt>.log`。启动自动建表/索引并保留原有记录。
 
-`-f <文件>` 和 `--config <文件>` 等价；两者同时指定不同文件会报错。没有参数读取工作目录 `config.yaml`，文件不存在就报错，不自动覆盖或生成。所有相对路径以被选中的配置文件目录为基准，数据库固定为 `<path>/data.sqlite`，日志在 `<path>/logs/<run-id>/<attempt>.log`。
+用户确认的 YAML 协议优先于 [目录规范.md](目录规范.md) 的默认协议。不使用 CONFIG_FILE 或环境变量覆盖配置，不恢复 version、timezone、maxconcurrent、exec、token_env、records 字段。系统启动时区用于调度、管理台和公开目录；可在启动环境设 `TZ=Asia/Shanghai`。通知时区单独由登录浏览器同步，未同步时 UTC。
 
-程序日志使用独立的顶层 `log`：`level` 支持 `debug`、`info`、`warn`、`error`，默认 `info`；`format` 支持 `json`、`text`（普通键值格式），默认 `json`；`path` 为空时输出标准输出，填写时表示日志文件路径（例如 `../data/logs/mirrordock.log`）。相对路径以配置文件目录为基准，父目录自动创建，文件追加写入，不自动轮转；可用 logrotate 的 copytruncate，或停机归档后重启。同步任务原始日志仍按上述 run/attempt 路径保存，页面“清理日志”只清理任务日志。日志不能放进镜像根，也不能指向配置、数据库、实例锁或 TLS 文件；`<path>/logs/` 的子目录为任务日志保留，程序日志可放在该目录根部的 `mirrordock.log`；无效级别、格式、路径及文件打开失败都会报错，修改 `log` 后重启生效。
+- `listen`、`port`、`path`、`mirror_root`、TLS、`auth`、`log` 修改后重启。系统配置页仅显示路径和环境检查；页面保存其他配置时保留这些部署字段。
+- YAML 是配置真源；保存保留注释、检查 revision，使用同目录临时文件、fsync 与 rename。配置文件及父目录必须允许程序身份写入，应挂载整个配置目录。外部编辑后用“重新载入配置”，冲突时重新打开编辑器。
+- 内置两个同步 worker，同源已有排队、运行、暂停或中断任务时跳过重复触发。cron 使用五字段，`overlap` 仅支持 `skip`。
+- `task_timeout` 默认 8h，准备、传输、校验、发布、来源切换与重试等待共享累计预算；排队/暂停不计时。停止时先 TERM，最多 10 秒后 KILL 整个进程组。
+- `retry_count` 默认额外 3 次，范围 0–10，0 关闭。网络/临时上游错误按 5/10/20 秒退避、后续最多 80 秒；次数和等待期限持久化，继续不会重置。认证、证书、权限、磁盘和配置错误停止。
+- 数据、配置和 TLS 文件必须与镜像根隔离。`dest` 必须是规范相对目录，禁止保留路径、嵌套、重复，以及解析符号链接后重叠或越界的目录。
 
-出现 `field auth not found in type config.Config` 表示正在运行旧版二进制：现版已支持 `auth`，按“安装与构建”重新构建并替换实际部署的程序后重启。仅修改 YAML 或只生成临时测试二进制不会更新正在使用的程序。
+### 执行器
 
-程序启动时自动创建数据库和所需表、索引，初始化语句内置在 `internal/database`，无需手动执行 SQL。已有数据库重复启动会保留原有记录。
+Rsync 使用 `src1`、`src2` 等按数字升序尝试；各来源应为同一仓库布局。每轮耗尽备用来源后才自动重试。`delete`、保留链接/时间/权限/硬链接默认 true；不默认保留上游属主或设备文件。`limit_mb` 是单个上游任务的十进制 MB/s，0 不限速，不限制公开下载。UID/GID 可分别填写，0 有效，范围 0–4294967294；跨身份映射依赖服务用户权限，程序不提权。
 
-用户已确定的 YAML 协议优先于目录规范的默认协议：不用 `CONFIG_FILE` 或环境变量覆盖字段，GitHub 凭证直接放 `settings.github.token`。没有 version、timezone、maxconcurrent、exec、token_env 或 records 字段。进程启动环境/系统时区决定调度与管理台、公开目录的显示时区；可在启动环境设置 `TZ=Asia/Shanghai`。通知单独使用最近登录浏览器同步的 IANA 时区（未同步时 UTC），不改变调度时区。
+Reposync 使用单个 `src1`，生成任务私有 repo、缓存和密钥库，不修改 `/etc/yum.repos.d`。完整镜像要求下载元数据，并拒绝 `download_metadata=true` 与 `newest_only=true` 组合。GPG 包签名检查不等于仓库元数据签名验证；参数和真实发行版安装仍须在目标 EL 验收。
 
-- `listen`、`port`、`path`、`mirror_root`、TLS、`auth`、`log` 修改后需要重启。其余修改对新任务/计划生效，当前任务保留脱敏配置快照。Token 在每次实际执行时读取当前配置。
-- 系统设置按“Rsync / GitHub Release / 同步策略 / 系统配置 / 通知设置”分类；系统配置页签仅显示当前 YAML 路径和环境检查，进入时自动读取本机工具和目录权限，点击“刷新”重新检查并更新结果；监听、端口、数据/镜像目录和 TLS 仅在 YAML 修改，页面/API 保存其他配置时保留这些值。
-- 页面写回 YAML，保留现有注释，通过 revision 防止覆盖另一位管理员/磁盘编辑；保存使用同目录临时文件、fsync 与 rename。外部修改后点击“重新载入配置”。文件及其父目录必须允许程序身份写入，不能只挂载不可替换的单个配置文件。
-- rsync 来源使用 `src1`、`src2`、`src3` 等，按数字升序尝试；连接/网络类错误切换，磁盘与权限类错误停止。失败切换和暂停继续共享默认 8h 累计运行预算，排队/暂停不计时，超时后先 TERM，最多 10 秒后 KILL 进程组。
-- `settings.retry_count` 默认额外重试 3 次（首次加重试最多 4 轮），0 关闭，范围 0–10；适用于三种同步方式的网络/上游临时错误。Rsync 每轮先按顺序尝试所有备用来源，耗尽后再重试整轮。等待依次 5/10/20 秒，后续上限 80 秒；等待、来源切换和暂停后继续共用累计超时，暂停/取消可立即停止等待。每次尝试保留独立日志，重试次数与等待期限随运行记录持久化，继续不会重置次数；磁盘、权限、认证、证书和配置错误不自动重试。失败不会替换已发布镜像。
-- `rsync.delete` 和保留 links/times/perms/hardlinks 默认 true。`limit_mb` 是每个上游任务的十进制 MB/s，0 不限速；不限制公开下载。UID/GID 可只填一项，0 有效；跨 UID 映射通常需要 root，程序不自动提权。
-- GitHub 最近 N 个 Release 按发布时间从新到旧，源内 `release_count: 0`/省略继承系统设置；仅下载附件，不请求自动源码 ZIP/TAR。glob 可限制架构。Token 读取 API 不返回值，留空输入框保留已有值，页面提供显式清空选项。
-- GitHub 的 `settings.github.proxy` 支持 `http://`、`https://`、`socks5://`、`socks5h://`，API 与附件共用；空字符串直连，不读取代理环境变量。sing-box 同机部署建议填其 HTTP/mixed 入口，如 `http://127.0.0.1:8081`，端口换成实际监听值；异机部署填可达地址。GitHub 的 HTTPS 会通过 HTTP CONNECT 隧道，`https://` 表示代理入口本身使用 TLS，需有效证书。支持 URL 中填写用户名/密码，特殊字符须 URL 编码；按用户要求，受登录保护的配置读取 API 返回完整代理地址，页面明文回填并可直接修改，留空保存后直连；运行快照、审计和日志仍不保存代理凭证。代理不可用不会绕过代理；设置修改对下一次实际执行生效，不改变已建立的下载连接。
-- GitHub 查询失败在运行详情和原始日志中区分认证/权限、限流、DNS、连接拒绝、TLS 和 EOF，不输出凭证或签名下载 URL。`https://` 代理必须有 TLS 入口；HTTP/mixed 使用 `http://`，SOCKS 入口使用 `socks5://`/`socks5h://`，GitHub 加速网站不能直接当作正向代理地址。
-- cron 使用五字段和程序时区；同源已有排队、运行、暂停或中断任务时跳过重叠触发。内置两个同步 worker，不增加并发配置字段。
-- 数据库、配置、TLS 私钥与镜像根必须隔离；dest 必须规范相对目录，不能包含保留的 admin/api/favicon.ico/内部目录或互相嵌套。服务仅公开配置中的已发布源，不把整个磁盘根暴露出来。
+GitHub 按发布时间选最近 N 个符合条件的 Release，仅下载 assets，不下载自动源码 ZIP/TAR。源内 `release_count: 0` 继承系统值；glob 可筛选附件。大小、身份及可用 digest 校验后才复用或续传，Range 不兼容时重新下载。开启旧版本清理也只在本轮成功后生效。
 
-TLS 两项留空提供 HTTP，填齐提供同端口 HTTPS。证书链和私钥必须有效且匹配；配置或证书更换后重启。Go 原生 TLS 支持 HTTP/2，HTTPS 不宣称使用 sendfile。
+GitHub Token 直接存放 `settings.github.token`，读取 API 仅返回存在标记，页面留空保留，显式清空删除。`settings.github.proxy` 支持 HTTP/HTTPS/SOCKS5/SOCKS5h，API 和附件共用，空字符串直连，不读取代理环境变量；代理失败不绕过代理。HTTP/mixed 入口用 `http://`，`https://` 要求代理入口自身支持 TLS；特殊字符需 URL 编码。**按已确认协议，受登录保护的 API 返回完整代理地址，页面明文回填；其认证信息仍不进入运行快照、审计或日志。** Token 与代理在每次实际执行时读取。
 
-## 通知设置
+### 日志与 TLS
 
-进入“系统设置 → 通知设置”，五个渠道默认关闭，各自独立保存、启用和发送测试。敏感输入均为密码框；保存后清空输入，显示“已保存，留空保持不变”。测试使用已保存的配置，自动通知开关可以保持关闭。页面帮助支持悬停、聚焦、点击和 Escape；窄屏卡片为单列。
+顶层 `log`：level 为 debug/info/warn/error，默认 info；format 为 json/text，默认 json；path 为空输出标准输出，非空为相对配置目录的追加文件。程序不自动轮转；可停机归档或使用 logrotate copytruncate。日志不能位于镜像根，不能覆盖配置、数据库、锁、通知密钥或 TLS 文件；任务日志子目录保留给原始输出。页面清理仅处理终态任务日志，保留记录和错误摘要。
 
-- **企业微信**：群中添加群机器人，复制完整 `https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=…`。
-- **钉钉**：群设置中添加自定义机器人，复制完整 `https://oapi.dingtalk.com/robot/send?access_token=…`；启用加签时另填 `SEC…` 密钥。关键词规则应允许 MirrorDock，IP 规则应允许服务器出口。密钥留空保留，只能勾选“清除已保存的加签密钥”删除。
-- **Telegram**：通过 `@BotFather` 创建机器人并复制 Bot Token；先向机器人发起会话，群通知需将机器人加入群。通过 Bot API `getUpdates` 获取 `chat.id`，群组 ID 保留负号。
-- **Bark**：在应用复制“服务地址/设备 Key”，删除 Key 后面的示例标题和正文；末尾斜杠可保留。自建服务如 `https://example.com/bark/设备Key/` 会发送到 `https://example.com/bark/push`，Key 放在 JSON 的 `device_key` 中，`isArchive` 使用字符串 `"1"`（[Bark 官方 API V2](https://github.com/Finb/bark-server/blob/master/docs/API_V2.md)）。
-- **通用 Webhook**：完整 HTTP/HTTPS 接收地址；POST JSON 包含 `event`、`title`、`body`，任务事件 `batch.finished`，测试事件 `notification.test`；HTTP 2xx 表示成功。
+TLS cert/key 同时留空提供 HTTP，填齐且匹配提供同端口 HTTPS，改动后重启。Go TLS 支持 HTTP/2，HTTPS 不宣称 sendfile。生产管理会话需要保密时启用 TLS。出现 `field auth not found` 表示部署了旧二进制，应重新构建、替换实际程序并重启。
 
-所有渠道先保存，再发送测试。地址禁止内嵌用户名密码和 fragment，企业微信/钉钉限定官方机器人地址。服务端请求超时 10 秒、禁止重定向，响应上限 64 KiB；除通用 Webhook 外同时校验业务返回值。错误只给出脱敏说明，不返回远端原始正文。测试立即由服务端发送，发送记录列表保存自动任务结果通知。
+## 管理界面与统计
 
-每个同步任务对应一个源和目标目录，进入完成、失败、超时、取消或服务中断后生成摘要；已有部分失败状态由 `failed` 与子项统计体现。“仅失败”包含失败、超时、中断，以及任意含失败子项的终态；无失败的完成/取消不发送。首次或重新启用时记录当时最大任务编号，仅处理后续新建任务；启用前已创建的排队/运行任务也不通知。关闭后停止等待项，切换“仅失败”后停止不符合条件的等待项；已经开始的请求无法撤回。中断任务即使快速继续也保留首次终态结果，每渠道每任务至多生成一条记录。
+管理列表默认每页 50，可选 20/50/100，支持首尾页和输入跳页；运行与通知查询覆盖完整历史。源状态按每源最新任务读取，不受其他源历史数量影响。批次与记录支持最近 1/12/24 小时、昨天、3/7/30 天和本月；自然日/月使用程序启动时区。
 
-独立 worker 每 3 秒扫描 SQLite，按“渠道 + 任务编号”去重，正文生成后保存快照。发送状态为等待、发送中、已发送、失败、已停止。首次计入尝试，最多 3 次；第一次失败后等待 30 秒，第二次等待 60 秒。重启将未确认的发送中记录重新排队，已尝试 3 次则失败。远端收到但响应丢失时可能重复送达，用正文任务编号识别。通知失败不改变同步结果；页面支持历史分页，默认每页 50 条，可选 20/50/100 条并跳页，可手动刷新，每 5 秒自动刷新，离开通知页后停止轮询。
+批次“实际接收”累计各次尝试：Rsync 为 `Total bytes received`（包含协议数据，命令结束后更新），GitHub 为实际读取的资产响应正文（不含复用、已有续传片段、HTTP/TLS 头部）。旧记录、Reposync 或未报告的尝试显示未统计/部分统计。运行记录“数据量”为执行器处理量，不等于网络流量。
 
-摘要包含任务编号、源名称/标识、目标目录、执行器和预算等相关配置、总数/成功/失败/跳过/未完成数、提交/实际开始/结束时间及实际开始至结束耗时（不含初始排队）。执行器未报告的统计不推算失败文件数，缺失时间明确标为未开始或未记录。源和目标名称截断到 100 字符；当前每个任务仅有一个目标。摘要不包含业务文件、凭据、上游完整 URL 或原始错误正文。
+Rsync / Reposync / Release 分析按任务创建日期聚合完整历史，支持 7/30/90 天和同步源。成功率排除取消及未结束任务；耗时不含排队/暂停。处理量只累计成功任务最终快照，包含复用/增量语义。Reposync 不展示无法可靠取得的包数/处理量。只读连接与 5 秒超时限制查询，密集数据可能需要重试。
 
-登录成功或恢复登录会话后，浏览器同步 IANA 时区到 SQLite，通知显示相应 UTC 偏移及名称，未同步为 UTC；嵌入时区数据支持缺少系统时区文件的部署。关闭页面和重启后使用已保存值；更改时区不重写已生成正文，cron/管理台/公开目录继续使用程序启动时区。
+详情每 3 秒更新状态、尝试与日志；历史尝试选择不会被新尝试覆盖。日志最多保留当前 2 MiB 文本，可暂停滚动跟随；下载获取点击时该尝试已有的完整日志。关闭页面会停止轮询。反馈提示 5 秒关闭、最多三条；表单错误保留在相关内容中。窄屏支持侧栏、单列选项卡和横向表格滚动，选择框和弹窗可用键盘操作。
 
-**凭据备份**：项目原先没有加密密钥管理，现增加 `<path>/notification.key`（AES-256-GCM，普通文件、权限 0600）。通知配置为 YAML 的 `settings.notifications`，`endpoint`、`token`、`secret` 存放绑定渠道/字段的 `enc:v1:` 密文，读取接口仅返回存在标记，通用配置保存也会保留通知配置。不要直接在 YAML 填写通知明文凭据。一起备份 YAML、完整 state 目录（含密钥、SQLite 队列、激活边界和时区）；只备份 YAML 或数据库无法恢复凭据。已有密文时密钥丢失或不匹配会阻止启动，不会静默生成替代密钥；恢复时保留文件权限。现有 GitHub Token 的直接 YAML 协议保持原样。
+## 通知与备份
+
+五个渠道：企业微信、钉钉、Telegram、Bark、通用 Webhook，默认关闭，分别保存和测试。先保存再测试，测试使用已保存凭据，不依赖自动开关。企业微信/钉钉限定官方机器人地址；Bark 输入服务地址/设备 Key；Webhook 接收 POST JSON `{event,title,body}`，事件为 `batch.finished` 或 `notification.test`。请求超时 10 秒、不重定向、响应上限 64 KiB，错误不返回远端原始正文。
+
+启用时记录最大任务编号，仅通知后续新建任务；每渠道每任务一条记录。仅失败包括失败、超时、中断及含失败子项的终态。独立 worker 每 3 秒扫描，最多尝试 3 次，失败等待 30/60 秒；通知失败不改变同步结果。远端已收到而响应丢失时可能重复送达，以正文任务编号识别。记录页每 5 秒刷新，离开即停止。
+
+通知 endpoint/token/secret 在 YAML 中为绑定渠道/字段的 AES-256-GCM `enc:v1:` 密文，密钥为 `<path>/notification.key`、0600 普通文件。读取 API 只返回存在标记；敏感输入留空保留，显式清空才删除。不要在 YAML 填通知明文凭据；已有密文时密钥丢失/不匹配会阻止启动。
+
+备份应先正常停止服务，再一起备份 YAML、**完整 state 目录**（SQLite、通知密钥、队列、时区等）和镜像根。只备份 YAML 或 SQLite 无法恢复通知凭据。在线备份需保证 SQLite 一致性，不能只复制写入中的数据库。忘记密码时修改 YAML 后重启。
 
 ## 下载与发布
 
-公开目录使用紧凑的白底目录 Header 与白色文件表格，显示名称、类型、大小及修改时间，提供统一的目录、RPM/DEB、压缩包、元数据、签名和校验和图标。Header 依次显示“当前位置”、动态目录面包屑和列表标题/数量；搜索位于标题行右侧，窄屏独占一行，支持当前目录搜索、排序，公开镜像目录不分页；目录最多读取 1000 项，超出时明确提示，其他文件仍可通过完整路径下载。普通镜像项目行显示状态、公开文件总大小、上次同步及下次计划；GitHub 仓库项目行同样显示状态、当前发布文件总大小、项目上次同步及下次计划；仓库内版本目录沿用名称、类型、大小和修改时间，只补充各版本独立大小，不展示状态或上次/下次同步。旧发布代首次启动补算大小，未知大小或同步时间显示 `—`；大小是普通公开文件的逻辑字节总量，不计私有文件、链接目标或保留代。目录说明、类型筛选、页脚、品牌旁标签、公开下载标记及行尾操作图标已移除；目录面包屑从小房子首页图标开始，使用浅灰 Chevron 分隔；祖先目录可点击，当前目录不可点击并加粗，根目录只显示首页图标。已取消上级目录按钮；长路径在面包屑内部滚动，启用脚本时优先显示当前目录，超长目录名省略显示且保留完整悬停提示。修改时间与同步时间使用程序启动时区；禁用 JavaScript 时仍能浏览已列出的全部链接。
+服务仅公开配置中的发布源，不暴露整个磁盘根。工作目录为 `.mirrordock/work/<run-id>`，成功代位于 `.mirrordock/published/<uuid>`；发布指针先持久化再切换路由。旧代至少保留 24 小时，有活动引用不回收，缺失旧包可回退读取。新任务优先 reflink，回退独立复制；需为暂存和保留代预留磁盘空间。首次启动可能校验并导入已有 dest 目录，部署后不要直接修改发布代。删除源撤销路由/计划，不删除镜像文件；活动、暂停、中断任务必须先取消才能改 dest。
 
-文件列表使用 [Phosphor Icons](https://github.com/phosphor-icons/core) 的 Regular 单色 SVG，固定上游提交，MIT 授权全文随 `internal/mirrors/listing-icons.html` 一起嵌入。图标无需 CDN 或额外 npm 依赖；只在更新图标源码时运行 `python3 scripts/import-directory-icons.py`（需访问官方仓库），正常构建不联网下载图标。
+公开目录可搜索/排序，不分页，最多列出 1000 项并提示截断；其他文件仍可用完整路径下载。无 JavaScript 时仍有已列出的链接。项目行展示状态、公开文件逻辑大小和上次/下次同步；GitHub 版本行展示大小。符号链接不回显目标，私有标记不可下载。
 
-`/` 为公开目录首页，`/<dest>/` 直接提供镜像，支持 GET、HEAD、单段/多段 Range、ETag 与条件请求；未知镜像文件返回 404。管理 API 使用 Cookie 鉴权及同源写入验证。公开文件强制附件下载、nosniff 和 sandbox，私有工作目录、续传片段、数据库和配置不对外提供。
+文件下载保留真实文件流、HTTP/1.1 sendfile 调用链、Range/HEAD/条件请求；热路径不访问 SQLite、不哈希全文件、不逐块记录日志、不动态压缩。有界资源和生产验收边界见 [DESIGN.md 的 ADR-010](docs/DESIGN.md#adr-010下载性能与资源隔离) 与 [ACCEPTANCE.md](docs/ACCEPTANCE.md)。
 
-同步到 `.mirrordock/work/<run-id>`，基于当前代 reflink 或独立复制；成功校验并同步文件和目录数据，预验证文件根及公开链接后提交发布指针、替换路由；提交失败回滚链接和暂存。首次导入已有 dest 目录会校验后移动到私有发布代，并保留同路径链接。旧版本自替换起至少保留 24h，活动请求固定文件根，缺失的旧包可以回退读取；失败任务不会覆盖当前公开代。删除源配置保留文件，运维删除已发布数据前需停止程序并确认引用。
-
-Linux HTTP/1.1 的真实文件与 `ReaderFrom` 委托链保留 sendfile 条件；正文交给内核页缓存，下载热路径不查 SQLite、不读 YAML、不计算整文件哈希、不动态压缩。下载池和元数据缓存有界，连接使用无进展监测。详见 [实现说明](docs/IMPLEMENTATION.md) 和 [验收记录](docs/ACCEPTANCE.md)。本机回环速度不等于实际服务器/磁盘/网络吞吐保证。
-
-## 开发与测试
-
-开发前也先生成 `web/dist`，随后可分别运行：
+## 开发验证
 
 ```sh
-go run ./cmd/mirrordock -f configs/config.local.yaml
-npm --prefix web run dev
-```
-
-Vite 在 `http://127.0.0.1:5173/admin/`，将 `/api` 代理到 8080；浏览器以相同端口 Origin 发起写入，后端开发代理需要保留该同源关系。正式构建页面由 Go 自己提供。
-
-```sh
+npm --prefix web run format:check
 npm --prefix web run build
 go vet ./...
-go test -race ./...
+go test -race -count=1 ./...
 go test ./internal/mirrors -run '^$' -bench BenchmarkPublicHTTP -benchmem
 GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o bin/mirrordock-linux-amd64 ./cmd/mirrordock
 ```
 
-Go 测试使用临时目录和本地 HTTP 上游。真实 rsync 协议与浏览器 E2E 需要显式提供测试可执行文件，始终使用隔离 daemon，绝不同步案例中的完整发行版：
+格式化使用 `npm --prefix web run format`。真实 rsync 和 E2E 用隔离 daemon/临时目录，显式选择现代 rsync；程序启动测试时也需将相应目录放在 PATH：
 
 ```sh
-MIRRORDOCK_TEST_RSYNC=/usr/bin/rsync go test -race ./...
-# 先构建 bin/mirrordock 与 Web，并安装 Playwright 的 Chromium
-# 测试可设置 MIRRORDOCK_TEST_BINARY 使用独立的临时二进制，避免替换正在使用的程序
 (cd web && npm exec -- playwright install chromium)
-MIRRORDOCK_TEST_RSYNC=/usr/bin/rsync npm --prefix web run test:e2e
+PATH=/path/to/modern-rsync:$PATH MIRRORDOCK_TEST_RSYNC=/path/to/modern-rsync/rsync go test -race -count=1 ./...
+# 先构建 Web 和测试二进制；变量仅用于测试，不属于产品配置
+PATH=/path/to/modern-rsync:$PATH MIRRORDOCK_TEST_RSYNC=/path/to/modern-rsync/rsync \
+  MIRRORDOCK_TEST_BINARY=/absolute/temp/mirrordock npm --prefix web run test:e2e
 ```
 
-该变量只供测试选择 fixture daemon，不是产品的 rsync exec 配置。Web 报告在 `web/test-results` / `web/playwright-report`，Go/OCR 报告在根 `test-results`，都不提交。当前仓库未连接外部 CI，以上为 CI 的本地等价命令；没有虚构已运行的远程流水线。
+未设置测试 rsync 时部分协议测试会跳过；测试通过不代表跳过项已验证。报告位于根 `test-results/` 和 `web/test-results/`，均忽略。项目未连接外部 CI，不宣称运行远程流水线。
 
-## 部署与备份
+## 部署与目录
 
-容器示例：`docker build -t mirrordock .`。多阶段显式先构建 Vue，再用 Go 1.27.1 编译，EL9 运行层包含 rsync 和 DNF reposync。启动时挂载整个配置目录和独立数据/镜像目录，例如将配置的 path 设为 `/var/lib/mirrordock`，mirror_root 设为 `/srv/mirrors`：
+`docker build -t mirrordock .` 使用先 Vue 后 Go 的多阶段构建，EL9 运行层先应用已发布安全更新，再安装 rsync/DNF。Docker 与真实 EL 验收以当前验收文档为准。配置中的 path 和 mirror_root 可设为 `/var/lib/mirrordock` 与 `/srv/mirrors`。
+
+国内网络可使用 `docker build --build-arg GOPROXY=https://goproxy.cn --build-arg ROCKY_MIRROR=https://mirror.nju.edu.cn/rocky -t mirrordock .`。参数选择构建依赖下载源，默认仍为 Go 官方代理和 Rocky 镜像列表，保留 Go 校验数据库与 RPM 签名检查；Rocky 源保留在镜像的软件源配置中，应用同步仍使用任务私有仓库。基础镜像加速由 Docker 引擎的 `registry-mirrors` 设置，例如按 [毫秒镜像说明](https://1ms.run/guide) 配置用户选择的源；这些设置不写入应用 YAML。
 
 ```sh
 docker run --rm --name mirrordock -p 8080:8080 -e TZ=Asia/Shanghai \
   -v /absolute/config-dir:/etc/mirrordock \
   -v /absolute/state-dir:/var/lib/mirrordock \
-  -v /absolute/mirror-dir:/srv/mirrors \
-  mirrordock
+  -v /absolute/mirror-dir:/srv/mirrors mirrordock
 ```
 
-systemd 定义在 [deploy/mirrordock.service](deploy/mirrordock.service)。默认以 mirrordock 用户运行；预先创建配置、数据和镜像目录并赋予所需读写权限。不要在这一身份下配置映射为其他 UID 后再期待自动提权。根据实际部署修改路径与用户，端口 <1024 另需相应绑定权限。生产管理会话需要保密时启用上述 TLS 配置。
+systemd 模板见 [deploy/mirrordock.service](deploy/mirrordock.service)，部署前创建服务用户、目录并赋权，按实际位置调整路径。低端口另需绑定权限。
 
-源编辑表单的运行计划位于同步来源之前；运行计划、rsync 和 reposync 的布尔选项采用双列开关卡片，所有卡片保持单列宽度，480px 以下改为单列。运行详情的日志每 3 秒自动追加刷新，页面最多保留当前 2 MiB 文本；向下箭头默认按下，持续跟随最新日志，点击可暂停/恢复跟随。刷新按钮仅在读取期间高亮旋转，成功或失败后均恢复；“下载”导出所选尝试在服务端收到点击请求时已有的完整日志，不受页面片段限制，后续写入不加入该下载。记录和任务日志永久保留，页面“清理日志”只删除已结束尝试的原始日志，保留历史、状态和错误摘要；活动与暂停日志不会删除。为数据目录和暂存/发布代预留容量，reflink 不可用时复制会占用额外正文空间。备份最简单的方式是先正常停止服务，再一起备份 YAML、完整 state 目录和镜像根；运行期间需采用 SQLite 一致性备份，不能只复制正在写入的 data.sqlite。忘记管理员密码时修改 YAML 的 auth.password，再重启服务；无需编辑数据库。
-
-## 实际目录
+目录基线只维护于 [目录规范.md](目录规范.md)，协作规则见 [AGENTS.md](AGENTS.md)，当前实现见 [IMPLEMENTATION.md](docs/IMPLEMENTATION.md)。
 
 ```text
 cmd/mirrordock/           CLI 入口
 internal/{config,observability,database,sync,runs,mirrors,notifications,app}/
-configs/                 注释案例；本地配置被忽略
+web/                     唯一 npm/Vite 边界；Vue、E2E、embed.go
+configs/                 注释案例；本地实例忽略
 deploy/                  systemd 定义
-scripts/                 Logo 衍生 favicon 生成工具
-docs/                    设计、计划、实现与验收
-web/                     独立 npm/Vite 边界、Vue 源码、e2e、embed.go
-bin/                     本地二进制（忽略）
-data/                    本地持久数据（忽略）
-.cache/                  可重建测试工具缓存（忽略）
-test-results/            Go/OCR 运行报告（忽略）
+scripts/                 favicon 与目录图标生成工具
+docs/                    当前设计、实施、验收与本次计划
+bin/ data/ .cache/        忽略的本机二进制、状态与缓存
+test-results/            忽略的 Go/OCR/构建报告
 ```
 
-目录例外：无额外业务目录。`web/embed.go` 用于嵌入 Vite 唯一输出，属于实际使用的 Go 包；数据库初始化内置在 `internal/database`。配置文件选择和直接 YAML Token 协议是用户明确确认的协议例外，详见“配置约定”。协作规则见 [AGENTS.md](AGENTS.md)，目录基线仍只在 [目录规范.md](目录规范.md) 维护。
+| 基线规则 | 实际行为 | 原因与依据 | 适用范围 / 重新评估条件 |
+| --- | --- | --- | --- |
+| §7.1 配置入口与覆盖 | -f/--config；默认 cwd/config.yaml；无字段环境覆盖 | 用户确认的 YAML 协议 | 本程序；仅用户要求改变时评估 |
+| §7.1 密钥注入 | GitHub Token 直接 YAML；通知凭据 YAML 密文；代理 URL 管理端回填 | 已确认配置与代理编辑协议 | 配置 API/任务；凭据协议改变时评估 |
+| §11 工具必需路径 | web/embed.go 嵌入 web/dist | Go embed 与 Vite 的实际构建边界 | Web 资源；交付方式改变时评估 |
+| §7.2 日志位置 | log.path 可为部署绝对路径或相对配置目录 | 已确认顶层 log 字段；验证与镜像/敏感路径隔离 | 程序日志；日志协议改变时评估 |

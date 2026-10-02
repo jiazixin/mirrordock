@@ -114,7 +114,9 @@ func New(root string, store *database.Store, sources []config.Source) (*Manager,
 				}
 				p = Publication{SourceID: s.ID, Dest: s.Dest, Current: g}
 				if e = store.SavePublication(s.ID, p); e != nil {
-					return nil, e
+					// A failed import must leave the original directory available for
+					// the next startup rather than orphaning it in a private generation.
+					return nil, errors.Join(e, os.Rename(g.Directory, real))
 				}
 			} else {
 				continue
@@ -504,7 +506,6 @@ func (m *Manager) Restrict(sources []config.Source) {
 	for dest, o := range m.table.Load().entries {
 		if allowed[dest] == o.Publication.SourceID {
 			next.entries[dest] = o
-		} else {
 		}
 	}
 	m.install(next)

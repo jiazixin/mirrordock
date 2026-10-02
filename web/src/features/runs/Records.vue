@@ -3,6 +3,7 @@ import SelectField from '../../components/SelectField.vue'
 import { computed, ref } from 'vue'
 import Pagination from '../../components/Pagination.vue'
 import { useRunPage } from './useRunPage'
+import { timeRangeOptions } from './timeRanges'
 import { CheckCircle2, CircleAlert, Search, RefreshCw, Trash2, Info } from '@lucide/vue'
 import StatusBadge from '../../components/StatusBadge.vue'
 import RunDetail from './RunDetail.vue'
@@ -10,9 +11,168 @@ import { api } from '../../app/api'
 import { state, perform, notify } from '../../app/state'
 import StackedTime from '../../components/StackedTime.vue'
 import { time, duration, bytes } from '../../app/format'
-const tab = ref('succeeded'); const source = ref(''); const age = ref(''); const search = ref(''); const detail = ref<number>()
+const tab = ref('succeeded')
+const source = ref('')
+const age = ref('')
+const search = ref('')
+const detail = ref<number>()
 const { page, pageSize, total, records, loading, load } = useRunPage({ state: tab, source, age })
-const visible = computed(() => records.value.filter(item => `${item.name} ${item.error_code} ${item.error}`.toLowerCase().includes(search.value.toLowerCase())))
-async function clear() { if(!window.confirm('清理已结束任务的原始日志？运行记录、来源尝试与错误摘要会保留。')) return; const payload=await api<{cleared:number}>('/logs/clear','POST');notify(`已清理 ${payload.cleared} 份日志`);await load() }
+const visible = computed(() =>
+  records.value.filter((item) =>
+    `${item.name} ${item.error_code} ${item.error}`
+      .toLowerCase()
+      .includes(search.value.toLowerCase()),
+  ),
+)
+async function clear() {
+  if (!window.confirm('清理已结束任务的原始日志？运行记录、来源尝试与错误摘要会保留。')) return
+  const payload = await api<{ cleared: number }>('/logs/clear', 'POST')
+  notify(`已清理 ${payload.cleared} 份日志`)
+  await load()
+}
 </script>
-<template><section><div class="page-heading"><div><span class="eyebrow">EXECUTION HISTORY</span><h1>运行记录<span>.</span></h1></div><div class="heading-actions"><button class="button" @click="perform(clear)"><Trash2 :size="16"/>清理日志</button><button class="button" @click="perform(load)"><RefreshCw :size="16"/>刷新</button></div></div><div class="tabs"><button :class="{active:tab==='succeeded'}" @click="tab='succeeded'"><CheckCircle2 :size="17"/>成功记录</button><button :class="{active:tab==='failure'}" @click="tab='failure'"><CircleAlert :size="17"/>失败记录</button></div><div class="panel"><div class="filter-toolbar"><label class="search-field"><Search :size="17"/><input v-model="search" placeholder="搜索当前页名称或错误…" aria-label="搜索当前页记录"/></label><SelectField v-model="source" aria-label="按同步源筛选" :options="[{ value: '', label: '全部同步源' }, ...(state.config?.config.sources ?? []).map(item => ({ value: item.id, label: item.name }))]" /><SelectField v-model="age" aria-label="按时间筛选" :options="[{ value: '', label: '全部时间' }, { value: '1', label: '最近 24 小时' }, { value: '7', label: '最近 7 天' }, { value: '30', label: '最近 30 天' }]" /><span class="filter-count">共 {{total}} 项</span></div><div class="table-scroll"><table><thead><tr><th>时间</th><th class="text-left">同步源</th><th>状态</th><th>耗时 / 数据量</th><th class="text-left">{{tab==='succeeded'?'处理结果':'失败原因'}}</th><th class="right"><span class="action-heading">详情</span></th></tr></thead><tbody><tr v-for="run in visible" :key="run.id"><td><StackedTime :value="time(run.created_at)" :datetime="run.created_at"/></td><td class="text-left"><strong>{{run.name}}</strong><small>{{run.type}} · #{{run.id}}</small></td><td><StatusBadge :state="run.state"/></td><td><strong>{{duration(run.elapsed_seconds)}}</strong><small>{{bytes(run.progress.bytes)}}</small></td><td class="record-reason text-left"><template v-if="run.error_code"><strong>{{run.error_code}}</strong><p>{{run.error}}</p></template><template v-else>成功发布<template v-if="run.type==='github_release'||run.progress.success>0"> · {{run.progress.success}} 项</template><span v-if="run.progress.skipped"> · 复用 {{run.progress.skipped}} 项</span></template></td><td class="right"><button class="icon-button" aria-label="查看记录详情" @click="detail=run.id"><Info :size="17"/></button></td></tr><tr v-if="!visible.length"><td colspan="6" class="empty-state"><component :is="tab==='succeeded'?CheckCircle2:CircleAlert" :size="32"/><h3>暂无{{tab==='succeeded'?'成功':'失败'}}记录</h3><p>任务结束后，记录会自动保存在这里。</p></td></tr></tbody></table></div><Pagination v-model:page="page" v-model:page-size="pageSize" :total="total" :count="visible.length" :disabled="loading"/></div><RunDetail v-if="detail" :id="detail" @close="detail=undefined"/></section></template>
+<template>
+  <section>
+    <div class="page-heading">
+      <div>
+        <span class="eyebrow">EXECUTION HISTORY</span>
+        <h1>运行记录<span>.</span></h1>
+      </div>
+      <div class="heading-actions">
+        <button
+          class="button"
+          @click="perform(clear)"
+        >
+          <Trash2 :size="16" />清理日志</button
+        ><button
+          class="button"
+          @click="perform(load)"
+        >
+          <RefreshCw :size="16" />刷新
+        </button>
+      </div>
+    </div>
+    <div class="tabs">
+      <button
+        :class="{ active: tab === 'succeeded' }"
+        @click="tab = 'succeeded'"
+      >
+        <CheckCircle2 :size="17" />成功记录</button
+      ><button
+        :class="{ active: tab === 'failure' }"
+        @click="tab = 'failure'"
+      >
+        <CircleAlert :size="17" />失败记录
+      </button>
+    </div>
+    <div class="panel">
+      <div class="filter-toolbar">
+        <label class="search-field"
+          ><Search :size="17" /><input
+            v-model="search"
+            placeholder="搜索当前页名称或错误…"
+            aria-label="搜索当前页记录" /></label
+        ><SelectField
+          v-model="source"
+          aria-label="按同步源筛选"
+          :options="[
+            { value: '', label: '全部同步源' },
+            ...(state.config?.config.sources ?? []).map((item) => ({
+              value: item.id,
+              label: item.name,
+            })),
+          ]"
+        /><SelectField
+          v-model="age"
+          aria-label="按时间筛选"
+          :options="timeRangeOptions"
+        /><span class="filter-count">共 {{ total }} 项</span>
+      </div>
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>时间</th>
+              <th class="text-left">同步源</th>
+              <th>状态</th>
+              <th>耗时</th>
+              <th>数据量</th>
+              <th class="text-left">{{ tab === 'succeeded' ? '处理结果' : '失败原因' }}</th>
+              <th class="right"><span class="action-heading">详情</span></th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr
+              v-for="run in visible"
+              :key="run.id"
+            >
+              <td>
+                <StackedTime
+                  :value="time(run.created_at)"
+                  :datetime="run.created_at"
+                />
+              </td>
+              <td class="text-left">
+                <strong>{{ run.name }}</strong
+                ><small>{{ run.type }} · #{{ run.id }}</small>
+              </td>
+              <td><StatusBadge :state="run.state" /></td>
+              <td>
+                <strong>{{ duration(run.elapsed_seconds) }}</strong>
+              </td>
+              <td>{{ bytes(run.progress.bytes) }}</td>
+              <td class="record-reason text-left">
+                <template v-if="run.error_code"
+                  ><strong>{{ run.error_code }}</strong>
+                  <p>{{ run.error }}</p></template
+                ><template v-else
+                  >成功发布<template
+                    v-if="run.type === 'github_release' || run.progress.success > 0"
+                  >
+                    · {{ run.progress.success }} 项</template
+                  ><span v-if="run.progress.skipped">
+                    · 复用 {{ run.progress.skipped }} 项</span
+                  ></template
+                >
+              </td>
+              <td class="right">
+                <button
+                  class="icon-button"
+                  aria-label="查看记录详情"
+                  @click="detail = run.id"
+                >
+                  <Info :size="17" />
+                </button>
+              </td>
+            </tr>
+            <tr v-if="!visible.length">
+              <td
+                colspan="7"
+                class="empty-state"
+              >
+                <component
+                  :is="tab === 'succeeded' ? CheckCircle2 : CircleAlert"
+                  :size="32"
+                />
+                <h3>暂无{{ tab === 'succeeded' ? '成功' : '失败' }}记录</h3>
+                <p>任务结束后，记录会自动保存在这里。</p>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <Pagination
+        v-model:page="page"
+        v-model:page-size="pageSize"
+        :total="total"
+        :count="visible.length"
+        :disabled="loading"
+      />
+    </div>
+    <RunDetail
+      v-if="detail"
+      :id="detail"
+      @close="detail = undefined"
+    />
+  </section>
+</template>

@@ -2,9 +2,42 @@ package database
 
 import (
 	"context"
+	"encoding/json/v2"
 	"testing"
 	"time"
 )
+
+func TestLatestRunsIncludeQuietSourcesBeyondHistoryPage(t *testing.T) {
+	s, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	_, err = s.CreateRun("quiet", "paused", "2026-10-01T00:00:00Z", map[string]any{"source_id": "quiet", "state": "paused"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range 125 {
+		_, err = s.CreateRun("noisy", "succeeded", "2026-10-02T00:00:00Z", map[string]any{"source_id": "noisy", "sequence": i})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	rows, err := s.LatestRuns([]string{"quiet", "noisy", "missing"})
+	if err != nil || len(rows) != 2 {
+		t.Fatal(len(rows), err)
+	}
+	var first map[string]any
+	if err := json.Unmarshal(rows[0], &first); err != nil || first["state"] != "paused" {
+		t.Fatal(first, err)
+	}
+	var last struct {
+		Sequence int `json:"sequence"`
+	}
+	if err := json.Unmarshal(rows[1], &last); err != nil || last.Sequence != 124 {
+		t.Fatal(last, err)
+	}
+}
 
 func TestDurableRecords(t *testing.T) {
 	dir := t.TempDir()
@@ -64,6 +97,10 @@ func TestRunPaginationFiltersBeforeCounting(t *testing.T) {
 	if err != nil || total != 62 || len(rows) != 12 {
 		t.Fatalf("filtered last page: rows=%d total=%d err=%v", len(rows), total, err)
 	}
+	rows, total, err = s.ListRuns("succeeded", "source", 50, 0, RunFilter{From: "2026-09-30T00:00:00Z", Until: "2026-10-01T00:00:00Z"})
+	if err != nil || total != 0 || len(rows) != 0 {
+		t.Fatalf("exclusive upper bound: %d %d %v", len(rows), total, err)
+	}
 	rows, total, err = s.ListRuns("succeeded", "source", 50, 0, RunFilter{From: "2026-10-02T00:00:00Z"})
 	if err != nil || total != 0 || len(rows) != 0 {
 		t.Fatalf("empty page: rows=%d total=%d err=%v", len(rows), total, err)
@@ -97,5 +134,26 @@ func TestReadSnapshotDoesNotOccupyWriterAndCannotWrite(t *testing.T) {
 	}
 	if _, err := tx.Exec("DELETE FROM runs"); err == nil {
 		t.Fatal("read-only pool allowed writes")
+	}
+}
+
+func TestRunTimeBoundsHandleWholeAndFractionalSeconds(t *testing.T) {
+	s, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	for _, stamp := range []string{"2026-10-01T00:00:00Z", "2026-10-01T00:00:00.000000001Z", "2026-10-01T23:59:59.999999999Z", "2026-10-02T00:00:00Z", "2026-10-02T00:00:00.1Z"} {
+		if _, err := s.CreateRun("fixture", "succeeded", stamp, map[string]any{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, total, err := s.ListRuns("", "", 50, 0, RunFilter{From: "2026-10-01T00:00:00Z", Until: "2026-10-02T00:00:00Z"})
+	if err != nil || total != 3 {
+		t.Fatal(total, err)
+	}
+	_, total, err = s.ListRuns("", "", 50, 0, RunFilter{From: "2026-10-01T00:00:00.000000001Z", Until: "2026-10-02T00:00:00.1Z"})
+	if err != nil || total != 3 {
+		t.Fatal(total, err)
 	}
 }

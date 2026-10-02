@@ -9,6 +9,8 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
+	"time"
 
 	_ "modernc.org/sqlite"
 )
@@ -18,6 +20,7 @@ const initialSchema = `
 CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY);
 CREATE TABLE IF NOT EXISTS runs (id INTEGER PRIMARY KEY AUTOINCREMENT, source_id TEXT NOT NULL, state TEXT NOT NULL, created_at TEXT NOT NULL, data BLOB NOT NULL);
 CREATE INDEX IF NOT EXISTS runs_source_state ON runs(source_id,state);
+CREATE INDEX IF NOT EXISTS runs_source_id ON runs(source_id,id DESC);
 CREATE INDEX IF NOT EXISTS runs_state_id ON runs(state,id DESC);
 CREATE INDEX IF NOT EXISTS runs_created_at ON runs(created_at);
 CREATE TABLE IF NOT EXISTS run_results (id INTEGER PRIMARY KEY, data BLOB NOT NULL);
@@ -37,6 +40,7 @@ CREATE INDEX IF NOT EXISTS notifications_due ON notifications(state,next_at,id);
 INSERT OR IGNORE INTO schema_migrations(version) VALUES(1);
 INSERT OR IGNORE INTO schema_migrations(version) VALUES(2);
 INSERT OR IGNORE INTO schema_migrations(version) VALUES(3);
+INSERT OR IGNORE INTO schema_migrations(version) VALUES(4);
 `
 
 type Store struct {
@@ -188,8 +192,27 @@ func (s *Store) Run(id int64, out any) error {
 	return json.Unmarshal(b, out)
 }
 
+// LatestRuns reads one indexed row per configured source, independent of how
+// many runs other sources have produced. It does not count or scan history.
+func (s *Store) LatestRuns(sources []string) ([][]byte, error) {
+	out := [][]byte{}
+	for _, source := range sources {
+		var b []byte
+		err := s.DB.QueryRow("SELECT data FROM runs WHERE source_id=? ORDER BY id DESC LIMIT 1", source).Scan(&b)
+		if errors.Is(err, sql.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, b)
+	}
+	return out, nil
+}
+
 type RunFilter struct {
 	From    string
+	Until   string
 	Trigger string
 }
 
@@ -208,8 +231,23 @@ func (s *Store) ListRuns(state, source string, limit, offset int, filters ...Run
 	}
 	if len(filters) > 0 {
 		if filters[0].From != "" {
-			query += " AND created_at>=?"
-			args = append(args, filters[0].From)
+			start, err := time.Parse(time.RFC3339Nano, filters[0].From)
+			if err != nil {
+				return nil, 0, err
+			}
+			start = start.UTC()
+			// Keep an indexed coarse bound and compare UTC fractions without the Z suffix.
+			query += " AND created_at>=? AND RTRIM(created_at,'Z')>=?"
+			args = append(args, start.Format("2006-01-02T15:04:05"), strings.TrimSuffix(start.Format(time.RFC3339Nano), "Z"))
+		}
+		if filters[0].Until != "" {
+			end, err := time.Parse(time.RFC3339Nano, filters[0].Until)
+			if err != nil {
+				return nil, 0, err
+			}
+			end = end.UTC()
+			query += " AND created_at<? AND RTRIM(created_at,'Z')<?"
+			args = append(args, end.Add(time.Second).Format("2006-01-02T15:04:05"), strings.TrimSuffix(end.Format(time.RFC3339Nano), "Z"))
 		}
 		if filters[0].Trigger != "" {
 			query += " AND json_extract(data, '$.trigger')=?"

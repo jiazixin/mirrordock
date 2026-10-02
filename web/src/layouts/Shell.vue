@@ -1,36 +1,125 @@
 <script setup lang="ts">
 import { useRoute } from 'vue-router'
-import { FolderSync, Layers3, ScrollText, Clock3, Settings2, LogOut, Menu, ExternalLink, ChartColumn, ChartNoAxesCombined } from '@lucide/vue'
+import {
+  FolderSync,
+  Layers3,
+  ScrollText,
+  Clock3,
+  Settings2,
+  LogOut,
+  Menu,
+  ExternalLink,
+  ChartNoAxesCombined,
+} from '@lucide/vue'
 import { ref, onBeforeUnmount } from 'vue'
+import AnalysisIcon from '../components/AnalysisIcon.vue'
 import ToastStack from '../components/ToastStack.vue'
 import { state, dismissToast } from '../app/state'
 import logo from '../assets/logo.svg'
 const emit = defineEmits<{ logout: [] }>()
 const route = useRoute()
 const mobile = ref(false)
-onBeforeUnmount(() => { state.toasts = [] })
-const links = [{ path: '/sources', label: '同步源', icon: FolderSync, group: '工作台' }, { path: '/batches', label: '批次记录', icon: Layers3, group: '任务记录' }, { path: '/records', label: '运行记录', icon: ScrollText }, { path: '/schedules', label: '计划管理', icon: Clock3, group: '运行管理' }, { path: '/analytics/rsync', label: 'Rsync 分析', icon: ChartColumn, group: '分析' }, { path: '/analytics/reposync', label: 'Reposync分析', icon: ChartColumn }, { path: '/analytics/github', label: 'Release分析', icon: ChartNoAxesCombined }, { path: '/settings', label: '系统设置', icon: Settings2, group: '系统' }]
+onBeforeUnmount(() => {
+  state.toasts = []
+})
+const links = [
+  { path: '/sources', label: '同步源', icon: FolderSync, group: '工作台' },
+  { path: '/batches', label: '批次记录', icon: Layers3, group: '任务记录' },
+  { path: '/records', label: '运行记录', icon: ScrollText },
+  { path: '/schedules', label: '计划管理', icon: Clock3, group: '运行管理' },
+  {
+    path: '/analytics/rsync',
+    label: 'Rsync 分析',
+    icon: AnalysisIcon,
+    kind: 'rsync',
+    group: '分析',
+  },
+  { path: '/analytics/reposync', label: 'Reposync分析', icon: AnalysisIcon, kind: 'reposync' },
+  { path: '/analytics/github', label: 'Release分析', icon: ChartNoAxesCombined },
+  { path: '/settings', label: '系统设置', icon: Settings2, group: '系统' },
+]
 </script>
 
 <template>
-  <ToastStack :items="state.toasts" @dismiss="dismissToast"/>
+  <ToastStack
+    :items="state.toasts"
+    @dismiss="dismissToast"
+  />
   <div class="app-shell">
-    <aside id="sidebar-navigation" class="sidebar" :class="{open:mobile}">
-      <RouterLink class="brand" to="/sources"><img :src="logo" alt=""/><div><strong>MirrorDock</strong></div></RouterLink>
+    <aside
+      id="sidebar-navigation"
+      class="sidebar"
+      :class="{ open: mobile }"
+    >
+      <RouterLink
+        class="brand"
+        to="/sources"
+        ><img
+          :src="logo"
+          alt=""
+        />
+        <div><strong>MirrorDock</strong></div></RouterLink
+      >
       <nav>
-        <template v-for="link in links" :key="link.path">
-          <span v-if="link.group" class="nav-group">{{ link.group }}</span>
-          <RouterLink :to="link.path" @click="mobile=false"><component :is="link.icon" :size="19"/><span>{{ link.label }}</span><span v-if="route.path===link.path" class="nav-arrow" aria-hidden="true"></span></RouterLink>
+        <template
+          v-for="link in links"
+          :key="link.path"
+        >
+          <span
+            v-if="link.group"
+            class="nav-group"
+            >{{ link.group }}</span
+          >
+          <RouterLink
+            :to="link.path"
+            @click="mobile = false"
+            ><component
+              :is="link.icon"
+              :size="19"
+              :kind="link.kind" /><span>{{ link.label }}</span
+            ><span
+              v-if="route.path === link.path"
+              class="nav-arrow"
+              aria-hidden="true"
+            ></span
+          ></RouterLink>
         </template>
       </nav>
       <div class="sidebar-bottom">
-        <a href="/" target="_blank" rel="noopener"><ExternalLink :size="16"/>浏览镜像目录</a>
-        <button class="account" aria-label="退出登录" @click="emit('logout')"><span class="avatar">{{Array.from(state.username)[0]?.toUpperCase()}}</span><span><strong>{{state.username}}</strong><small>管理员</small></span><LogOut :size="17"/></button>
+        <a
+          href="/"
+          target="_blank"
+          rel="noopener"
+          ><ExternalLink :size="16" />浏览镜像目录</a
+        >
+        <button
+          class="account"
+          aria-label="退出登录"
+          @click="emit('logout')"
+        >
+          <span class="avatar">{{ Array.from(state.username)[0]?.toUpperCase() }}</span
+          ><span
+            ><strong>{{ state.username }}</strong
+            ><small>管理员</small></span
+          ><LogOut :size="17" />
+        </button>
       </div>
     </aside>
-    <div v-if="mobile" class="sidebar-scrim" @click="mobile=false"></div>
+    <div
+      v-if="mobile"
+      class="sidebar-scrim"
+      @click="mobile = false"
+    ></div>
     <main class="main-shell">
-      <button class="icon-button mobile-menu" aria-label="打开导航" aria-controls="sidebar-navigation" :aria-expanded="mobile" @click="mobile=!mobile"><Menu :size="20"/></button>
+      <button
+        class="icon-button mobile-menu"
+        aria-label="打开导航"
+        aria-controls="sidebar-navigation"
+        :aria-expanded="mobile"
+        @click="mobile = !mobile"
+      >
+        <Menu :size="20" />
+      </button>
       <div class="page-content">
         <RouterView />
       </div>

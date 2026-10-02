@@ -86,13 +86,21 @@ func TestAssetResumeAndInvalidRangeRestart(t *testing.T) {
 			os.WriteFile(target+".part", []byte("012"), 0644)
 			b, _ := json.Marshal(id)
 			config.AtomicWrite(identityFile(target+".part"), b, 0600)
-			reused, err := downloadAsset(t.Context(), client, server.Client(), "owner", "repo", 1, id, target, func(int64) {}, "")
+			received := int64(0)
+			reused, err := downloadAsset(t.Context(), client, server.Client(), "owner", "repo", 1, id, target, func(int64) {}, "", func(n int64) { received += n })
 			if err != nil || reused {
 				t.Fatal(reused, err)
 			}
 			b, err = os.ReadFile(target)
 			if err != nil || string(b) != "012345678" {
 				t.Fatal(string(b), err)
+			}
+			expectedBytes := int64(6)
+			if badRange {
+				expectedBytes = 9
+			}
+			if received != expectedBytes {
+				t.Fatalf("received %d, want %d", received, expectedBytes)
 			}
 			want := int32(1)
 			if badRange {
@@ -101,7 +109,10 @@ func TestAssetResumeAndInvalidRangeRestart(t *testing.T) {
 			if downloads.Load() != want {
 				t.Fatal(downloads.Load())
 			}
-			reused, err = downloadAsset(t.Context(), client, server.Client(), "owner", "repo", 1, id, target, func(int64) {}, "")
+			reused, err = downloadAsset(t.Context(), client, server.Client(), "owner", "repo", 1, id, target, func(int64) {}, "", func(n int64) { received += n })
+			if received != expectedBytes {
+				t.Fatal("reuse counted as download", received)
+			}
 			if err != nil || !reused || downloads.Load() != want {
 				t.Fatal("verified reuse failed", err)
 			}
@@ -128,8 +139,18 @@ func TestGitHubSelectsNewestAssetsWithoutSourceArchives(t *testing.T) {
 	assetURL = server.URL + "/asset"
 	dir := t.TempDir()
 	task := Task{Directory: dir, Source: config.Source{GitHubRelease: config.GitHubRelease{Repository: "o/r", AssetPatterns: []string{"*linux*"}}}, Settings: config.Settings{GitHub: config.GitHubSettings{ReleaseCount: 1}}}
-	if err := GitHubWithClient(context.Background(), client, server.Client(), task, func(Progress) {}, io.Discard); err != nil {
+	var progress Progress
+	if err := GitHubWithClient(t.Context(), client, server.Client(), task, func(p Progress) { progress = p }, io.Discard); err != nil {
 		t.Fatal(err)
+	}
+	if progress.ReceivedBytes == nil || *progress.ReceivedBytes != 3 {
+		t.Fatal(progress)
+	}
+	if err := GitHubWithClient(t.Context(), client, server.Client(), task, func(p Progress) { progress = p }, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if progress.ReceivedBytes == nil || *progress.ReceivedBytes != 0 || progress.Bytes != 3 || progress.Skipped != 1 {
+		t.Fatal("reuse bytes", progress)
 	}
 	b, err := os.ReadFile(filepath.Join(dir, "new", "linux-amd64.bin"))
 	if err != nil || string(b) != "abc" {
@@ -243,7 +264,7 @@ func TestGitHubRetryClassification(t *testing.T) {
 		err   error
 		retry bool
 	}{{io.EOF, true}, {io.ErrUnexpectedEOF, true}, {context.DeadlineExceeded, true}, {&net.OpError{Err: syscall.ECONNRESET}, true}, {&tls.CertificateVerificationError{Err: x509.UnknownAuthorityError{}}, false}, {errors.New("Proxy Authentication Required"), false}} {
-		if f := AsFailure(githubNetworkError(tc.err, "", "DOWNLOAD_FAILED", "download")); f.Retryable != tc.retry {
+		if f := AsFailure(httpNetworkError(tc.err, "", "DOWNLOAD_FAILED", "download")); f.Retryable != tc.retry {
 			t.Fatal(tc.err, f)
 		}
 	}
@@ -282,5 +303,24 @@ func TestTruncatedAssetCanResumeAfterNetworkFailure(t *testing.T) {
 	b, err := os.ReadFile(target)
 	if err != nil || string(b) != "012345678" || downloads.Load() != 2 {
 		t.Fatal("invalid resumed asset", err)
+	}
+}
+
+func TestFailedAssetRetainsBytesSinceLastProgressTick(t *testing.T) {
+	var assetURL string
+	payload := strings.Repeat("x", 70<<10)
+	client, server := assetClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/repos/") {
+			http.Redirect(w, r, assetURL, 302)
+			return
+		}
+		w.Header().Set("Content-Length", "102400")
+		io.WriteString(w, payload)
+	})
+	assetURL = server.URL + "/asset"
+	var received, latest int64
+	_, err := downloadAsset(t.Context(), client, server.Client(), "o", "r", 1, AssetIdentity{ID: 1, Size: 102400}, filepath.Join(t.TempDir(), "asset.bin"), func(n int64) { latest = n }, "", func(n int64) { received += n })
+	if err == nil || received != int64(len(payload)) || latest != received {
+		t.Fatal(err, received, latest)
 	}
 }

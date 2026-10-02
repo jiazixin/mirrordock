@@ -1,53 +1,40 @@
-# 实现说明
+# 实现与维护入口
 
-MirrorDock 使用 Go 1.27.1、Vue 3 / TypeScript。配置字段沿用用户确认的 schema，完整注释见 `configs/config.example.yaml`。
+当前架构与约束见 [DESIGN.md](DESIGN.md)，启动/配置/备份/测试命令见 [README.md](../README.md)，可追溯验收见 [ACCEPTANCE.md](ACCEPTANCE.md)。目录基线只在 [目录规范.md](../目录规范.md) 维护。
 
-## 模块与数据
+## 数据与接口
 
-- `internal/config`：严格 YAML 校验、srcN 数字排序、路径隔离、注释保留、revision 冲突、0600 原子写回和 TLS 配对验证。
-- `internal/database`：纯 Go SQLite、WAL、同步等级 FULL、短事务。数据库及表、索引在启动时自动初始化，建表语句直接内置在该包中，重复打开保留已有数据。运行主记录以带结构化字段的 JSON 存储，attempts/events/快照聚合在一条运行记录内；发布指针单独存储，数据库不再参与管理员密码认证。当前没有另建设计中建议的每种明细表。
-- `internal/sync`：系统 rsync 的参数、CR/LF 进度、进程组停止；DNF 4 私有 repo 配置；go-github v88 与流式附件下载、有效 Range 续传、身份侧车文件、可用 SHA-256 校验。不请求自动源码归档。
-- `internal/runs`：两个内置 worker、同源排他、五字段 cron、8h 默认累计预算、暂停/取消/继续、重启恢复和日志脱敏。预算覆盖准备到发布，排队和暂停不计入。异常断电最多丢失一个 5 秒进度检查点；正常关闭会保存实际执行时间。
-- `internal/mirrors`：私有工作目录、reflink 优先、独立复制回退、RPM/APT 索引及包大小校验、原子持久发布指针、旧代读取与 24 小时回收保护。
-- `internal/observability`：根据顶层 log 构造 slog JSON/Text logger，info/标准输出/json 为默认，文件相对配置目录追加写入；启动前初始化，退出时关闭，HTTP 内部错误共用 logger。修改后重启生效，不改变任务日志及下载热路径。
-- `internal/app`：启动时加载 YAML 的 auth.username/auth.password，内存 bcrypt 校验值、12 小时 Cookie 会话、登录限流与同源写请求验证；管理 API、SSE、嵌入页面、HTTP/TLS 和连接无进展检测。无初始化码及设置密码 API，账号修改后重启生效。
+数据库由 `internal/database` 启动建表/索引，当前 schema 4。运行数据以单条 JSON 聚合 attempts/events/脱敏快照；发布指针独立存储。历史保留，日志清理不删除事实。WAL/FULL 单写连接，分析走有界只读快照。`runs(source_id,id DESC)` 支持每源最新状态，不能用全局最近 50/100 条代替。
 
-公开目录由 `internal/mirrors/listing.go` 与同模块嵌入的 HTML/CSS/JS 渲染，不经过 Vue 管理台或外部 CDN。目录请求对最多 1000 个条目读取 lstat 元数据，虚拟目录大小/时间未知时显示 `—`；目录 HEAD 只返回响应头。HTML 模板转义文件名及路径，脚本仅接收 DOM data 属性，CSP 以嵌入脚本的 SHA-256 哈希授权执行。当前已列出条目在浏览器内按名称/类型/大小/时间排序、搜索和筛选，每页 50 项；JavaScript 禁用时保留全部已列出链接。符号链接显示类型，不读取或回显目标。文件下载的 ServeContent/sendfile 路径不变。
+| 接口 | 用途 |
+| --- | --- |
+| GET /api/auth/status；POST /api/auth/login、logout | YAML 账号会话 |
+| GET/PUT /api/config；POST /api/config/reload | 脱敏配置读取、revision 保存、重载 |
+| GET /api/runs；GET /api/runs?latest=1 | 完整历史分页/筛选；每源最新状态 |
+| GET /api/runs/{id}、/api/runs/{id}/logs | 详情；有界 offset 读取或完整日志下载 |
+| POST /api/sources/{id}/run；POST /api/runs/{id}/{action} | 手动执行；pause/resume/cancel |
+| POST /api/logs/clear | 仅清理终态日志 |
+| GET /api/events、/api/system/info、/api/system/checks | 实时状态、运行环境、工具/权限检查 |
+| GET /api/analytics | 类型、7/30/90 天与源筛选聚合 |
+| GET /api/notifications；PUT /api/notifications/{channel} | 密文存在标记；单渠道配置 |
+| POST /api/notifications/{channel}/test、/api/notifications/timezone | 保存后的测试；浏览器时区 |
+| GET /api/notifications/records | 通知发送历史分页 |
 
-文件图标按用户选定的 Phosphor Regular 改为统一深灰、桌面 22px/手机 20px 的等比例 SVG。`scripts/import-directory-icons.py` 从固定提交导入 13 个官方 SVG、生成 14 个文件类型映射的 `listing-icons.html`；只允许 SVG 几何元素/属性及 none/currentColor，不接受脚本、外链或模板标记。模板保留官方 MIT 全文，构建与页面不需要联网。目录用 folder-simple，RPM/DEB 用 package，归档用 file-archive，JSON/XML 等用 file-code，签名用 file-lock，校验和用 file-magnifying-glass，MD/PY/INI 使用对应字母图标。
+除 auth status/login 外管理 API 均鉴权；写操作同源校验。完整代理 URL 回填是已确认协议例外，Token/密码/通知凭据不返回。运行快照不保存代理/Token/通知密文。
 
-目录布局依据根 `目录规范.md`，没有 `backend/`、额外根 Node 清单或第二份 Web 编译输出。
+## 源码定位
 
-## 下载性能
+- 配置及路径：`internal/config/config.go`；所有 dest 同时检查逻辑路径和解析后目录重叠。
+- 任务与重试：`internal/runs/runs.go`；时间范围：`internal/app/location.go`；分析：`internal/runs/analytics.go`。
+- Rsync/DNF 命令：`internal/sync/runner.go`；子进程和进度：`process.go`；GitHub：`github.go`。
+- 文件与发布：`internal/mirrors/{mirrors,http,validate,summary}.go`；公开目录：`listing.go` 与 listing HTML/CSS/JS/icons。
+- 凭据/发送队列：`internal/notifications`；独立程序日志：`internal/observability`；认证/服务生命周期：`internal/app`。
+- Vue 请求与会话：`web/src/app`；业务页面：`features`；共享控件：`components`；所有页面共享格式化规则。
 
-普通文件和单段 Range 保留真实 `*os.File` 和 `io.LimitedReader`，计数 ResponseWriter 实现并委托 `ReadFrom`。Go 标准库可继续选择 Linux HTTP/1.1 sendfile；TLS/HTTP2 使用标准库流式传输。下载热路径不读写 SQLite、YAML或正文日志，不整文件哈希，不动态压缩；ETag 对不可变代、路径、大小和时间生成，有界 LRU 8192 项。
+## 实施边界
 
-大文件下载池 256 条流、256 KiB 以下文件另有 64 条资源池、SSE 8 条、管理会话 32 条，TCP 连接按文件描述符限制预留资源并最多 4096；目录最多列出 1000 项，另设 8 条目录渲染资源池，饱和返回 503 和 Retry-After，不占包文件和仓库元数据的下载池。下载期间只有短路由引用锁，不持同步任务锁。每个请求固定发布根，引用释放后关闭旧根，旧代到期且无引用后才清理。大文件活动流超过 75% 内置容量时暂缓启动下一同步任务和旧代回收，已运行任务继续执行。同步进程在 Linux 尝试 nice=10 和 best-effort I/O priority=7，不改变下载连接。
+GitHub 原始日志有资产结果，当前没有每资产独立数据库检索页。Reposync 未提供可靠包数/接收量，不推算百分比或统计。公开目录不分页，最多列出 1000 项；符号链接不回显目标。大小摘要在发布/恢复时生成，文件下载不扫描目录树。
 
-无进展监测每 30 秒读取一次活动 TCP 的内核统计。Linux 使用已确认字节、macOS 使用非重传发送字节；整个连接 5 分钟无进展才关闭，正常有进展的大文件不受固定总时长限制。HTTP/2 同连接有任一流持续传输时不会误关整条连接。这个机制不替换 TCP 连接或文件 Reader，因此不破坏 sendfile；不支持 socket 统计的平台不会假装具备该监测能力。
+程序不自动轮转日志、不删除历史、不过滤任意管理员 Webhook 为公共互联网地址、不自动提权；这些是当前运维协议。镜像发布代需保持不可变，数据与镜像根只能由受信任服务身份维护。Linux 性能、真实 EL/DNF、外部通知可达性、容器及断电恢复验收均以当次 ACCEPTANCE 证据为准。
 
-RPM metadata 支持 gzip/bzip2/xz/zstd，压缩索引流式读取，校验已声明的元数据 SHA-256/SHA-512 和包大小；APT 校验 Release 的 SHA-256 条目并流式读取 Packages。不会每次校验全仓所有软件包的内容哈希，客户端签名验证仍适用。DNF 签名与真实发行版安装应在目标 EL 上继续验收。
-
-## 发布和恢复
-
-工作目录是 `<mirror_root>/.mirrordock/work/<run-id>`，发布代是 `.mirrordock/published/<uuid>`。准备标记只在复制全部完成后写入；准备阶段暂停后会继续未完成复制。成功校验并 fsync 文件和目录后密封代、写 manifest、预验证公开链接与文件根，再提交 SQLite 指针并替换内存路由；提交失败时回滚链接和暂存。服务重启依据数据库修复链接；没有被指针引用的暂存/孤立代不会对外提供。
-
-新任务基于当前代复制，失败保留本轮暂存供检查；继续沿用相同 run-id 和预算。旧代自被替换起至少保留 24 小时，当前路径缺失的旧包可以回退读取，以照顾仍持有旧 metadata 的客户端。原始已存在的 dest 目录在首次导入校验后会移动到私有发布代，并以同路径链接替代；部署后不要直接修改已发布代。
-
-GitHub 的 `settings.github.proxy` 使用 Go 原生 HTTP/HTTPS/SOCKS5 代理，API 查询和资产下载共享本轮的连接池；每轮结束关闭空闲连接。空值直连，不使用代理环境变量，也不在故障时自动直连。代理认证遵循 URL userinfo，TLS 使用标准证书校验。代理与 Token 在每次实际执行时从当前配置读取，持久快照不存储二者。
-
-配置读取 API 不返回 Token 或管理员密码；按用户授权返回完整代理地址供明文读取与修改，响应仍需鉴权且 no-store。写配置时 `token_update=null` 保留已有 Token，空字符串显式清空；`proxy_update` 同样以 null 保留、空字符串清空；其他配置都带 revision。通过 UI 删除源只取消公开路由和计划，不删除既有镜像文件。删除/改变活动、暂停或中断任务的 dest 必须先取消该任务。
-
-## 实际范围
-
-运行记录当前按任务聚合，成功/失败页分页查询运行，详情显示 attempts、事件、日志和脱敏配置快照。GitHub 的资产完成事件保留在原始日志，尚未提供每资产的独立数据库检索页。reposync 的详细输出可查看日志，进度总量无法可靠取得时显示未知，不伪造百分比。
-
-参考图的布局已落实在 Vue 六个页面，采用钴蓝新 Logo 和本地 SVG 图标，不依赖远程字体/CDN。现版采用浅色主题。生产 Linux sendfile 系统调用、HTTPS/HTTP2 及完整 EL 包签名同步的实测边界以 `ACCEPTANCE.md` 为准。
-
-系统设置分为 Rsync、GitHub Release、同步策略、系统配置和通知设置五个页签，采用左侧说明、右侧输入布局，窄屏上下排列。监听、端口、数据库/日志目录、镜像根及 TLS 无页面输入，Config.Manager.Save 保留当前 YAML 中这些固定值；外部编辑仍由 revision 冲突保护，重新载入后需要重启。Token 切换页签保留草稿，保存后清空输入，显式清空时禁用输入。代理直接回填当前地址，保存后继续显示，空字符串保存即直连。系统配置页签展示配置文件路径和解析后的工具版本/权限检查，不显示原始 JSON；部署字段修改后需要重启。
-
-GitHub API 与下载网络失败使用固定诊断消息，区分 DNS、TLS 证书、连接拒绝、EOF、代理认证及 GitHub 401/403/404/限流，不回显底层 URL 或上游任意正文。扫描和查询状态、失败摘要写入任务原始日志，未新增逐块日志；取消保留 context sentinel，SDK 单次请求超时作为网络错误可重试，任务累计截止仍由原 context 控制，避免包装的签名 URL 泄露。认证 API 客户端禁止跨 origin 重定向，因为 SDK 的 auth transport 会对重定向重新附加 token；附件继续使用不含 token 的客户端。Token 校验拒绝空白与控制字符，不回显值。
-
-同步策略包含 `settings.retry_count`（默认额外 3 次，0 关闭，0–10）。runs 在同一工作目录重试，Rsync 先完成备用来源切换；GitHub 网络/临时 HTTP 错误与 Reposync 可识别的 curl/HTTP 错误可重试。计数和等待期限写入运行 JSON，暂停/重启后继续沿用；退避 5/10/20 秒、封顶 80 秒，共用任务 context 与累计预算。每次尝试保存独立日志，成功后才校验发布，重试不进入公开下载热路径。
-
-运行分析提供 Rsync、Reposync 与 Release 三页，共享 `internal/runs/analytics.go` 的参数化 SQLite 只读聚合和 `Analytics.vue`。Reposync 统计次数、成功率、累计耗时、失败原因、执行尝试及重试任务，排行只显示运行层面的指标。通用响应结构中的文件/字节字段对 reposync 不作为可用度量，页面隐藏处理量、包数及复用量；未新增 DNF 进度解析或自动重试行为。
+上线前已完成的旧计划与临时 HTML 预览已删除，避免把历史方案误认为当前实现。本次完整工作区（含已有改动）的审查与回归记录集中在 ACCEPTANCE，不再追加按会话堆叠的历史段落。

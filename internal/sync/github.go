@@ -97,7 +97,7 @@ func GitHubWithClient(ctx context.Context, client *github.Client, httpClient *ht
 		}
 	}()
 	owner, repo, _ := strings.Cut(t.Source.GitHubRelease.Repository, "/")
-	emit(Progress{Phase: "scan"})
+	emit(Progress{Phase: "scan", ReceivedBytes: new(int64(0))})
 	fmt.Fprintln(log, "GitHub API: scanning Release list")
 	releases := []*github.RepositoryRelease{}
 	for page := 1; page <= 100; page++ {
@@ -179,12 +179,8 @@ func GitHubWithClient(ctx context.Context, client *github.Client, httpClient *ht
 		target := filepath.Join(dir, name)
 		identity := AssetIdentity{ID: a.GetID(), Size: int64(a.GetSize()), Updated: a.GetUpdatedAt().String(), Digest: a.GetDigest()}
 		base := done
-		lastCount := int64(-1)
+
 		tick := func(n int64) {
-			if lastCount >= 0 {
-				networkBytes += max(int64(0), n-lastCount)
-			}
-			lastCount = n
 			percent := float64(0)
 			if total > 0 {
 				percent = 100 * float64(base+n) / float64(total)
@@ -194,9 +190,9 @@ func GitHubWithClient(ctx context.Context, client *github.Client, httpClient *ht
 			if speed > 0 {
 				eta = new(float64(total-base-n) / speed)
 			}
-			emit(Progress{Phase: "transfer", Bytes: base + n, Total: total, Percent: new(percent), Speed: speed, ETA: eta, Files: len(assets), Success: success, Skipped: skipped})
+			emit(Progress{Phase: "transfer", ReceivedBytes: new(networkBytes), Bytes: base + n, Total: total, Percent: new(percent), Speed: speed, ETA: eta, Files: len(assets), Success: success, Skipped: skipped})
 		}
-		reused, err := downloadAsset(ctx, client, httpClient, owner, repo, a.GetID(), identity, target, tick, t.Settings.GitHub.Proxy)
+		reused, err := downloadAsset(ctx, client, httpClient, owner, repo, a.GetID(), identity, target, tick, t.Settings.GitHub.Proxy, func(n int64) { networkBytes += n })
 		if err != nil {
 			return err
 		}
@@ -236,7 +232,7 @@ func GitHubWithClient(ctx context.Context, client *github.Client, httpClient *ht
 			}
 		}
 	}
-	emit(Progress{Phase: "verify", Bytes: total, Total: total, Percent: new(float64(100)), Files: len(assets), Success: success, Skipped: skipped})
+	emit(Progress{Phase: "verify", ReceivedBytes: new(networkBytes), Bytes: total, Total: total, Percent: new(float64(100)), Files: len(assets), Success: success, Skipped: skipped})
 	return nil
 }
 func githubError(err error, proxy string) error {
@@ -267,8 +263,15 @@ func githubError(err error, proxy string) error {
 	return githubNetworkError(err, proxy, "GITHUB_API", "GitHub API 查询")
 }
 
-// Classify failures without emitting URLs, signed query strings, credentials or raw upstream text.
 func githubNetworkError(err error, proxy, code, operation string) error {
+	if proxy == "" {
+		operation += "直连"
+	}
+	return httpNetworkError(err, proxy, code, operation)
+}
+
+// Classify failures without emitting URLs, signed query strings, credentials or raw upstream text.
+func httpNetworkError(err error, proxy, code, operation string) error {
 	if errors.Is(err, context.Canceled) {
 		return context.Canceled
 	}
@@ -309,7 +312,7 @@ func githubNetworkError(err error, proxy, code, operation string) error {
 			detail += "；请确认代理协议、端口及 CONNECT/SOCKS 转发是否可用"
 		}
 	} else {
-		operation += "直连失败"
+		operation += "失败"
 	}
 	return &Failure{Code: code, Message: operation + "：" + detail, Retryable: retryable}
 }
@@ -371,7 +374,7 @@ func verifyAsset(ctx context.Context, target string, id AssetIdentity) error {
 	}
 	return nil
 }
-func downloadAsset(ctx context.Context, client *github.Client, httpClient *http.Client, owner, repo string, assetID int64, id AssetIdentity, target string, tick func(int64), proxy string) (bool, error) {
+func downloadAsset(ctx context.Context, client *github.Client, httpClient *http.Client, owner, repo string, assetID int64, id AssetIdentity, target string, tick func(int64), proxy string, received ...func(int64)) (bool, error) {
 	if sameIdentity(target, id) && verifyAsset(ctx, target, id) == nil {
 		tick(id.Size)
 		return true, nil
@@ -460,6 +463,7 @@ func downloadAsset(ctx context.Context, client *github.Client, httpClient *http.
 	}
 	tick(offset)
 	n := offset
+	defer func() { tick(n) }()
 	buf := make([]byte, 64<<10)
 	last := time.Time{}
 	for {
@@ -468,6 +472,9 @@ func downloadAsset(ctx context.Context, client *github.Client, httpClient *http.
 		}
 		count, readErr := stream.Read(buf)
 		if count > 0 {
+			for _, report := range received {
+				report(int64(count))
+			}
 			if n+int64(count) > id.Size {
 				return false, &Failure{Code: "ASSET_SIZE", Message: "下载超过声明大小"}
 			}

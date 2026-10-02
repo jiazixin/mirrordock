@@ -358,6 +358,7 @@ func (c Config) Validate(file string) error {
 	}
 	ids := map[string]bool{}
 	dests := []string{}
+	resolvedDests := []string{}
 	for _, s := range c.Sources {
 		if !idPattern.MatchString(s.ID) || ids[s.ID] {
 			return fmt.Errorf("源 id 无效或重复: %s", s.ID)
@@ -387,9 +388,18 @@ func (c Config) Validate(file string) error {
 		if !Within(root, target) {
 			return fmt.Errorf("%s 的目标链接越界", s.ID)
 		}
+		for _, existing := range resolvedDests {
+			if Within(existing, target) || Within(target, existing) {
+				return errors.New("dest 解析符号链接后不能重复或互相嵌套")
+			}
+		}
+		resolvedDests = append(resolvedDests, target)
 		for k, v := range s.Upstreams {
 			if !srcPattern.MatchString(k) {
 				return fmt.Errorf("%s: 不支持字段 %s，仅接受 src1/src2…", s.ID, k)
+			}
+			if _, err := strconv.Atoi(strings.TrimPrefix(k, "src")); err != nil {
+				return fmt.Errorf("%s 的 src 编号超出整数范围", s.ID)
 			}
 			if strings.ContainsAny(v, "\x00\r\n") {
 				return errors.New("来源地址包含控制字符")
@@ -407,8 +417,8 @@ func (c Config) Validate(file string) error {
 				}
 			}
 			for _, n := range []*int{s.Rsync.UID, s.Rsync.GID} {
-				if n != nil && *n < 0 {
-					return errors.New("uid/gid 不能为负数")
+				if n != nil && (*n < 0 || int64(*n) >= math.MaxUint32) {
+					return errors.New("uid/gid 必须在 0–4294967294 之间")
 				}
 			}
 			for _, p := range s.Exclude {

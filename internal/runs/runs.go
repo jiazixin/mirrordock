@@ -1,6 +1,7 @@
 package runs
 
 import (
+	"cmp"
 	"context"
 	"encoding/json/v2"
 	"errors"
@@ -25,14 +26,15 @@ type Snapshot struct {
 	Settings config.Settings `json:"settings"`
 }
 type Attempt struct {
-	Number     int       `json:"number"`
-	Candidate  string    `json:"candidate"`
-	StartedAt  time.Time `json:"started_at"`
-	EndedAt    time.Time `json:"ended_at,omitzero"`
-	ErrorCode  string    `json:"error_code"`
-	Error      string    `json:"error"`
-	ExitCode   int       `json:"exit_code"`
-	LogCleared bool      `json:"log_cleared"`
+	ReceivedBytes *int64    `json:"received_bytes"`
+	Number        int       `json:"number"`
+	Candidate     string    `json:"candidate"`
+	StartedAt     time.Time `json:"started_at"`
+	EndedAt       time.Time `json:"ended_at,omitzero"`
+	ErrorCode     string    `json:"error_code"`
+	Error         string    `json:"error"`
+	ExitCode      int       `json:"exit_code"`
+	LogCleared    bool      `json:"log_cleared"`
 }
 type Event struct {
 	At      time.Time `json:"at"`
@@ -172,7 +174,7 @@ func (e *Engine) Start() {
 }
 func (e *Engine) Close() {
 	e.cancel()
-	e.cron.Stop()
+	<-e.cron.Stop().Done()
 	e.mu.Lock()
 	for _, a := range e.working {
 		a.intent = "interrupted"
@@ -364,11 +366,32 @@ func (e *Engine) List(state, source string, limit, offset int, filters ...databa
 	if err != nil {
 		return nil, 0, err
 	}
+	out, err := e.projectRuns(records)
+	return out, total, err
+}
+
+// Latest includes old active tasks and quiet sources even after many newer runs.
+func (e *Engine) Latest() ([]*Run, error) {
+	sources := e.cfg.Current().Sources
+	ids := make([]string, len(sources))
+	for i, source := range sources {
+		ids[i] = source.ID
+	}
+	records, err := e.store.LatestRuns(ids)
+	if err != nil {
+		return nil, err
+	}
+	out, err := e.projectRuns(records)
+	slices.SortFunc(out, func(a, b *Run) int { return cmp.Compare(b.ID, a.ID) })
+	return out, err
+}
+
+func (e *Engine) projectRuns(records [][]byte) ([]*Run, error) {
 	out := []*Run{}
 	for _, b := range records {
 		var r Run
-		if err = json.Unmarshal(b, &r); err != nil {
-			return nil, 0, err
+		if err := json.Unmarshal(b, &r); err != nil {
+			return nil, err
 		}
 		e.mu.Lock()
 		if live := e.current[r.ID]; live != nil {
@@ -380,7 +403,7 @@ func (e *Engine) List(state, source string, limit, offset int, filters ...databa
 		e.mu.Unlock()
 		out = append(out, &r)
 	}
-	return out, total, nil
+	return out, nil
 }
 func (e *Engine) worker() {
 	for {
@@ -524,6 +547,7 @@ func (e *Engine) execute(ctx context.Context, id int64, snapshot Snapshot) error
 		r.Progress.ETA = nil
 		attempt := Attempt{Number: len(r.Attempts) + 1, Candidate: candidate, StartedAt: time.Now().UTC()}
 		r.Attempts = append(r.Attempts, attempt)
+		r.Progress.ReceivedBytes, r.Progress.ReceivedIncomplete = receivedBytes(r.Attempts)
 		e.event(r, "尝试来源: "+candidate)
 		err = e.save(r)
 		e.mu.Unlock()
@@ -551,6 +575,10 @@ func (e *Engine) execute(ctx context.Context, id int64, snapshot Snapshot) error
 			e.mu.Lock()
 			defer e.mu.Unlock()
 			if run := e.current[id]; run != nil {
+				if p.ReceivedBytes != nil {
+					run.Attempts[len(run.Attempts)-1].ReceivedBytes = new(*p.ReceivedBytes)
+				}
+				p.ReceivedBytes, p.ReceivedIncomplete = receivedBytes(run.Attempts)
 				run.Progress = p
 			}
 		}
@@ -580,10 +608,10 @@ func (e *Engine) execute(ctx context.Context, id int64, snapshot Snapshot) error
 		}
 		if err == nil {
 			e.mu.Lock()
-			progress := r.Progress
+			r.Progress.Phase = "publish"
+			r.Progress.Percent = nil
+			r.Progress.ETA = nil
 			e.mu.Unlock()
-			progress.Phase = "publish"
-			emit(progress)
 			_, err = e.mirror.Publish(ctx, s, id)
 			return err
 		}
@@ -612,7 +640,8 @@ func (e *Engine) execute(ctx context.Context, id int64, snapshot Snapshot) error
 		delay := e.retryDelay * time.Duration(1<<min(r.RetryCount-1, 4))
 		r.RetryAt = time.Now().UTC().Add(delay)
 		r.CandidateIndex = 0
-		r.Progress = syncer.Progress{Phase: "retry"}
+		received, incomplete := receivedBytes(r.Attempts)
+		r.Progress = syncer.Progress{Phase: "retry", ReceivedBytes: received, ReceivedIncomplete: incomplete}
 		e.event(r, fmt.Sprintf("网络或上游临时失败，%s 后自动重试（%d/%d）", delay, r.RetryCount, snapshot.Settings.RetryCount))
 		err = e.save(r)
 		e.mu.Unlock()
@@ -815,4 +844,22 @@ func (e *Engine) NotificationChange(operation func() error) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return operation()
+}
+
+// receivedBytes totals only explicitly reported attempt counters. An unknown
+// attempt must remain visible as incomplete, including after pause or restart.
+func receivedBytes(attempts []Attempt) (*int64, bool) {
+	var total *int64
+	incomplete := false
+	for _, attempt := range attempts {
+		if attempt.ReceivedBytes == nil {
+			incomplete = true
+			continue
+		}
+		if total == nil {
+			total = new(int64(0))
+		}
+		*total += *attempt.ReceivedBytes
+	}
+	return total, incomplete
 }

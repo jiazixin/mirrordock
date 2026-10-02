@@ -457,3 +457,41 @@ func TestRetryWaitHonorsBudgetPauseCancelAndRestart(t *testing.T) {
 		})
 	}
 }
+
+func TestReceivedBytesAccumulateFallbackAndPersist(t *testing.T) {
+	e, _, store, _ := testEngine(t, "2s", runnerFunc(func(ctx context.Context, task syncer.Task, emit func(syncer.Progress), log io.Writer) error {
+		n := int64(100)
+		if strings.Contains(task.Candidate, "one") {
+			emit(syncer.Progress{Phase: "transfer", Bytes: 100000, ReceivedBytes: new(n)})
+			return &syncer.Failure{Code: "NETWORK", Retryable: true}
+		}
+		n = 25
+		emit(syncer.Progress{Phase: "transfer", Bytes: 100000, ReceivedBytes: new(n)})
+		n = 50
+		emit(syncer.Progress{Phase: "verify", Bytes: 100000, ReceivedBytes: new(n)})
+		return os.WriteFile(filepath.Join(task.Directory, "package.rpm"), []byte("package"), 0644)
+	}))
+	run, err := e.Enqueue("test", "manual")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := waitState(t, e, run.ID, "succeeded")
+	if got.Progress.ReceivedBytes == nil || *got.Progress.ReceivedBytes != 150 || got.Progress.ReceivedIncomplete {
+		t.Fatal(got.Progress)
+	}
+	var saved Run
+	if err := store.Run(run.ID, &saved); err != nil {
+		t.Fatal(err)
+	}
+	if saved.Progress.ReceivedBytes == nil || *saved.Progress.ReceivedBytes != 150 {
+		t.Fatal(saved.Progress)
+	}
+	total, incomplete := receivedBytes([]Attempt{{}, {ReceivedBytes: new(int64(50))}})
+	if total == nil || *total != 50 || !incomplete {
+		t.Fatal(total, incomplete)
+	}
+	total, incomplete = receivedBytes([]Attempt{{ReceivedBytes: new(int64(0))}})
+	if total == nil || *total != 0 || incomplete {
+		t.Fatal(total, incomplete)
+	}
+}

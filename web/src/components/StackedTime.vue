@@ -6,7 +6,12 @@ const parts = computed(() => props.value.split(/\s+/))
 </script>
 
 <template>
-  <time v-if="value !== '—'" class="stacked-time" :datetime="datetime" :title="value">
+  <time
+    v-if="value !== '—'"
+    class="stacked-time"
+    :datetime="datetime"
+    :title="value"
+  >
     <strong>{{ parts[0] }}</strong>
     <small>{{ parts[1] }}</small>
   </time>
