@@ -71,7 +71,7 @@ func seconds(v string) string {
 }
 func RsyncArgs(t Task) []string {
 	opts := t.Source.Rsync
-	args := []string{"--recursive", "--partial-dir=.rsync-partial", "--delay-updates", "--info=progress2", "--stats", "--outbuf=L", "--timeout=" + seconds(t.Settings.Rsync.IOTimeout), "--contimeout=" + seconds(t.Settings.Rsync.ConnectTimeout)}
+	args := []string{"--recursive", "--partial-dir=.rsync-partial", "--exclude=.mirrordock*", "--info=progress2", "--stats", "--outbuf=L", "--timeout=" + seconds(t.Settings.Rsync.IOTimeout), "--contimeout=" + seconds(t.Settings.Rsync.ConnectTimeout)}
 	for _, o := range []struct {
 		v    *bool
 		flag string

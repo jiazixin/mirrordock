@@ -216,7 +216,12 @@ func TestCollectionRetainsActiveReader(t *testing.T) {
 	if err = m.Collect(time.Now().Add(25 * time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	f, err := lease.roots[0].Open("old.rpm")
+	root, err := m.openGeneration(lease.generations[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := root.Open("old.rpm")
+	root.Close()
 	if err != nil {
 		t.Fatal("active old root closed", err)
 	}

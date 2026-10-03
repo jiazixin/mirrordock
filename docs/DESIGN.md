@@ -50,11 +50,15 @@ flowchart LR
 
 状态包括 queued、running、pausing、paused、interrupted 和 succeeded/failed/timed_out/cancelled。中断可继续并保留预算；同源暂停/中断任务继续占用源，必须先取消才能新建或改 dest。正常关闭保存实际耗时；异常断电最多丢失一个 5 秒进度检查点。关键状态立即落库。
 
+恢复必须等待 working 执行器退出，保存 queued 成功后才入队；worker 出队再次检查 working，避免停止窗口或重复队列导致同一 ID 并发执行。运行中操作保存失败保留与执行器一致的 pausing/running 状态和源预占，执行器退出后再持久化结果；无执行器时保存失败保留 interrupted。
+
 任务快照固定非敏感源/策略，凭证每次实际执行读取当前配置。内置两个 worker；五字段 cron、启动时区、重叠 skip。准备/扫描/传输/校验/发布、来源切换和重试等待共用累计预算，排队和暂停不计入。重试计数与等待期限持久化。TERM 后最多 10 秒 KILL 整个进程组，cron 关闭等待正在执行的回调结束。
 
-Rsync 使用系统 PATH 中现代 rsync，数字 srcN 顺序失败切换，不通过 shell 执行用户命令。默认递归并保留链接/时间/权限/硬链接；partial 与 delay-updates 用于任务工作目录，整体发布由镜像模块保证。UID/GID 独立可选，0 有效，明确范围及权限，不自动 sudo。
+Rsync 使用系统 PATH 中现代 rsync，数字 srcN 顺序失败切换，不通过 shell 执行用户命令。默认递归并保留链接/时间/权限/硬链接；partial-dir 与默认单文件临时替换用于任务工作目录，不使用 delay-updates 或 inplace，整体发布由镜像模块保证。固定排除 `.mirrordock*`，避免上游和 --delete 改写内部准备标记。UID/GID 独立可选，0 有效，明确范围及权限，不自动 sudo。
 
 Reposync 针对 DNF4，使用任务私有配置/缓存/RPM 密钥库，仅启用选定 repo；不修改宿主配置。开启 GPG 时先下载配置的公钥（每个最多 1 MiB、30 秒并受任务预算约束），用 rpmkeys 导入私有 installroot，再执行 reposync 包签名校验；不依赖插件自动导入。仅一个 src1，完整元数据与 newest_only 组合被拒绝。GPG 仅声明包签名校验，不宣称元数据签名已验证。
+
+配置来源/GPG 地址禁止 userinfo/query/fragment，不支持 URL 鉴权；通用 HTTPURL 保留 GitHub 临时签名资产地址支持。新快照防御性脱敏，历史 runs/run_results 启动时进行可重试、100 条分页的地址脱敏迁移，相关尝试/事件/错误同步处理，不删除运行事实。
 
 GitHub 使用 go-github v88，按发布时间选 Release，仅 assets。API 鉴权客户端禁止跨 origin 重定向，下载客户端不向第三方资产主机附带 API Token。下载身份侧车包含 ID/大小/更新时间/digest；验证完整文件后复用，Range 206 和身份均匹配才续传，否则重新开始。凭据/签名 URL 不进入错误正文。HTTP/HTTPS/SOCKS 代理使用每轮连接池，空值直连，不读取系统代理变量，故障不绕过代理。
 
@@ -62,13 +66,21 @@ GitHub 使用 go-github v88，按发布时间选 Release，仅 assets。API 鉴�
 
 ## 发布与恢复
 
-工作目录为 `<mirror_root>/.mirrordock/work/<run-id>`，代为 `.mirrordock/published/<uuid>`。优先 reflink，回退独立复制，不硬链接可变正文。复制完整后才写准备标记；暂停继续复用同一工作目录。失败不替换公开代。
+工作目录为 `<mirror_root>/.mirrordock/work/<run-id>`，代为 `.mirrordock/published/<uuid>`。启动、环境检查刷新与准备前均在真实 published/work 目录创建小文件实测克隆。Linux FICLONE、Darwin APFS clonefile 原生克隆必须成功，失败保留错误并停止同步，不回退完整复制，不硬链接可变正文。克隆完整后才写准备标记；暂停继续复用同一工作目录。失败不替换公开代。
+
+准备标记保存基础发布代 ID 与工作树元数据指纹。同步后先验证镜像，基础代仍一致且路径、类型、权限、所有者、大小/mtime、文件 inode/ctime 与符号链接均未变化才删除工作目录、复用当前发布。内部标记与根目录 mtime 排除，不读取包正文；旧格式标记禁用此优化。文件被替换或内容写入，即使大小/mtime 相同也保守创建新代。
+
+克隆按 dev/inode 保留工作树内部硬链接组，组内首个文件原生 reflink，其他路径链接到该 work 文件，绝不链接到 published。GitHub 更新私有同步时间后恢复父目录 mtime；正文不变时仅持久化更新发布摘要，不改变当前代 ID 或公开文件，摘要保存失败保留旧事实和 work。
+
+容量读取实际 work 文件系统的总量与可用量，不累加 reflink 目录逻辑大小。两个 worker 共用准入锁：可用量需达到 max(1 GiB, 总量 1%) 加每个活动 worker（含新任务）512 MiB。准入不足保持 queued/waiting_space，不消耗累计预算；运行中独立每 5 秒检查，低于安全余量取消执行器，持久化 DISK_SPACE 失败并保留旧发布。该机制不能保证上游增长或外部写入不触发 ENOSPC。
+
+启动、终态与每 5 分钟由独立清理循环回收，单次上下文上限 30 秒。work 清理查询持久化 state，仅移除 succeeded/failed/timed_out/cancelled；可恢复状态和未知目录不删，终态保存失败保留源预占。删除按 128 项批次检查取消并协作让出；过期且无引用的旧代先改名为 `.gc-<id>`，中断后继续回收，避免删除导致 mtime 更新而再延后 24 小时。
 
 RPM 流式解压 gzip/bzip2/xz/zstd 索引，校验已声明元数据 SHA-256/SHA-512 和包大小；APT 校验 Release 的 SHA-256 条目并流式读取 Packages。不每次计算所有包内容哈希；客户端签名验证仍适用。
 
 校验完成后 fsync 正文/目录，密封代、生成 manifest/大小摘要，预验证公开链接和 os.Root，提交 SQLite 指针，再切换内存路由。提交失败回滚；首次导入已有目录的数据库提交失败会恢复原目录。重启根据已提交指针修复链接，未引用代不公开。部署需避免在导入/发布过程中直接移动目录；断电与磁盘故障仍须目标环境演练。
 
-请求固定发布代，旧根有引用时不关闭。旧代至少保留 24h，当前路径缺失的旧包可回退读取；到期且无引用才回收。源删除只撤销路由/计划，保留文件。
+请求固定发布代并持有引用，当前/旧代根均按需打开，取得文件后关闭根；引用保护仍持续到请求结束。旧代至少保留 24h，当前路径缺失的旧包可回退读取；到期且无引用才回收。源删除只撤销路由/计划，保留文件。
 
 ## ADR-010：下载性能与资源隔离
 
@@ -84,7 +96,9 @@ HTTPS/HTTP2 采用标准库有界 TLS/流控，不宣称 sendfile，不向 TLS �
 | SSE / 管理会话 | 8 / 32 |
 | TCP | 按 FD 预留，最多 4096 |
 
-资源饱和返回 503/Retry-After；大文件超过 75% 容量时暂缓新同步及旧代回收，正在执行的任务继续。Linux 同步尝试 nice=10 与 best-effort I/O priority=7，不锁住公开下载。os.Root 限制文件读取，拒绝外链、FIFO/设备、私有标记与非规范路径；不存在文件不回落到整个磁盘根。
+文件打开前还有全局 FD 配额，GET/HEAD/目录/HTTP2 流均受限：reserve=min(256,软限制/2)，TCP 至多 (软限制-reserve)/2，文件请求至多 (软限制-reserve)/6 且最多 328，每请求按最多 3 个瞬态描述符预算。根不按源/代常驻，保留代数量不增加空闲 FD 占用。
+
+资源饱和返回 503/Retry-After；大文件超过 75% 容量时暂缓新同步，正在执行的任务继续。旧代回收遵守引用保护并按批次让出，避免下载长期繁忙时一直不回收。Linux 同步尝试 nice=10 与 best-effort I/O priority=7，不锁住公开下载。os.Root 限制文件读取，拒绝外链、FIFO/设备、私有标记与非规范路径；不存在文件不回落到整个磁盘根。
 
 每 30 秒通过原生 TCP 统计检查无进展，整个连接 5 分钟无进展才关闭，不限制正常有进展下载的总时长。Linux 读取已确认字节，macOS 读取非重传发送字节；HTTP/2 任一流持续进展避免误关整连接。不支持的平台不假装有此监测。
 
@@ -93,5 +107,7 @@ HTTPS/HTTP2 采用标准库有界 TLS/流控，不宣称 sendfile，不向 TLS �
 ## 通知与前端
 
 通知配置在 YAML，AES-256-GCM 密钥在 state；已有密文时缺失密钥阻止启动。激活边界、终态快照与 `(channel,run_id)` 去重在 SQLite。最多 3 次发送、30/60 秒退避，不影响同步结果；外部已收但确认丢失可重复投递。只发送脱敏摘要，不发送业务文件或原始错误。
+
+通知处理耗时使用累计 ElapsedSeconds，旧记录缺失时显示未记录；复用计数为成功的子集，未完成=总数-成功-失败，不重复扣除复用。
 
 Vue 以 app、features、components、layouts 分层，六类页面按需加载，公共 OptionCard/分页/时间范围统一复用。公开目录由 mirrors 自有嵌入模板生成，不经 Vue。HTML 转义文件名，脚本只读 DOM data 属性，CSP 使用固定脚本 SHA-256；无脚本可浏览已列出链接。超过 1000 项明确提示，完整文件路径仍可下载。

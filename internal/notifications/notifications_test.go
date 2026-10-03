@@ -455,6 +455,8 @@ func TestTimezoneContentAndKeyBackup(t *testing.T) {
 	r.CreatedAt = time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
 	r.StartedAt = r.CreatedAt.Add(time.Hour)
 	r.EndedAt = r.StartedAt.Add(10 * time.Second)
+	r.ElapsedSeconds = 10
+	r.Progress.Success = 5
 	m, failed := resultMessage(r, "America/New_York")
 	if !failed || !strings.Contains(m.Title, "部分失败") || !strings.Contains(m.Body, "UTC-04:00 (America/New_York)") || !strings.Contains(m.Body, "处理耗时：10s") || !strings.Contains(m.Body, "未完成：1") || strings.Contains(m.Body, strings.Repeat("界", 101)) {
 		t.Fatal(m)

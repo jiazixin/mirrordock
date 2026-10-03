@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -34,12 +35,17 @@ type Publication struct {
 }
 type opened struct {
 	Publication Publication
-	roots       []*os.Root
 	generations []Generation
 	refs        int
 }
 type routes struct{ entries map[string]*opened }
 type Manager struct {
+	probeMu       sync.Mutex
+	collectMu     sync.Mutex
+	storageMu     sync.Mutex
+	syncing       map[int64]bool
+	clone         func(*os.File, string) error
+	space         func(string) (DiskSpace, error)
 	mu            sync.Mutex
 	routeMu       sync.RWMutex
 	Root          string
@@ -50,6 +56,7 @@ type Manager struct {
 	gates         chan struct{}
 	metadataGates chan struct{}
 	listingGates  chan struct{}
+	fileGates     chan struct{}
 	requests      atomic.Int64
 	bytes         atomic.Int64
 	cache         *metadataCache
@@ -67,8 +74,11 @@ func New(root string, store *database.Store, sources []config.Source) (*Manager,
 	if err != nil {
 		return nil, err
 	}
-	m := &Manager{Root: canonical, store: store, gates: make(chan struct{}, 256), metadataGates: make(chan struct{}, 64), listingGates: make(chan struct{}, 8), cache: newCache(8192)}
+	m := &Manager{Root: canonical, store: store, gates: make(chan struct{}, 256), metadataGates: make(chan struct{}, 64), listingGates: make(chan struct{}, 8), cache: newCache(8192), syncing: map[int64]bool{}, clone: cloneFile, space: diskSpace}
+	files, _ := DescriptorLimits()
+	m.fileGates = make(chan struct{}, files)
 	m.table.Store(&routes{entries: map[string]*opened{}})
+	_ = m.ProbeReflink(context.Background())
 	ready := false
 	defer func() {
 		if !ready {
@@ -148,35 +158,37 @@ func New(root string, store *database.Store, sources []config.Source) (*Manager,
 }
 func (m *Manager) openPublication(p Publication) (*opened, error) {
 	o := &opened{Publication: p}
-	ok := false
-	defer func() {
-		if !ok {
-			closeRoots(o)
-		}
-	}()
 	for _, g := range append([]Generation{p.Current}, p.Previous...) {
-		real, err := filepath.EvalSymlinks(g.Directory)
-		if err != nil {
-			if g.ID != p.Current.ID {
-				continue
-			}
-			return nil, err
-		}
-		if !config.Within(m.Root, real) {
+		if !config.Within(m.Root, g.Directory) {
 			return nil, errors.New("publication escaped mirror root")
 		}
-		root, err := os.OpenRoot(real)
-		if err != nil {
-			return nil, err
+		if g.ID == p.Current.ID {
+			root, err := m.openGeneration(g)
+			if err != nil {
+				return nil, err
+			}
+			if err := root.Close(); err != nil {
+				return nil, err
+			}
 		}
-		o.roots = append(o.roots, root)
 		o.generations = append(o.generations, g)
 	}
-	if len(o.roots) == 0 {
-		return nil, errors.New("missing publication root")
-	}
-	ok = true
 	return o, nil
+}
+
+// Both path resolution and subsequent file opens stay inside os.Root. Roots
+// are transient: retained generations do not each consume a descriptor.
+func (m *Manager) openGeneration(g Generation) (*os.Root, error) {
+	rel, err := filepath.Rel(m.Root, g.Directory)
+	if err != nil || !config.Within(m.Root, g.Directory) {
+		return nil, errors.New("publication escaped mirror root")
+	}
+	root, err := os.OpenRoot(m.Root)
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
+	return root.OpenRoot(rel)
 }
 func (m *Manager) installOpened(o *opened) {
 	old := m.table.Load()
@@ -196,14 +208,8 @@ func (m *Manager) register(p Publication) error {
 	return nil
 }
 
-func closeRoots(o *opened) {
-	for _, r := range o.roots {
-		_ = r.Close()
-	}
-}
-
 // install takes only the routing lock; SQLite writes and filesystem work never
-// block requests holding this lock. Old roots live exactly as long as readers.
+// block requests holding this lock. Retired generations stay leased by readers.
 func (m *Manager) install(next *routes) {
 	m.routeMu.Lock()
 	defer m.routeMu.Unlock()
@@ -212,9 +218,7 @@ func (m *Manager) install(next *routes) {
 		if next.entries[dest] == o {
 			continue
 		}
-		if o.refs == 0 {
-			closeRoots(o)
-		} else {
+		if o.refs != 0 {
 			m.retired = append(m.retired, o)
 		}
 	}
@@ -224,7 +228,6 @@ func (m *Manager) release(o *opened) {
 	defer m.routeMu.Unlock()
 	o.refs--
 	if o.refs == 0 && slices.Contains(m.retired, o) {
-		closeRoots(o)
 		m.retired = slices.DeleteFunc(m.retired, func(v *opened) bool { return v == o })
 	}
 }
@@ -265,6 +268,12 @@ func (m *Manager) Work(id int64) string {
 	return filepath.Join(m.Root, ".mirrordock", "work", fmt.Sprint(id))
 }
 func (m *Manager) Prepare(ctx context.Context, s config.Source, id int64) (string, error) {
+	if check := m.ProbeReflink(ctx); check.Status != "supported" {
+		return "", errors.New(check.Detail)
+	}
+	if err := m.CheckSpace(); err != nil {
+		return "", err
+	}
 	work := m.Work(id)
 	marker := filepath.Join(work, ".mirrordock-prepared")
 	if st, err := os.Stat(marker); err == nil && st.Mode().IsRegular() {
@@ -273,18 +282,29 @@ func (m *Manager) Prepare(ctx context.Context, s config.Source, id int64) (strin
 	if err := os.MkdirAll(work, 0755); err != nil {
 		return "", err
 	}
+	baseGeneration := ""
 	if p := m.table.Load().entries[s.Dest]; p != nil {
-		if err := copyTree(ctx, p.Publication.Current.Directory, work); err != nil {
+		baseGeneration = p.Publication.Current.ID
+		if err := m.copyTree(ctx, p.Publication.Current.Directory, work); err != nil {
 			return "", err
 		}
 	}
-	if err := config.AtomicWrite(marker, []byte("prepared\n"), 0600); err != nil {
+	fingerprint, err := treeFingerprint(ctx, work)
+	if err != nil {
+		return "", err
+	}
+	prepared, err := json.Marshal(preparation{Fingerprint: fingerprint, BaseGeneration: baseGeneration})
+	if err != nil {
+		return "", err
+	}
+	if err := config.AtomicWrite(marker, prepared, 0600); err != nil {
 		return "", err
 	}
 	return work, nil
 }
-func copyTree(ctx context.Context, src, dest string) error {
-	return filepath.WalkDir(src, func(p string, d fs.DirEntry, err error) error {
+func (m *Manager) copyTree(ctx context.Context, src, dest string) error {
+	links := map[string]string{}
+	err := filepath.WalkDir(src, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -319,47 +339,65 @@ func copyTree(ctx context.Context, src, dest string) error {
 			}
 			return os.Symlink(link, target)
 		case info.Mode().IsRegular():
-			if st, e := os.Lstat(target); e == nil {
-				if st.Mode().IsRegular() && st.Size() == info.Size() && st.ModTime().Equal(info.ModTime()) {
-					return nil
-				}
+			if _, e := os.Lstat(target); e == nil {
 				if err = os.Remove(target); err != nil {
 					return err
 				}
+			}
+			identity := hardlinkIdentity(info)
+			if first := links[identity]; identity != "" && first != "" {
+				// Link only to another clone inside work, never to published data.
+				return os.Link(first, target)
 			}
 			in, err := os.Open(p)
 			if err != nil {
 				return err
 			}
 			defer in.Close()
-			out, err := os.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
-			if err != nil {
-				return err
+			if err := m.clone(in, target); err != nil {
+				_ = os.Remove(target)
+				return fmt.Errorf("reflink 克隆失败（未回退完整复制）%s：%w", rel, err)
 			}
-			if !cloneFile(out, in) {
-				// Each bounded copy still receives real files, allowing the Linux
-				// copy_file_range path while checking cancellation between chunks.
-				for err == nil {
-					if err = ctx.Err(); err != nil {
-						break
-					}
-					_, err = io.CopyN(out, in, 4<<20)
-				}
-				if errors.Is(err, io.EOF) {
-					err = nil
-				}
+			if identity != "" {
+				links[identity] = target
 			}
-			if err == nil {
-				err = out.Chmod(info.Mode().Perm())
-			}
-			err = errors.Join(err, out.Close())
-			if err != nil {
+			if err := os.Chmod(target, info.Mode().Perm()); err != nil {
 				return err
 			}
 			return os.Chtimes(target, info.ModTime(), info.ModTime())
 		default:
 			return nil
 		}
+	})
+	if err != nil {
+		return err
+	}
+	// Restore directory metadata after all children are created. The root's
+	// timestamp is intentionally excluded from no-change detection: private
+	// preparation markers change it without changing the public mirror.
+	return filepath.WalkDir(src, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if !d.IsDir() {
+			return nil
+		}
+		rel, err := filepath.Rel(src, p)
+		if err != nil {
+			return err
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(dest, rel)
+		if err := os.Chmod(target, info.Mode().Perm()); err != nil {
+			return err
+		}
+		return os.Chtimes(target, info.ModTime(), info.ModTime())
 	})
 }
 func (m *Manager) Publish(ctx context.Context, s config.Source, id int64) (Publication, error) {
@@ -368,6 +406,29 @@ func (m *Manager) Publish(ctx context.Context, s config.Source, id int64) (Publi
 	}
 	work := m.Work(id)
 	if err := Validate(ctx, work, s.Type); err != nil {
+		return Publication{}, err
+	}
+	if old := m.table.Load().entries[s.Dest]; old != nil {
+		baseline := readPreparation(work)
+		if baseline.Fingerprint != "" && baseline.BaseGeneration == old.Publication.Current.ID {
+			fingerprint, err := treeFingerprint(ctx, work)
+			if err != nil {
+				return Publication{}, err
+			}
+			if fingerprint == baseline.Fingerprint {
+				if s.Type == "github_release" {
+					if err := m.refreshReleaseSummary(ctx, s, work, old.Publication.Current.ID); err != nil {
+						return Publication{}, err
+					}
+				}
+				if err := m.RemoveWork(ctx, id); err != nil {
+					return Publication{}, err
+				}
+				return m.table.Load().entries[s.Dest].Publication, nil
+			}
+		}
+	}
+	if err := m.CheckSpace(); err != nil {
 		return Publication{}, err
 	}
 	summary, err := summarizeDirectory(ctx, work, s.Type)
@@ -415,11 +476,6 @@ func (m *Manager) Publish(ctx context.Context, s config.Source, id int64) (Publi
 	if err != nil {
 		return p, err
 	}
-	defer func() {
-		if !committed {
-			closeRoots(opened)
-		}
-	}()
 	old := m.table.Load().entries[s.Dest]
 	if err = m.alias(p); err != nil {
 		return p, err
@@ -516,20 +572,8 @@ func (m *Manager) Stats() map[string]int64 {
 func (m *Manager) Close() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.routeMu.Lock()
-	defer m.routeMu.Unlock()
-	var errs []error
-	for _, o := range m.table.Load().entries {
-		for _, r := range o.roots {
-			errs = append(errs, r.Close())
-		}
-	}
-	for _, o := range m.retired {
-		for _, r := range o.roots {
-			errs = append(errs, r.Close())
-		}
-	}
-	return errors.Join(errs...)
+	m.install(&routes{entries: map[string]*opened{}})
+	return nil
 }
 
 // Collect expires logical fallbacks and then removes only private, unreferenced
@@ -537,9 +581,8 @@ func (m *Manager) Close() error {
 func (m *Manager) Collect(now time.Time) error { return m.CollectContext(context.Background(), now) }
 func (m *Manager) Busy() bool                  { return m.active.Load() > int64(cap(m.gates)*3/4) }
 func (m *Manager) CollectContext(ctx context.Context, now time.Time) error {
-	if m.Busy() {
-		return nil
-	}
+	m.collectMu.Lock()
+	defer m.collectMu.Unlock()
 	m.mu.Lock()
 	locked := true
 	defer func() {
@@ -603,17 +646,26 @@ func (m *Manager) CollectContext(ctx context.Context, now time.Time) error {
 		if err = ctx.Err(); err != nil {
 			return err
 		}
-		if live[entry.Name()] || !entry.IsDir() {
+		collecting := strings.HasPrefix(entry.Name(), ".gc-")
+		if live[entry.Name()] || !entry.IsDir() || (strings.HasPrefix(entry.Name(), ".") && !collecting) {
 			continue
 		}
 		st, err := entry.Info()
 		if err != nil {
 			return err
 		}
-		if now.Sub(st.ModTime()) < 24*time.Hour {
+		if !collecting && now.Sub(st.ModTime()) < 24*time.Hour {
 			continue
 		}
-		if err = removeGeneration(ctx, filepath.Join(dir, entry.Name())); err != nil {
+		target := filepath.Join(dir, entry.Name())
+		if !collecting {
+			garbage := filepath.Join(dir, ".gc-"+entry.Name())
+			if err = os.Rename(target, garbage); err != nil {
+				return err
+			}
+			target = garbage
+		}
+		if err = removeGeneration(ctx, target); err != nil {
 			return err
 		}
 	}
@@ -656,6 +708,17 @@ func removeGeneration(ctx context.Context, dir string) error {
 				}
 				if err := root.Remove(name); err != nil {
 					return err
+				}
+			}
+			// Yield between full batches so reclamation remains cooperative
+			// with downloads and can stop promptly during service shutdown.
+			if len(entries) == 128 {
+				timer := time.NewTimer(time.Millisecond)
+				select {
+				case <-ctx.Done():
+					timer.Stop()
+					return ctx.Err()
+				case <-timer.C:
 				}
 			}
 			if errors.Is(e, io.EOF) {

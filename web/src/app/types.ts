@@ -134,6 +134,17 @@ export interface SystemInfo {
   schedules: Record<string, string>
 }
 export interface SystemChecks {
+  reflink: { status: 'supported' | 'unsupported' | 'error'; detail: string }
+  storage: {
+    total: number
+    available: number
+    reserve: number
+    required: number
+    workers: number
+    previous: number
+    work_directories: number
+    error?: string
+  }
   rsync: { available: boolean; version: string }
   dnf: { available: boolean; version: string }
   rpmkeys: { available: boolean; version: string }

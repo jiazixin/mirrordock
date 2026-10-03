@@ -54,13 +54,13 @@ func resultMessage(r *runs.Run, zone string) (Message, bool) {
 	duration := "未开始"
 	if !r.StartedAt.IsZero() {
 		duration = "未记录"
-		if !r.EndedAt.IsZero() {
-			duration = max(time.Duration(0), r.EndedAt.Sub(r.StartedAt)).Round(time.Second).String()
+		if r.ElapsedSeconds > 0 {
+			duration = time.Duration(r.ElapsedSeconds * float64(time.Second)).Round(time.Second).String()
 		}
 	}
 	p := r.Progress
 	total := p.Files
-	count := fmt.Sprintf("总数：%d · 成功：%d · 失败：%d · 跳过：%d · 未完成：%d", total, p.Success, p.Failed, p.Skipped, max(total-p.Success-p.Failed-p.Skipped, 0))
+	count := fmt.Sprintf("总数：%d · 成功：%d（其中复用：%d） · 失败：%d · 未完成：%d", total, p.Success, p.Skipped, p.Failed, max(total-p.Success-p.Failed, 0))
 	if r.Type == "rsync" || r.Type == "reposync" {
 		count += "\n统计说明：执行器未报告的子项计数按 0 展示；退出失败不推算失败文件数。"
 	}

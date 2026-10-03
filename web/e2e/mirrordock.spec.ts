@@ -359,6 +359,31 @@ test('real configuration, rsync failover, publication, records and responsive UI
     ).toContainText('可写')
     await expect(page.locator('pre')).toHaveCount(0)
     const checks = await (await page.request.get(base + '/api/system/checks')).json()
+    const reflinkRow = page
+      .locator('.check-row')
+      .filter({ has: page.getByText('Reflink', { exact: true }) })
+    expect(checks.reflink.status).toBe('supported')
+    await expect(reflinkRow).toContainText('镜像目录实测支持')
+    await expect(page.locator('.check-row').filter({ hasText: '镜像盘空间' })).toContainText(
+      '安全余量',
+    )
+    for (const [status, detail, label] of [
+      ['unsupported', '测试文件系统不支持克隆', '不支持'],
+      ['error', '测试探测目录不可写', '探测失败'],
+      ['supported', '测试克隆成功', '支持'],
+    ]) {
+      await page.route('**/api/system/checks', (route) =>
+        route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({ ...checks, reflink: { status, detail } }),
+        }),
+      )
+      await page.getByRole('button', { name: '刷新', exact: true }).click()
+      await expect(reflinkRow.locator('.check-status')).toHaveText(label)
+      await expect(reflinkRow).toContainText(detail)
+      await page.unroute('**/api/system/checks')
+    }
     await page.route('**/api/system/checks', (route) =>
       route.fulfill({
         status: 200,
@@ -390,6 +415,23 @@ test('real configuration, rsync failover, publication, records and responsive UI
       page.locator('.check-row').filter({ has: page.getByText('Rsync', { exact: true }) }),
     ).toContainText('版本 3.')
     await page.screenshot({ path: testInfo.outputPath('settings-environment.png'), fullPage: true })
+    const publicationBefore = (await (await page.request.get(base + '/api/system/info')).json())
+      .publications[0].current.id
+    const noChange = await (
+      await page.request.post(base + '/api/sources/isolated/run', {
+        headers: { 'X-MirrorDock-Request': '1' },
+      })
+    ).json()
+    await expect
+      .poll(
+        async () =>
+          (await (await page.request.get(base + `/api/runs/${noChange.id}`)).json()).state,
+        { timeout: 15000 },
+      )
+      .toBe('succeeded')
+    expect(
+      (await (await page.request.get(base + '/api/system/info')).json()).publications[0].current.id,
+    ).toBe(publicationBefore)
     await page.getByRole('link', { name: '同步源', exact: true }).click()
     await page.getByRole('button', { name: '编辑 隔离测试源' }).click()
     await expect(page.getByRole('dialog')).toContainText('编辑同步源')

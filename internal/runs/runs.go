@@ -79,31 +79,49 @@ type active struct {
 	intent string
 }
 type Engine struct {
-	mu              sync.Mutex
-	configMu        sync.Mutex
-	cfg             *config.Manager
-	store           *database.Store
-	mirror          *mirrors.Manager
-	runner          syncer.Runner
-	data            string
-	ctx             context.Context
-	cancel          context.CancelFunc
-	wg              sync.WaitGroup
-	pending         []*Run
-	current         map[int64]*Run
-	working         map[int64]*active
-	wake            chan struct{}
-	cron            *cron.Cron
-	retryDelay      time.Duration
-	location        *time.Location
-	scheduleIDs     map[string]cron.EntryID
-	ConfigValidator func(config.Config) error
-	ConfigApplied   func() error
+	mu                 sync.Mutex
+	configMu           sync.Mutex
+	cfg                *config.Manager
+	store              *database.Store
+	mirror             *mirrors.Manager
+	runner             syncer.Runner
+	data               string
+	ctx                context.Context
+	cancel             context.CancelFunc
+	wg                 sync.WaitGroup
+	pending            []*Run
+	current            map[int64]*Run
+	working            map[int64]*active
+	wake               chan struct{}
+	cleanupWake        chan struct{}
+	admitSync          func(int64) error
+	storageCheck       func() error
+	checkpointInterval time.Duration
+	cron               *cron.Cron
+	retryDelay         time.Duration
+	location           *time.Location
+	scheduleIDs        map[string]cron.EntryID
+	ConfigValidator    func(config.Config) error
+	ConfigApplied      func() error
 }
 
 func New(cfg *config.Manager, store *database.Store, m *mirrors.Manager, runner syncer.Runner, location *time.Location) (*Engine, error) {
 	ctx, cancel := context.WithCancel(context.Background())
-	e := &Engine{cfg: cfg, store: store, mirror: m, runner: runner, data: config.Resolve(cfg.File(), cfg.Startup().Path), ctx: ctx, cancel: cancel, current: map[int64]*Run{}, working: map[int64]*active{}, wake: make(chan struct{}, 2), location: location, retryDelay: 5 * time.Second, scheduleIDs: map[string]cron.EntryID{}}
+	e := &Engine{cfg: cfg, store: store, mirror: m, runner: runner, data: config.Resolve(cfg.File(), cfg.Startup().Path), ctx: ctx, cancel: cancel, current: map[int64]*Run{}, working: map[int64]*active{}, wake: make(chan struct{}, 2), cleanupWake: make(chan struct{}, 1), location: location, retryDelay: 5 * time.Second, scheduleIDs: map[string]cron.EntryID{}}
+	e.admitSync, e.storageCheck, e.checkpointInterval = m.BeginSync, m.CheckSpace, 5*time.Second
+	if done, err := store.State("public-source-urls-v1"); err != nil {
+		cancel()
+		return nil, err
+	} else if done != "done" {
+		if err := store.RewriteRunFacts(redactHistoricalURLs); err != nil {
+			cancel()
+			return nil, err
+		}
+		if err := store.SetState("public-source-urls-v1", "done"); err != nil {
+			cancel()
+			return nil, err
+		}
+	}
 	for _, state := range []string{"queued", "running", "pausing", "paused", "interrupted"} {
 		records, _, err := store.ListRuns(state, "", 10000, 0)
 		if err != nil {
@@ -146,21 +164,43 @@ func (e *Engine) Start() {
 		e.wg.Go(e.worker)
 	}
 	e.wg.Go(func() {
-		cleanup := time.NewTicker(time.Hour)
+		cleanup := time.NewTicker(5 * time.Minute)
 		defer cleanup.Stop()
-		ticker := time.NewTicker(5 * time.Second)
+		for {
+			var now time.Time
+			select {
+			case <-e.ctx.Done():
+				return
+			case now = <-cleanup.C:
+			case <-e.cleanupWake:
+				now = time.Now()
+			}
+			ctx, cancel := context.WithTimeout(e.ctx, 30*time.Second)
+			if err := e.mirror.CleanupWork(ctx); err != nil {
+				slog.Error("clean terminal work", "error", err)
+			}
+			if err := e.mirror.CollectContext(ctx, now); err != nil {
+				slog.Error("collect generations", "error", err)
+			}
+			cancel()
+		}
+	})
+	// Capacity monitoring and persistence must not wait for a large directory
+	// cleanup to finish.
+	e.wg.Go(func() {
+		ticker := time.NewTicker(e.checkpointInterval)
 		defer ticker.Stop()
 		for {
 			select {
 			case <-e.ctx.Done():
 				return
-			case now := <-cleanup.C:
-				if err := e.mirror.CollectContext(e.ctx, now); err != nil {
-					slog.Error("collect generations", "error", err)
-				}
 			case <-ticker.C:
 				e.mu.Lock()
+				spaceErr := e.storageCheck()
 				for id, a := range e.working {
+					if spaceErr != nil {
+						a.cancel(spaceErr)
+					}
 					r := e.current[id]
 					r.ElapsedSeconds = a.base + time.Since(a.start).Seconds()
 					if err := e.store.SaveRun(id, r.State, r); err != nil {
@@ -171,6 +211,7 @@ func (e *Engine) Start() {
 			}
 		}
 	})
+	e.requestCleanup()
 }
 func (e *Engine) Close() {
 	e.cancel()
@@ -275,7 +316,7 @@ func (e *Engine) Enqueue(sourceID, trigger string) (*Run, error) {
 	c.Settings.GitHub.Token = ""
 	c.Settings.GitHub.Proxy = ""
 	c.Settings.Notifications = nil
-	r := &Run{SourceID: s.ID, Name: s.Name, Type: s.Type, Dest: s.Dest, State: "queued", Trigger: trigger, CreatedAt: time.Now().UTC(), BudgetSeconds: budget.Seconds(), Progress: syncer.Progress{Phase: "prepare"}, Snapshot: Snapshot{Source: s, Settings: c.Settings}}
+	r := &Run{SourceID: s.ID, Name: s.Name, Type: s.Type, Dest: s.Dest, State: "queued", Trigger: trigger, CreatedAt: time.Now().UTC(), BudgetSeconds: budget.Seconds(), Progress: syncer.Progress{Phase: "prepare"}, Snapshot: Snapshot{Source: publicSource(s), Settings: c.Settings}}
 	e.event(r, "任务已加入队列")
 	id, err := e.store.CreateRun(s.ID, r.State, r.CreatedAt.Format(time.RFC3339Nano), r)
 	if err != nil {
@@ -315,6 +356,9 @@ func (e *Engine) Action(id int64, action string) error {
 			return errors.New("当前任务不可暂停")
 		}
 	case "resume":
+		if e.working[id] != nil {
+			return errors.New("执行器正在停止，请等待退出后继续")
+		}
 		if r.State != "paused" && r.State != "interrupted" {
 			return errors.New("当前任务不可继续")
 		}
@@ -324,11 +368,6 @@ func (e *Engine) Action(id int64, action string) error {
 		r.State = "queued"
 		r.Error = ""
 		r.ErrorCode = ""
-		e.pending = append(e.pending, r)
-		select {
-		case e.wake <- struct{}{}:
-		default:
-		}
 	case "cancel":
 		if a := e.working[id]; a != nil {
 			a.intent = "cancelled"
@@ -336,13 +375,38 @@ func (e *Engine) Action(id int64, action string) error {
 		} else {
 			r.State = "cancelled"
 			r.EndedAt = time.Now().UTC()
-			delete(e.current, id)
 		}
 	default:
 		return errors.New("未知任务操作")
 	}
 	e.event(r, "操作: "+action)
-	return e.save(r)
+	if err := e.save(r); err != nil {
+		if e.working[id] == nil {
+			r.State = "interrupted"
+		}
+		r.ErrorCode = "PERSISTENCE_FAILED"
+		r.Error = "操作结果保存失败，任务目录仍保留；修复存储后继续或取消"
+		return err
+	}
+	if action == "resume" {
+		e.pending = append(e.pending, r)
+		select {
+		case e.wake <- struct{}{}:
+		default:
+		}
+	}
+	if !reserved(r.State) && e.working[id] == nil {
+		delete(e.current, id)
+		e.requestCleanup()
+	}
+	return nil
+}
+
+func (e *Engine) requestCleanup() {
+	select {
+	case e.cleanupWake <- struct{}{}:
+	default:
+	}
 }
 func (e *Engine) Get(id int64) (*Run, error) {
 	e.mu.Lock()
@@ -423,7 +487,7 @@ func (e *Engine) worker() {
 		for len(e.pending) > 0 {
 			candidate := e.pending[0]
 			e.pending = e.pending[1:]
-			if candidate.State == "queued" {
+			if candidate.State == "queued" && e.working[candidate.ID] == nil {
 				r = candidate
 				break
 			}
@@ -438,13 +502,39 @@ func (e *Engine) worker() {
 			}
 			continue
 		}
+		admitErr := e.admitSync(r.ID)
+		if errors.Is(admitErr, mirrors.ErrLowSpace) {
+			if r.Progress.Phase != "waiting_space" {
+				r.Progress.Phase = "waiting_space"
+				e.event(r, "镜像盘可用空间不足，保持排队；释放空间后自动继续")
+				if err := e.save(r); err != nil {
+					slog.Error("save space wait", "error", err)
+				}
+			}
+			e.pending = append(e.pending, r)
+			e.mu.Unlock()
+			e.requestCleanup()
+			select {
+			case <-e.ctx.Done():
+				return
+			case <-time.After(time.Second):
+			}
+			continue
+		}
 		remaining := r.BudgetSeconds - r.ElapsedSeconds
 		if remaining <= 0 {
 			r.State = "timed_out"
 			r.EndedAt = time.Now().UTC()
 			r.ErrorCode = "TASK_TIMEOUT"
-			_ = e.save(r)
-			delete(e.current, r.ID)
+			if err := e.save(r); err == nil {
+				delete(e.current, r.ID)
+				e.requestCleanup()
+			} else {
+				r.State = "interrupted"
+				r.ErrorCode = "PERSISTENCE_FAILED"
+				r.Error = "任务结果保存失败，任务目录仍保留"
+			}
+			e.mirror.EndSync(r.ID)
 			e.mu.Unlock()
 			continue
 		}
@@ -453,6 +543,7 @@ func (e *Engine) worker() {
 		a := &active{cancel: cancel, start: time.Now(), base: r.ElapsedSeconds}
 		e.working[r.ID] = a
 		r.State = "running"
+		r.Progress.Phase = "prepare"
 		if r.StartedAt.IsZero() {
 			r.StartedAt = time.Now().UTC()
 		}
@@ -463,9 +554,16 @@ func (e *Engine) worker() {
 		}
 		snapshot := r.Snapshot
 		e.mu.Unlock()
-		err := e.execute(ctx, r.ID, snapshot)
+		err := admitErr
+		if err == nil {
+			err = e.execute(ctx, r.ID, snapshot)
+		}
+		if cause := context.Cause(ctx); cause != nil && err != nil {
+			err = cause
+		}
 		stopDeadline()
 		cancel(nil)
+		e.mirror.EndSync(r.ID)
 		e.mu.Lock()
 		r.ElapsedSeconds = a.base + time.Since(a.start).Seconds()
 		switch {
@@ -483,6 +581,10 @@ func (e *Engine) worker() {
 			r.State = "timed_out"
 			r.ErrorCode = "TASK_TIMEOUT"
 			r.Error = "累计执行时间达到任务上限"
+		case errors.Is(err, mirrors.ErrLowSpace):
+			r.State = "failed"
+			r.ErrorCode = "DISK_SPACE"
+			r.Error = "镜像盘可用空间低于安全余量；任务已停止，上一发布代保持可用"
 		case e.ctx.Err() != nil:
 			r.State = "interrupted"
 			r.ErrorCode = "SERVICE_INTERRUPTED"
@@ -508,12 +610,16 @@ func (e *Engine) worker() {
 		delete(e.working, r.ID)
 		if !reserved(r.State) {
 			delete(e.current, r.ID)
+			e.requestCleanup()
 		}
 		e.mu.Unlock()
 	}
 }
 func (e *Engine) execute(ctx context.Context, id int64, snapshot Snapshot) error {
 	s := snapshot.Source
+	if err := e.mirror.CollectContext(ctx, time.Now()); err != nil {
+		return err
+	}
 	work, err := e.mirror.Prepare(ctx, s, id)
 	if err != nil {
 		return err

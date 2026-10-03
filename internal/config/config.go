@@ -404,6 +404,14 @@ func (c Config) Validate(file string) error {
 			if strings.ContainsAny(v, "\x00\r\n") {
 				return errors.New("来源地址包含控制字符")
 			}
+			if err := publicURL(v); err != nil {
+				return err
+			}
+		}
+		for _, v := range s.RepoSync.GPGKeys {
+			if err := SourceURL(v); err != nil {
+				return err
+			}
 		}
 		switch s.Type {
 		case "rsync":
@@ -430,7 +438,7 @@ func (c Config) Validate(file string) error {
 			if len(s.Candidates()) != 1 {
 				return errors.New("reposync 当前只接受一个 src1")
 			}
-			if err := HTTPURL(s.Upstreams["src1"]); err != nil {
+			if err := SourceURL(s.Upstreams["src1"]); err != nil {
 				return err
 			}
 			if !idPattern.MatchString(s.RepoSync.RepoID) || !idPattern.MatchString(s.RepoSync.Releasever) || !idPattern.MatchString(s.RepoSync.Basearch) {
@@ -443,7 +451,7 @@ func (c Config) Validate(file string) error {
 				return errors.New("GPG 检查需要 gpg_keys")
 			}
 			for _, v := range s.RepoSync.GPGKeys {
-				if err := HTTPURL(v); err != nil {
+				if err := SourceURL(v); err != nil {
 					return err
 				}
 			}
@@ -482,6 +490,23 @@ func HTTPURL(v string) error {
 	u, err := url.Parse(v)
 	if err != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http") || u.User != nil || strings.ContainsAny(v, "\x00\r\n") {
 		return errors.New("需要合法的 HTTP/HTTPS 地址")
+	}
+	return nil
+}
+
+// Configured source addresses are public facts, unlike transient signed asset
+// URLs received from GitHub. No credential-bearing URL component is accepted.
+func SourceURL(v string) error {
+	if err := HTTPURL(v); err != nil {
+		return err
+	}
+	return publicURL(v)
+}
+
+func publicURL(v string) error {
+	u, err := url.Parse(v)
+	if err != nil || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
+		return errors.New("来源及 GPG 公钥地址不能包含用户信息、查询参数或片段；不支持 URL 鉴权")
 	}
 	return nil
 }

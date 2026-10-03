@@ -7,6 +7,12 @@ import type { SystemChecks } from '../../app/types'
 
 const checks = ref<SystemChecks>()
 const checking = ref(false)
+function diskSize(bytes: number | undefined) {
+  if (bytes === undefined) return '未知'
+  return bytes >= 1024 ** 4
+    ? `${(bytes / 1024 ** 4).toFixed(2)} TiB`
+    : `${(bytes / 1024 ** 3).toFixed(2)} GiB`
+}
 function toolVersion(tool: SystemChecks['rsync'] | undefined, name: 'rsync' | 'dnf' | 'rpmkeys') {
   if (!tool?.available) {
     if (name === 'rpmkeys') return 'Reposync 开启 GPG 校验时必需；未检测到 RPM 公钥工具'
@@ -52,6 +58,33 @@ const checkRows = computed(() => {
       status: result?.mirror_writable ? '可写' : '不可写',
       ok: result?.mirror_writable,
       detail: '同步与发布使用此目录',
+    },
+    {
+      label: 'Reflink',
+      status:
+        result?.reflink?.status === 'supported'
+          ? '支持'
+          : result?.reflink?.status === 'unsupported'
+            ? '不支持'
+            : '探测失败',
+      ok: result?.reflink?.status === 'supported',
+      detail: result?.reflink?.detail ?? '尚未取得镜像目录的实测结果',
+    },
+    {
+      label: '镜像盘空间',
+      status:
+        !result?.storage || result.storage.error
+          ? '读取失败'
+          : result.storage.available < result.storage.required
+            ? '余量不足'
+            : '正常',
+      ok:
+        !!result?.storage &&
+        !result.storage.error &&
+        result.storage.available >= result.storage.required,
+      detail:
+        result?.storage?.error ??
+        `可用 ${diskSize(result?.storage?.available)} / 总量 ${diskSize(result?.storage?.total)}；安全余量 ${diskSize(result?.storage?.reserve)}，任务启动需余量 ${diskSize(result?.storage?.required)}；旧代 ${result?.storage?.previous ?? 0}，任务目录 ${result?.storage?.work_directories ?? 0}。共享数据块不按目录重复计量。`,
     },
     {
       label: 'GitHub Token',
@@ -122,7 +155,9 @@ onMounted(() => {
       class="check-empty"
       role="status"
     >
-      {{ checking ? '正在读取工具版本和目录权限…' : '检查未完成，请点击“刷新”重试。' }}
+      {{
+        checking ? '正在读取工具版本、目录权限和镜像存储能力…' : '检查未完成，请点击“刷新”重试。'
+      }}
     </p>
   </article>
 </template>

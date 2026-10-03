@@ -192,6 +192,13 @@ func (s *Store) Run(id int64, out any) error {
 	return json.Unmarshal(b, out)
 }
 
+// RunState reads the indexed durable fact without decoding a run snapshot.
+func (s *Store) RunState(ctx context.Context, id int64) (string, error) {
+	var state string
+	err := s.DB.QueryRowContext(ctx, "SELECT state FROM runs WHERE id=?", id).Scan(&state)
+	return state, err
+}
+
 // LatestRuns reads one indexed row per configured source, independent of how
 // many runs other sources have produced. It does not count or scan history.
 func (s *Store) LatestRuns(sources []string) ([][]byte, error) {

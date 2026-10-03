@@ -413,6 +413,8 @@ func (a *App) checks(w http.ResponseWriter, r *http.Request) {
 	}
 	out["config_writable"] = checkWritable(filepath.Dir(a.Config.File()))
 	out["mirror_writable"] = checkWritable(a.Mirrors.Root)
+	out["reflink"] = a.Mirrors.ProbeReflink(r.Context())
+	out["storage"] = a.Mirrors.StorageInfo()
 	out["github_token_configured"] = a.Config.View().TokenConfigured
 	out["github_proxy_configured"] = a.Config.View().ProxyConfigured
 	respond(w, 200, out)

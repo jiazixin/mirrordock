@@ -61,6 +61,8 @@ settings:
 # 记录和日志默认一直保留；页面“清理日志”手动清理已结束任务的原始日志。
 # SQLite 运行记录继续保留；进度保存间隔使用程序内置默认值。
 # type 决定同步方式，支持 rsync、reposync 与 github_release。
+# srcN 与 gpg_keys 为公开地址，不支持 URL 鉴权；不能含用户信息、查询参数或片段。
+# GitHub API 返回的临时签名资产 URL 由下载器处理，不填写在这些字段。
 sources:
   - id: "almalinux-9"       # 唯一标识；修改显示名称时保持 id 不变
     name: "AlmaLinux 9"

@@ -215,7 +215,15 @@ func GitHubWithClient(ctx context.Context, client *github.Client, httpClient *ht
 			return err
 		}
 		marker := filepath.Join(t.Directory, tag, ".mirrordock-release-sync")
+		parent, err := os.Stat(filepath.Dir(marker))
+		if err != nil {
+			return err
+		}
 		if err := config.AtomicWrite(marker, []byte(time.Now().UTC().Format(time.RFC3339Nano)), 0600); err != nil {
+			return err
+		}
+		// This private timestamp does not change public directory metadata.
+		if err := os.Chtimes(filepath.Dir(marker), parent.ModTime(), parent.ModTime()); err != nil {
 			return err
 		}
 	}

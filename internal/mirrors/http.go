@@ -108,11 +108,29 @@ func (m *Manager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	// Bound descriptors before opening files, including HEAD and directory
+	// requests. This also bounds HTTP/2 streams sharing a single connection.
+	select {
+	case m.fileGates <- struct{}{}:
+		defer func() { <-m.fileGates }()
+	default:
+		w.Header().Set("Retry-After", "3")
+		http.Error(w, "file capacity reached", http.StatusServiceUnavailable)
+		return
+	}
 	var file *os.File
 	var st os.FileInfo
 	generation := entry.Publication.Current.ID
-	for i, root := range entry.roots {
+	for _, g := range entry.generations {
+		if r.Context().Err() != nil {
+			return
+		}
+		root, err := m.openGeneration(g)
+		if err != nil {
+			continue
+		}
 		f, err := root.OpenFile(rel, os.O_RDONLY|unix.O_NONBLOCK, 0)
+		_ = root.Close()
 		if err != nil {
 			continue
 		}
@@ -123,7 +141,7 @@ func (m *Manager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		file = f
 		st = info
-		generation = entry.generations[i].ID
+		generation = g.ID
 		break
 	}
 	if file == nil {

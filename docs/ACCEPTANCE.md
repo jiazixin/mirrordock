@@ -2,7 +2,109 @@
 
 验证日期：**2026-10-02 至 2026-10-03**。范围为当前完整工作区，包含开始时已存在的后端统计、时间筛选、共享开关和 UI 对齐改动，以及本次新增修复；保留用户配置协议与已有修改。未推送、部署、发送外部消息或启动完整发行版同步。
 
-**本机代码、隔离 Linux 与 Rocky 容器验证通过，生产环境验收仍有待完成项。** 本文替代原先按会话追加的重复记录；历史输出仍留在被忽略的本机 test-results 中，不作为本次通过证据。
+**最新结论：2026-10-03 全项目复查的 R1–R7 已修复，并加入 15 个永久回归测试。** 当前本机与交叉编译结果见本节；此前 Linux 实机与 Rocky 容器记录仍属于历史证据，生产环境验收待项没有自动变为通过。
+
+## 审查修复与最终回归（2026-10-03）
+
+本次按用户授权修复全部七项已确认问题，保留工作区已有改动，未提交、推送、部署、启动真实发行版同步、发送外部消息或使用子代理。配置字段没有新增或恢复；明确收紧来源/GPG URL 的凭据边界，完整代理管理端回填例外继续保留。实现方案见 [修复计划](plans/2026-10-03-review-fixes.md)。
+
+| 问题 | 最终行为 / 永久回归 |
+| --- | --- |
+| R1 同任务并发 | resume 检查 working，queued 保存成功后才排队；worker 出队再次检查 working。运行中操作保存失败保留 pausing/running 和源预占。actions_test 覆盖暂停写库失败/旧执行器停止窗口、退出后正常恢复、恢复写库失败不启动 |
+| R2 FD 累积 | 路由不常驻打开当前/历史根，请求前获取 FD 配额，根按需打开、取得文件后关闭；TCP 与文件请求按同一软限制分配预算。独立测试进程内软限制 128，150 次发布全部成功、保留 149 旧代，旧包回退成功；HEAD/GET 饱和均返回 503，活动引用/越界/Range/文件流现有测试继续通过 |
+| R3 来源凭证快照 | 配置来源/GPG 地址拒绝 userinfo/query/fragment，GitHub 临时签名 URL 的通用下载校验不变；新快照防御性脱敏。历史 runs/run_results 以 100 条 keyset 分页迁移，相关候选/事件/错误 URL 同步脱敏，全部成功才写完成标记。105 条跨页两表保留记录与耗时、幂等、重叠地址、失败阻止启动及可重试均覆盖。迁移不改写 YAML、原始日志文件或外部备份 |
+| R4 GitHub 无变化发布 | 更新私有标记后恢复父目录 mtime；无变化时仅保存新的发布摘要，不生成新正文代。受控 API 连续复用 received=0/skipped=1、代 ID 不变且摘要时间更新并持久化；随后资产身份/正文变化仍产生新代；摘要保存失败保留旧事实/work |
+| R5 硬链接无变化发布 | dev/inode 分组，首个文件 reflink，其余仅链接同一 work 内的克隆。现代 rsync 连续无变化同步代 ID 不变；work 内 SameFile 为真，与 published 为假，写入 work 不改变发布正文 |
+| R6 通知耗时 | 使用累计 ElapsedSeconds；执行 10s、墙钟 1h 显示 10s；旧记录缺失显示未记录，不猜测暂停耗时 |
+| R7 通知未完成数 | 复用为成功子集，显示“其中复用”；未完成=总数-成功-失败。3 项中复用 2 项后失败正确显示 1 项未完成 |
+
+15 个新增测试位于 source_url_test、actions_test、snapshot_test、review_test、descriptors_test、message_test；同时调整既有通知 fixture 的计数/累计耗时及旧根引用测试。此前七项临时复现保留在下方历史证据，不把其预期失败写成现版本测试失败。
+
+| 本次检查 | 实际结果 / 证据 |
+| --- | --- |
+| Web format:check / build | 通过；review-fixes-web-{format,build}.txt；先构建 web/dist 再编译嵌入包 |
+| 相关模块 Go race | config/database/runs/mirrors/notifications 通过；review-fixes-targeted.txt |
+| 全套 Go race | 最终源码 8 个 internal 包全部通过，现代 rsync fixture 启用；review-fixes-go-race-final.txt |
+| go vet | 最终源码通过；review-fixes-go-vet-final.txt |
+| 本机 / Linux amd64、arm64 构建 | 最终源码三种构建均通过，临时二进制 /tmp/mirrordock-review-fixes-final 及两个 linux 架构产物；交叉构建不是 Linux 运行验收 |
+| 全部 E2E | 最终二进制 11 passed、0 skipped（1.4m）；review-fixes-e2e-final.txt，首轮记录仍保留 |
+| git diff --check / gofmt | 通过；无空白错误及未格式化改动 |
+
+按 open-code-review 技能实际执行外部 review 入口，退出码 1：no valid LLM endpoint configured，外部模型调用未执行。随后使用项目允许的本地 delegate preview/rule，由当前 Codex 审查全部当前新增/修改源码，包括开始时已有改动。当前清单 44 项：25 个 reviewable 全部审查、0 skipped；默认排除的 11 个 Go 测试、2 个 E2E 与 6 个文档/计划另行核对。规则、清单与逐项结果见 test-results/review-fixes-{preview,rules,report}.json。审查补强了重叠 URL 必须先处理较长地址，以及迁移失败/重试用例；没有把外部入口失败或排除项当成自动通过。
+
+**性能数据：** macOS arm64 / M2 Max 的 8 MiB 本机 HTTP fixture、1s × 3，修复前临时源码快照 6101/6539/6348 MB/s，当前 5463/5794/5891 MB/s；稳定轮次分配由 122 增至 134 allocs/op。按需打开 os.Root 增加路径解析/分配成本，以消除旧代句柄持续增长；两组分开执行，背景负载与短样本会影响差异，不作统计显著性结论。证据 review-fixes-download-{baseline,bench}.txt。这是热缓存、稀疏文件、本机 HTTP 合成基准，不能代表实际包磁盘读取、Linux sendfile 命中、HTTPS、冷缓存或生产多源吞吐。
+
+**未执行项：** 本轮没有重跑 Linux 实机系统调用/吞吐、真实 EL/DNF/容器、外部通知、生产多 TB/大文件数与断电/磁盘满/fsync 故障，也没有最新在线依赖漏洞扫描。交叉构建只证明编译成功；历史验收证据保持原日期和边界。
+
+## 全项目复查（2026-10-03，原始审查与复现）
+
+范围为当前工作区全部项目模块，包括开始时已有的 25 个新增/修改文件。此次请求为审查，未修改业务源码、配置协议或依赖，未创建子代理、提交、推送、发布或发送外部消息。只更新本验收记录；证据在被忽略的 test-results。复现使用独立临时源码副本、临时数据、受控本机 GitHub API 和现代 rsync，不读取用户镜像或真实凭据。
+
+使用 open-code-review 技能执行 `ocr review --audience agent --background ... --output /tmp/mirrordock-ocr-review-20261003.txt`，入口退出码 1，原因为 `no valid LLM endpoint configured`；没有执行外部模型调用。随后使用项目允许的 open-code-review-delegate 本地 preview/rule 工作流，由当前 Codex 审查，不宣称独立外部模型复核。Go 版本为 1.27.1，并读取 use-modern-go 的该版本完整指南。
+
+为覆盖未修改源码，从 Git 跟踪文件及非忽略新增文件构造了临时源码快照，以空 Git 提交作为 OCR 基线。快照共 125 项，OCR reviewable 84 项全部记为 reviewed、0 skipped，覆盖率 100%；不是只审查工作区差异。覆盖清单、哈希、规则和逐项方法见 `test-results/whole-review-{manifest,preview,rules,report}.json`。
+
+- 37 个 Go 生产文件：cmd、config、database、sync、runs、mirrors、notifications、observability、app，以及 web/embed.go；核对状态、调用关系、锁顺序、持久化、发布恢复、校验、凭证和文件服务边界。
+- 12 个 TS/JS 文件：Vue 装配、API/状态/类型/格式、运行筛选与分页、构建/浏览器配置、公开目录脚本。
+- 29 个默认规则文件：Vue 页面/组件/布局、HTML/CSS、嵌入图标、Dockerfile 和忽略配置；结合交互与模板边界、格式/构建、现有 E2E 核对，未做全部 CSS 像素或跨浏览器验收。
+- 其余 6 个 reviewable：配置示例、两个维护脚本、两个 JSON 工具配置及 npm 清单。
+- OCR 默认排除的 41 项另行核对：19 个 Go 测试、8 个 E2E、当前规则/文档/计划、systemd、Go/npm 依赖记录及图像资源。测试以结构与关键边界复核及实际全套执行验证；锁文件核对清单一致性，Go 模块执行离线校验；SVG 核对源与导入方式，ICO 仅核对生成入口和文件头，不做二进制文本审查。没有把工具排除当作自动通过。
+
+### 已确认的问题
+
+以下是修复前的复现记录，失败是当时的缺陷证据，不是通过记录；永久回归与修复结果见前节。
+
+| 编号 / 优先级 | 位置与触发条件 | 已确认结果 | 修复方向 |
+| --- | --- | --- | --- |
+| R1 / P1 正确性 | internal/runs/runs.go:345–376；运行中的 pause 写库失败，原执行器正在停止时立即 resume | 写库失败把内存状态改为 interrupted，但 working 仍存在；resume 只检查状态，第二个 worker 再次运行同一 ID。SQLite 触发器拒绝 pausing、控制旧 runner 暂不退出，复现调用数 2 | resume 与 worker 出队均检查实际 working；旧执行器退出前不能重新排队，保存失败保留与执行器一致的状态和源预占 |
+| R2 / P2 资源 | internal/mirrors/mirrors.go:165–181；24h 内持续发布新代 | 每个旧代永久打开 os.Root；安装新路由前还会同时打开旧、新两组根。仅测试进程把软 FD 限制设为 128，第 61 次发布、60 个旧代时失败 `too many open files`；没有活动下载 | 为发布根及下载连接共同计算 FD 预算；旧代可在保留 24h 与引用保护下按需打开或使用有界缓存，不以提高清理速度破坏旧包保护 |
+| R3 / P2 安全 | internal/runs/runs.go:302–308，internal/config/config.go 的 HTTPURL；Reposync URL 使用查询鉴权 | `https://mirror.example/repo?access_token=REPOSITORY_SECRET` 被配置校验接受，凭证原样出现在 Snapshot.Source.Upstreams，并由 CreateRun 持久化到历史/API。此例只有虚构凭证；GPGKeys 也同样原样进入 Source | 明确来源 URL 的凭据边界，对来源/公钥地址做专门验证与历史脱敏；鉴权信息应在实际执行时读取。不能全局禁止 HTTPURL 查询参数，以免破坏 GitHub 签名资产 URL |
+| R4 / P2 性能 | internal/sync/github.go:213–218，internal/mirrors/fingerprint.go:61–64；GitHub 所有资产均复用 | 每次 AtomicWrite 私有同步时间标记会修改父目录 mtime，指纹因此改变。受控 API 连续两次同步，第二次 received=0、skipped=1，但 Current.ID 改变 | 将同步时间更新与正文代的变化判定分离；保留正文身份、权限、链接等真正变化的检查，更新同步摘要不应强制生成新正文代 |
+| R5 / P2 性能 | internal/mirrors/mirrors.go:345–363；默认保留硬链接、上游内容未变 | copyTree 逐文件克隆会拆散同一组硬链接；rsync --hard-links 再合并工作树，改变 inode/ctime。现代 rsync 连续两次处理同一隔离上游，第二次 transferred=0、created=0、deleted=0，仍产生新 Current.ID | 克隆时按源 dev/inode 保留工作树内的硬链接组；只对组内首个文件 reflink，其余链接到同一 work 内的克隆，禁止把 work 正文硬链接到 published |
+| R6 / P2 正确性 | internal/notifications/message.go:54–59；任务暂停或服务中断后继续 | 通知用 EndedAt-StartedAt 计算“处理耗时”，与累计执行事实不一致。ElapsedSeconds=10、开始到完成相隔 1h 时显示 1h0m0s | 使用 ElapsedSeconds，并明确旧记录缺失时的展示；暂停时间不能进入累计执行耗时 |
+| R7 / P2 正确性 | internal/notifications/message.go:61–63；GitHub 复用部分资产后失败 | GitHub Success 已包含 Skipped，通知又减一次 Skipped。3 个资产中复用 2 个、剩余 1 个未完成，显示“未完成：0” | 按执行器统一计数语义；复用为成功的子集，未完成不能重复扣减，可标注“成功中复用” |
+
+R1 可在系统进程收到 TERM 后、最多 10 秒的退出窗口内发生；复现使用受控 runner 固定这个窗口。并发执行会共同使用同一 work/log/attempts，并覆盖 working 的所有权，因此需优先修复。R2 的 128 为隔离测试限制，不是生产阈值；实际阈值取决于 LimitNOFILE、源数量、发布频率和并发下载。R4/R5 会增加目录扫描、校验、fsync、旧代数量和 FD 压力，不表示每次都复制全部正文数据块。
+
+### 本轮验证
+
+| 检查 | 实际结果 / 证据 |
+| --- | --- |
+| `npm --prefix web run format:check`、`npm --prefix web run build` | 通过；先生成 web/dist 再检查嵌入 Go 包 |
+| `go vet ./...`、本机程序构建 | 通过；test-results/whole-review-go-vet.txt；二进制 /tmp/mirrordock-whole-review |
+| 现代 rsync fixture 启用的 `go test -race -count=1 ./...` | 8 个 internal 包通过；test-results/whole-review-go-race-local.txt。首次 sandbox 回环绑定失败保留在 whole-review-go-race.txt，不记作通过 |
+| 完整 Playwright E2E | 11 passed，0 skipped；test-results/whole-review-e2e.txt |
+| `GOPROXY=off GOSUMDB=off go mod verify`、npm 清单与锁文件核对 | 本地缓存模块校验全部通过，锁文件根清单字段一致；不是最新在线漏洞审计 |
+| R1 / R4 / R5 / R6 / R7 复现 | 临时副本运行 `go test -race -count=1 -run '^TestWholeReview' ./internal/runs ./internal/mirrors ./internal/notifications`，5 个预期断言失败；whole-review-reproductions.txt |
+| R3 复现 | 临时副本单项测试失败，打印虚构凭证进入快照的证据；whole-review-credential-snapshot.txt |
+| R2 复现 | 测试进程内显式 Setrlimit 后，软限制 128，第 61 代发布失败；whole-review-descriptors-actual-limit.txt。初次只在 shell 设置软限制时 Go 启动恢复了限制，150 代通过的记录 whole-review-descriptors.txt 不能当成有效 FD 压力验证 |
+
+修复前复现源码保存在 test-results/whole-review-reproduction-{runs,mirrors,notifications}.go.txt，仅作历史证据。修复阶段已按上述边界补齐永久测试；详细修复/审查报告见本文件前节与 review-fixes-report.json。
+
+**进一步改进：** 七类场景已加入永久回归；大历史量的 ClearLogs 当前在整段扫描/删除/写库期间持有 Engine.mu，受控批次和短锁优化仍建议在大历史量实测后单独推进，此项未做生产规模耗时测量。当前模块边界总体可用，没有充分理由先做大规模架构重写。
+
+**本轮未执行：** Linux 实机 sendfile/吞吐、真实 EL/DNF 与容器重新构建、外部通知、生产多 TB/大文件数规模、断电/磁盘满/fsync 故障、最新在线依赖漏洞扫描。下方此前验收证据继续作为历史记录，不能冒充本轮重跑；本轮也不证明所有逻辑边界均无问题。
+
+## 镜像存储与系统设置（2026-10-03）
+
+本次修改要求原生 reflink 克隆成功，禁止完整复制回退；未变化同步复用当前代，终态 work 自动回收，可恢复任务保留。rsync 去掉 delay-updates，并固定保护内部标记；实际 rsync 回归曾发现 --delete 删除准备标记导致无变化同步仍发布新代，已修复后重跑。安全余量为 max(1 GiB, 文件系统总量 1%)，任务准入另计每 worker 512 MiB；不足保持排队，不消耗预算，运行中每 5 秒低空间检查独立于清理循环。
+
+系统设置 → 系统配置 → 环境检查新增 Reflink 和镜像盘空间。刷新在真实 published/work 目录重新实测，区分 supported/unsupported/error 并展示原因；容量使用 work 文件系统的 available/total、安全/下一任务准入余量，另列旧代和任务目录数，不将共享目录逻辑大小相加。删除配置源的留存文件不计入当前路由旧代数，但仍占实际文件系统容量。
+
+| 检查 | 最新结果 | 证据位置（本机忽略文件） |
+| --- | --- | --- |
+| Web 格式与构建、Go vet、本机与 Linux amd64/arm64 构建 | 通过；先构建 Web，再编译嵌入包 | 本次工具执行结果、web/dist |
+| 全量 Go race 与最后受影响模块复验 | 8 个 internal 包全部通过；最终 database/mirrors/runs 再次通过，真实 rsync fixture 启用 | test-results/storage-go-race.txt、storage-go-race-final.txt |
+| 浏览器相关 E2E | 4 项通过；reflink 三种状态/原因/刷新、无变化 rsync、分页及公开目录；人工查看环境检查截图 | test-results/storage-e2e-final.txt、web/test-results |
+| Linux arm64 / XFS reflink=1 | 最终 mirrors/runs 测试二进制原生运行，39 项顶层测试通过、0 skipped；原生克隆隔离、无变化、清理、准入/低空间、持久化失败覆盖 | test-results/storage-xfs-native-tests.txt、storage-xfs-filesystems.txt |
+| 最终程序 XFS API 实测 | reflink=1 支持；reflink=0 不支持；published/work 跨文件系统不支持；实际 work 容量与 SIGTERM 退出码 0 | test-results/storage-xfs-api.json、storage-xfs-api.py |
+| OCR 本地 delegate | 15 个 reviewable 全部 reviewed；默认排除的 5 个测试与 5 个文档另行完整核对；未遗留已确认的正确性/安全性/性能阻断项 | test-results/storage-review-{preview,rules,report}.json |
+
+XFS 测试为独立 Colima VZ 虚拟机（2 CPU / 2 GiB、Ubuntu 24.04.4、Linux 6.8.0-117-generic），使用 4 GiB reflink=1 与 512 MiB reflink=0 的临时文件系统；不挂载宿主目录、不共享 SSH agent、不改变 Docker context，不运行真实发行版同步。验证后整机与临时磁盘已删除，用户 default 虚拟机保持 Stopped。先前传入二进制因 VM 临时目录权限失败，修正该临时目录后重传并通过；sandbox 回环绑定失败与外部 OCR 未配置 endpoint 的失败也未记作通过。
+
+已按 open-code-review 技能执行外部审查入口，因没有可用 LLM endpoint 未执行外部模型调用；随后使用项目允许的 OCR delegate preview/rule 工作流，由当前 Codex 完整审查 20 个新增/修改源码（含测试），保留文件状态、覆盖原因与哈希，未向外部发送源码。审查修复包括：清理与容量监控分离、保存失败保留可恢复工作与源预占、`.gc-` 支持中断后继续、避免繁忙下载永久阻止回收、读取实际 work 文件系统容量、标记保护与基础代一致性检查。默认排除项没有当作自动通过。
+
+**未验证项与性能边界：** 最新改动没有重做下面早期基线的 Docker/真实 Rocky DNF/下载吞吐验证；本次 Linux 原生覆盖限于 mirrors/runs 与环境探测 API，race 限于 macOS。4–6 TiB 生产 XFS 的全量同步、增量峰值、共享块物理占用、文件数规模下准备/指纹/回收耗时、同步下载并行的吞吐和断电恢复仍须目标服务器实测。容量保护不是硬配额，检查间隔内的突增或外部写入仍可导致 ENOSPC；新增/替换文件、旧代留存和文件系统元数据仍占空间。下载热路径未改动，未新增数据库读取、正文哈希或动态压缩。以下 preflight 证据保留为此前基线，不能冒充最新存储版本的重新验收。
 
 ## 环境与实际结果
 

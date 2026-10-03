@@ -1,7 +1,7 @@
 package app
 
 import (
-	"golang.org/x/sys/unix"
+	"mirrordock/internal/mirrors"
 	"net"
 	"net/http"
 	"sync"
@@ -23,15 +23,8 @@ type connections struct {
 }
 
 func connectionLimit() int {
-	var r unix.Rlimit
-	if unix.Getrlimit(unix.RLIMIT_NOFILE, &r) != nil {
-		return 256
-	}
-	reserve := uint64(256)
-	if r.Cur < 512 {
-		reserve = r.Cur / 2
-	}
-	return int(min(uint64(4096), max(uint64(32), (r.Cur-reserve)/2)))
+	_, connections := mirrors.DescriptorLimits()
+	return connections
 }
 
 func (c *connections) state(conn net.Conn, state http.ConnState) {

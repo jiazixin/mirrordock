@@ -24,6 +24,9 @@ func TestRsyncFlags(t *testing.T) {
 	settings.Rsync.LimitMB = 12.5
 	tgt := Task{Source: config.Source{Rsync: config.Rsync{UID: new(0), GID: new(1000)}}, Settings: settings, Directory: "/tmp/work", Candidate: "rsync://example/a/"}
 	args := RsyncArgs(tgt)
+	if slices.Contains(args, "--delay-updates") || slices.Contains(args, "--inplace") || !slices.Contains(args, "--partial-dir=.rsync-partial") || !slices.Contains(args, "--exclude=.mirrordock*") {
+		t.Fatal("private work must retain resumable per-file replacement", args)
+	}
 	for _, s := range []string{"--delete", "--links", "--hard-links", "--owner", "--group", "--chown=0:1000", "--bwlimit=12207"} {
 		if !slices.Contains(args, s) {
 			t.Fatalf("missing %s: %v", s, args)

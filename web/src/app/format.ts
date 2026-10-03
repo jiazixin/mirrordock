@@ -36,6 +36,7 @@ export function bytes(n: number) {
   return `${(n / 1024 ** index).toFixed(index ? 1 : 0)} ${units[index]}`
 }
 export const phases: Record<string, string> = {
+  waiting_space: '等待镜像盘空间',
   retry: '等待重试',
   prepare: '准备目录',
   scan: '扫描来源',
