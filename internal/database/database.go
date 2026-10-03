@@ -192,6 +192,37 @@ func (s *Store) Run(id int64, out any) error {
 	return json.Unmarshal(b, out)
 }
 
+// LogCleanupPage uses a fixed upper bound and indexed cursor so new tasks do
+// not move older rows between pages or extend an ongoing cleanup indefinitely.
+// NOT INDEXED still permits the integer primary key: the state index would
+// scan and sort the remaining terminal history separately on every page.
+const logCleanupQuery = `SELECT data FROM runs NOT INDEXED
+ WHERE id>? AND id<=? AND state IN ('succeeded','failed','timed_out','cancelled','interrupted')
+ ORDER BY id LIMIT 100`
+
+func (s *Store) LogCleanupPage(ctx context.Context, after, through int64) ([][]byte, error) {
+	rows, err := s.ReadDB.QueryContext(ctx, logCleanupQuery, after, through)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	records := [][]byte{}
+	for rows.Next() {
+		var data []byte
+		if err := rows.Scan(&data); err != nil {
+			return nil, err
+		}
+		records = append(records, data)
+	}
+	return records, rows.Err()
+}
+
+func (s *Store) LastRunID(ctx context.Context) (int64, error) {
+	var id int64
+	err := s.ReadDB.QueryRowContext(ctx, "SELECT COALESCE(MAX(id),0) FROM runs").Scan(&id)
+	return id, err
+}
+
 // RunState reads the indexed durable fact without decoding a run snapshot.
 func (s *Store) RunState(ctx context.Context, id int64) (string, error) {
 	var state string

@@ -63,4 +63,7 @@ func TestRetainedGenerationsUnderLowDescriptorLimit(t *testing.T) {
 	if files*3+connections > int(limit.Cur/2) {
 		t.Fatal("shared FD budget exceeded", files, connections)
 	}
+	if len(m.roots.items) > rootCacheLimit() || rootCacheLimit()+1 > int(limit.Cur/8) {
+		t.Fatal("cached roots exceeded reserve", len(m.roots.items), rootCacheLimit())
+	}
 }

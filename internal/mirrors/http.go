@@ -16,27 +16,34 @@ import (
 	"sync"
 )
 
-type metadata struct{ key, etag, mime string }
+type metadataKey struct {
+	generation, path string
+	size, modified   int64
+}
+type metadata struct {
+	key                     metadataKey
+	etag, mime, disposition string
+}
 type metadataCache struct {
 	mu    sync.Mutex
 	limit int
-	items map[string]*list.Element
+	items map[metadataKey]*list.Element
 	lru   *list.List
 }
 
 func newCache(limit int) *metadataCache {
-	return &metadataCache{limit: limit, items: map[string]*list.Element{}, lru: list.New()}
+	return &metadataCache{limit: limit, items: map[metadataKey]*list.Element{}, lru: list.New()}
 }
 func (c *metadataCache) get(generation, p string, st os.FileInfo) metadata {
-	key := fmt.Sprintf("%s:%s:%d:%d", generation, p, st.Size(), st.ModTime().UnixNano())
+	key := metadataKey{generation, p, st.Size(), st.ModTime().UnixNano()}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if e := c.items[key]; e != nil {
 		c.lru.MoveToFront(e)
 		return e.Value.(metadata)
 	}
-	sum := sha256.Sum256([]byte(key))
-	v := metadata{key: key, etag: `"` + hex.EncodeToString(sum[:]) + `"`, mime: mime.TypeByExtension(path.Ext(p))}
+	sum := sha256.Sum256(fmt.Appendf(nil, "%s:%s:%d:%d", generation, p, key.size, key.modified))
+	v := metadata{key: key, etag: `"` + hex.EncodeToString(sum[:]) + `"`, mime: mime.TypeByExtension(path.Ext(p)), disposition: mime.FormatMediaType("attachment", map[string]string{"filename": path.Base(p)})}
 	if v.mime == "" {
 		v.mime = "application/octet-stream"
 	}
@@ -121,16 +128,16 @@ func (m *Manager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var file *os.File
 	var st os.FileInfo
 	generation := entry.Publication.Current.ID
-	for _, g := range entry.generations {
+	for i, g := range entry.generations {
 		if r.Context().Err() != nil {
 			return
 		}
-		root, err := m.openGeneration(g)
+		root, release, err := m.roots.borrow(entry.paths[i])
 		if err != nil {
 			continue
 		}
 		f, err := root.OpenFile(rel, os.O_RDONLY|unix.O_NONBLOCK, 0)
-		_ = root.Close()
+		release()
 		if err != nil {
 			continue
 		}
@@ -182,7 +189,7 @@ func (m *Manager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	meta := m.cache.get(generation, rel, st)
 	w.Header().Set("ETag", meta.etag)
 	w.Header().Set("Content-Type", meta.mime)
-	w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": path.Base(rel)}))
+	w.Header().Set("Content-Disposition", meta.disposition)
 	w.Header().Set("Content-Security-Policy", "sandbox; default-src 'none'; base-uri 'none'; frame-ancestors 'none'")
 	if strings.Count(r.Header.Get("Range"), ",") >= 16 {
 		r = r.Clone(r.Context())

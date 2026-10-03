@@ -36,6 +36,7 @@ type Publication struct {
 type opened struct {
 	Publication Publication
 	generations []Generation
+	paths       []string
 	refs        int
 }
 type routes struct{ entries map[string]*opened }
@@ -60,6 +61,7 @@ type Manager struct {
 	requests      atomic.Int64
 	bytes         atomic.Int64
 	cache         *metadataCache
+	roots         *rootCache
 	ListingInfo   func(string) SourceListingInfo
 }
 
@@ -78,6 +80,10 @@ func New(root string, store *database.Store, sources []config.Source) (*Manager,
 	files, _ := DescriptorLimits()
 	m.fileGates = make(chan struct{}, files)
 	m.table.Store(&routes{entries: map[string]*opened{}})
+	m.roots, err = newRootCache(canonical, rootCacheLimit())
+	if err != nil {
+		return nil, err
+	}
 	_ = m.ProbeReflink(context.Background())
 	ready := false
 	defer func() {
@@ -159,8 +165,9 @@ func New(root string, store *database.Store, sources []config.Source) (*Manager,
 func (m *Manager) openPublication(p Publication) (*opened, error) {
 	o := &opened{Publication: p}
 	for _, g := range append([]Generation{p.Current}, p.Previous...) {
-		if !config.Within(m.Root, g.Directory) {
-			return nil, errors.New("publication escaped mirror root")
+		rel, err := m.generationPath(g)
+		if err != nil {
+			return nil, err
 		}
 		if g.ID == p.Current.ID {
 			root, err := m.openGeneration(g)
@@ -172,23 +179,26 @@ func (m *Manager) openPublication(p Publication) (*opened, error) {
 			}
 		}
 		o.generations = append(o.generations, g)
+		o.paths = append(o.paths, rel)
 	}
 	return o, nil
 }
 
-// Both path resolution and subsequent file opens stay inside os.Root. Roots
-// are transient: retained generations do not each consume a descriptor.
-func (m *Manager) openGeneration(g Generation) (*os.Root, error) {
+func (m *Manager) generationPath(g Generation) (string, error) {
 	rel, err := filepath.Rel(m.Root, g.Directory)
 	if err != nil || !config.Within(m.Root, g.Directory) {
-		return nil, errors.New("publication escaped mirror root")
+		return "", errors.New("publication escaped mirror root")
 	}
-	root, err := os.OpenRoot(m.Root)
+	return rel, nil
+}
+
+// Publication validation uses a transient root; requests use the bounded cache.
+func (m *Manager) openGeneration(g Generation) (*os.Root, error) {
+	rel, err := m.generationPath(g)
 	if err != nil {
 		return nil, err
 	}
-	defer root.Close()
-	return root.OpenRoot(rel)
+	return m.roots.anchor.OpenRoot(rel)
 }
 func (m *Manager) installOpened(o *opened) {
 	old := m.table.Load()
@@ -573,7 +583,7 @@ func (m *Manager) Close() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.install(&routes{entries: map[string]*opened{}})
-	return nil
+	return m.roots.close()
 }
 
 // Collect expires logical fallbacks and then removes only private, unreferenced
@@ -658,6 +668,9 @@ func (m *Manager) CollectContext(ctx context.Context, now time.Time) error {
 			continue
 		}
 		target := filepath.Join(dir, entry.Name())
+		if rel, err := filepath.Rel(m.Root, target); err == nil {
+			m.roots.forget(rel)
+		}
 		if !collecting {
 			garbage := filepath.Join(dir, ".gc-"+entry.Name())
 			if err = os.Rename(target, garbage); err != nil {

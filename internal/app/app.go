@@ -369,7 +369,7 @@ func (a *App) logs(w http.ResponseWriter, r *http.Request) {
 	respond(w, 200, map[string]any{"text": text, "next_offset": next})
 }
 func (a *App) clearLogs(w http.ResponseWriter, r *http.Request) {
-	count, err := a.Runs.ClearLogs()
+	count, err := a.Runs.ClearLogsContext(r.Context())
 	if err != nil {
 		failure(w, err)
 		return

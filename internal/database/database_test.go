@@ -3,9 +3,82 @@ package database
 import (
 	"context"
 	"encoding/json/v2"
+	"strings"
 	"testing"
 	"time"
 )
+
+func TestLogCleanupUsesBoundedPrimaryKeyPages(t *testing.T) {
+	s, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	for id := 1; id <= 230; id++ {
+		state := "succeeded"
+		if id%4 == 0 {
+			state = "queued"
+		}
+		if _, err := s.CreateRun("fixture", state, "now", map[string]int{"id": id}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	through, err := s.LastRunID(t.Context())
+	if err != nil || through != 230 {
+		t.Fatal(through, err)
+	}
+	if _, err := s.CreateRun("fixture", "succeeded", "now", map[string]int{"id": 231}); err != nil {
+		t.Fatal(err)
+	}
+	var after int64
+	count := 0
+	for {
+		page, err := s.LogCleanupPage(t.Context(), after, through)
+		if err != nil || len(page) > 100 {
+			t.Fatal(len(page), err)
+		}
+		for _, data := range page {
+			var record struct {
+				ID int64 `json:"id"`
+			}
+			if err := json.Unmarshal(data, &record); err != nil {
+				t.Fatal(err)
+			}
+			if record.ID <= after || record.ID > through || record.ID%4 == 0 {
+				t.Fatal("invalid cursor result", record.ID, after)
+			}
+			after = record.ID
+			count++
+		}
+		if len(page) < 100 {
+			break
+		}
+	}
+	if count != 173 {
+		t.Fatal("history skipped or upper bound ignored", count)
+	}
+	rows, err := s.ReadDB.QueryContext(t.Context(), "EXPLAIN QUERY PLAN "+logCleanupQuery, 0, through)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var plan string
+	for rows.Next() {
+		var id, parent, unused int
+		var detail string
+		if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+			t.Fatal(err)
+		}
+		plan += detail + "\n"
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	t.Log(plan)
+	if !strings.Contains(plan, "INTEGER PRIMARY KEY") || strings.Contains(plan, "TEMP B-TREE") {
+		t.Fatal("cleanup rescans and sorts history", plan)
+	}
+}
 
 func TestLatestRunsIncludeQuietSourcesBeyondHistoryPage(t *testing.T) {
 	s, err := Open(t.TempDir())

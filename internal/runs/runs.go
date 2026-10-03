@@ -80,6 +80,10 @@ type active struct {
 }
 type Engine struct {
 	mu                 sync.Mutex
+	logMu              sync.RWMutex
+	clearMu            sync.Mutex
+	clearing           map[int64]chan struct{}
+	removeLog          func(string) error
 	configMu           sync.Mutex
 	cfg                *config.Manager
 	store              *database.Store
@@ -109,6 +113,7 @@ func New(cfg *config.Manager, store *database.Store, m *mirrors.Manager, runner 
 	ctx, cancel := context.WithCancel(context.Background())
 	e := &Engine{cfg: cfg, store: store, mirror: m, runner: runner, data: config.Resolve(cfg.File(), cfg.Startup().Path), ctx: ctx, cancel: cancel, current: map[int64]*Run{}, working: map[int64]*active{}, wake: make(chan struct{}, 2), cleanupWake: make(chan struct{}, 1), location: location, retryDelay: 5 * time.Second, scheduleIDs: map[string]cron.EntryID{}}
 	e.admitSync, e.storageCheck, e.checkpointInterval = m.BeginSync, m.CheckSpace, 5*time.Second
+	e.clearing, e.removeLog = make(map[int64]chan struct{}), os.Remove
 	if done, err := store.State("public-source-urls-v1"); err != nil {
 		cancel()
 		return nil, err
@@ -338,7 +343,19 @@ func cloneRun(r *Run) *Run {
 	return &out
 }
 func (e *Engine) Action(id int64, action string) error {
-	e.mu.Lock()
+	for {
+		e.mu.Lock()
+		done := e.clearing[id]
+		if done == nil {
+			break
+		}
+		e.mu.Unlock()
+		select {
+		case <-done:
+		case <-e.ctx.Done():
+			return e.ctx.Err()
+		}
+	}
 	defer e.mu.Unlock()
 	r := e.current[id]
 	if r == nil {
@@ -839,37 +856,32 @@ func (e *Engine) ScheduleInfo() map[string]time.Time {
 	return out
 }
 func (e *Engine) Log(id int64, attempt int, offset int64) (string, int64, error) {
-	r, err := e.Get(id)
-	if err != nil {
-		return "", 0, err
+	if offset < 0 {
+		return "", 0, errors.New("offset 不能为负")
 	}
-	if attempt < 1 || attempt > len(r.Attempts) {
-		return "", 0, errors.New("尝试编号不存在")
+	f, size, err := e.LogSnapshot(id, attempt)
+	if errors.Is(err, errLogCleared) {
+		return errLogCleared.Error(), offset, nil
 	}
-	if r.Attempts[attempt-1].LogCleared {
-		return "日志已清理；状态和错误摘要仍保留。", offset, nil
-	}
-	f, err := os.Open(filepath.Join(e.data, "logs", fmt.Sprint(id), fmt.Sprint(attempt)+".log"))
 	if err != nil {
 		return "", 0, err
 	}
 	defer f.Close()
-	if offset < 0 {
-		return "", 0, errors.New("offset 不能为负")
-	}
 	if _, err = f.Seek(offset, io.SeekStart); err != nil {
 		return "", 0, err
 	}
-	b, err := io.ReadAll(io.LimitReader(f, 128<<10))
+	b, err := io.ReadAll(io.LimitReader(f, min(128<<10, max(0, size-offset))))
 	return syncer.CleanLog(string(b)), offset + int64(len(b)), err
 }
+
+var errLogCleared = errors.New("日志已清理；状态和错误摘要仍保留。")
 
 // LogSnapshot opens the selected attempt and fixes its download length before
 // releasing the cleanup lock. Logs are already sanitized by redactedWriter.
 // The caller owns the file and must limit reads to size to exclude later writes.
 func (e *Engine) LogSnapshot(id int64, attempt int) (file *os.File, size int64, err error) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
+	e.logMu.RLock()
+	defer e.logMu.RUnlock()
 	var r Run
 	if err = e.store.Run(id, &r); err != nil {
 		return nil, 0, err
@@ -878,7 +890,7 @@ func (e *Engine) LogSnapshot(id int64, attempt int) (file *os.File, size int64, 
 		return nil, 0, errors.New("尝试编号不存在")
 	}
 	if r.Attempts[attempt-1].LogCleared {
-		return nil, 0, errors.New("日志已清理；状态和错误摘要仍保留。")
+		return nil, 0, errLogCleared
 	}
 	file, err = os.Open(filepath.Join(e.data, "logs", fmt.Sprint(id), fmt.Sprint(attempt)+".log"))
 	if err != nil {
@@ -893,12 +905,26 @@ func (e *Engine) LogSnapshot(id int64, attempt int) (file *os.File, size int64, 
 }
 
 func (e *Engine) ClearLogs() (int, error) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
+	return e.ClearLogsContext(e.ctx)
+}
+
+func (e *Engine) ClearLogsContext(ctx context.Context) (int, error) {
+	if !e.clearMu.TryLock() {
+		return 0, errors.New("已有日志清理正在进行")
+	}
+	defer e.clearMu.Unlock()
+	ctx, cancel := context.WithCancel(ctx)
+	stop := context.AfterFunc(e.ctx, cancel)
+	defer cancel()
+	defer stop()
 	cleared := 0
-	offset := 0
+	through, err := e.store.LastRunID(ctx)
+	if err != nil {
+		return 0, err
+	}
+	var after int64
 	for {
-		records, total, err := e.store.ListRuns("", "", 100, offset)
+		records, err := e.store.LogCleanupPage(ctx, after, through)
 		if err != nil {
 			return cleared, err
 		}
@@ -907,40 +933,80 @@ func (e *Engine) ClearLogs() (int, error) {
 			if err = json.Unmarshal(b, &r); err != nil {
 				return cleared, err
 			}
-			if !Terminal(r.State) {
-				continue
+			if r.ID <= after || r.ID > through {
+				return cleared, errors.New("历史任务编号无效，日志清理已停止")
 			}
-			if _, ok := e.working[r.ID]; ok {
-				continue
-			}
-			changed := false
-			for i := range r.Attempts {
-				if r.Attempts[i].LogCleared {
-					continue
-				}
-				p := filepath.Join(e.data, "logs", fmt.Sprint(r.ID), fmt.Sprint(i+1)+".log")
-				if err = os.Remove(p); err != nil && !errors.Is(err, os.ErrNotExist) {
-					return cleared, err
-				}
-				r.Attempts[i].LogCleared = true
-				changed = true
-				cleared++
-			}
-			if changed {
-				if err = e.save(&r); err != nil {
-					return cleared, err
-				}
-				if current := e.current[r.ID]; current != nil {
-					current.Attempts = r.Attempts
-				}
+			after = r.ID
+			n, err := e.clearRunLogs(ctx, r)
+			cleared += n
+			if err != nil {
+				return cleared, err
 			}
 		}
-		offset += len(records)
-		if offset >= total || len(records) == 0 {
+		if len(records) < 100 {
 			break
 		}
 	}
 	return cleared, nil
+}
+
+func (e *Engine) clearRunLogs(ctx context.Context, r Run) (cleared int, err error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	e.logMu.Lock()
+	defer e.logMu.Unlock()
+	e.mu.Lock()
+	if current := e.current[r.ID]; current != nil {
+		r = *cloneRun(current)
+	}
+	if !Terminal(r.State) || e.working[r.ID] != nil {
+		e.mu.Unlock()
+		return 0, nil
+	}
+	done := make(chan struct{})
+	e.clearing[r.ID] = done
+	e.mu.Unlock()
+	defer func() {
+		e.mu.Lock()
+		if err == nil {
+			if current := e.current[r.ID]; current != nil {
+				current.Attempts = r.Attempts
+			}
+		}
+		delete(e.clearing, r.ID)
+		close(done)
+		e.mu.Unlock()
+	}()
+	for i := range r.Attempts {
+		if err = ctx.Err(); err != nil {
+			break
+		}
+		if r.Attempts[i].LogCleared {
+			continue
+		}
+		p := filepath.Join(e.data, "logs", fmt.Sprint(r.ID), fmt.Sprint(i+1)+".log")
+		if err = e.removeLog(p); err != nil && !errors.Is(err, os.ErrNotExist) {
+			break
+		}
+		err = nil
+		r.Attempts[i].LogCleared = true
+		cleared++
+	}
+	if cleared != 0 {
+		// Persist completed removals even when cancellation or a later removal
+		// fails. Missing files can be marked again after a persistence failure.
+		saveErr := e.save(&r)
+		if saveErr != nil {
+			return 0, errors.Join(err, saveErr)
+		}
+		e.mu.Lock()
+		if current := e.current[r.ID]; current != nil {
+			current.Attempts = r.Attempts
+		}
+		e.mu.Unlock()
+	}
+	return cleared, err
 }
 
 // NotificationChange serializes activation with new task creation and YAML edits.
