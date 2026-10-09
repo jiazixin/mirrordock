@@ -1,6 +1,6 @@
 # MirrorDock 项目协作规则
 
-开始工作前必须完整读取 [目录规范.md](目录规范.md)，再读取 [README.md](README.md)、[当前设计](docs/DESIGN.md) 和受影响模块。目录基线只在原文件维护，不复制正文。
+开始工作前必须完整读取 [目录规范.md](目录规范.md)，再读取 [README.md](README.md)、[当前设计](docs/DESIGN.md) 和受影响模块。目录基线（含第 8.1 节发布版本与构建元数据）只在原文件维护，不复制正文。
 
 本项目是一个 Go 后端配套 Vue Web 应用。Go 工具链固定 **1.27.2**，使用 `use-modern-go` 技能及其版本指南；新增 JSON 使用 `encoding/json/v2`。前端使用 Vue 3、TypeScript、Vite、npm，唯一输出为 `web/dist/`，由 `web/embed.go` 嵌入；凡需编译嵌入包的检查先构建 Web。
 

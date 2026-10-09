@@ -1,12 +1,13 @@
 package main
 
 import (
+	"cmp"
 	"runtime/debug"
 	"strings"
 )
 
 // Release builds may set this with -ldflags '-X main.version=<release>'.
-// Direct builds fall back to embedded VCS metadata, or dev without metadata.
+// Direct builds use Go's embedded module version, then VCS revision, then dev.
 var version = "dev"
 
 func versionString() string {
@@ -15,12 +16,12 @@ func versionString() string {
 }
 
 func formatVersion(release string, info *debug.BuildInfo) string {
-	release = strings.TrimSpace(release)
-	if release == "" {
-		release = "dev"
-	}
+	release = cmp.Or(strings.TrimSpace(release), "dev")
 	if info == nil {
 		return release
+	}
+	if release == "dev" && info.Main.Version != "" && info.Main.Version != "(devel)" {
+		release = info.Main.Version
 	}
 	var revision string
 	var modified bool
@@ -41,7 +42,7 @@ func formatVersion(release string, info *debug.BuildInfo) string {
 			details = append(details, "revision="+revision)
 		}
 	}
-	if modified {
+	if modified && !strings.HasSuffix(release, "+dirty") {
 		details = append(details, "modified")
 	}
 	if len(details) == 0 {

@@ -436,14 +436,14 @@ OCR 排除原因：default_path 18（测试与锁文件），unsupported_ext 17�
 
 此前自动审批拒绝追加依赖元数据发送。**2026-10-03 用户明确授权后，该阻塞已解除**，npm 官方审计与三个平台的 Go 官方漏洞详细扫描均实际执行完成。只发送审计所需依赖元数据，未发送源码或配置凭据；外部 OCR LLM 授权范围没有扩大。
 
-## 2026-10-09：CLI 版本与构建注入
+## 2026-10-09：CLI 版本与标准 Go 构建
 
-范围：cmd/mirrordock 的 CLI 拆分、版本显示与启动日志，scripts/build.sh、scripts/version.sh、Dockerfile 和 README。用户临时参考目录 video-rename/ 未修改，正式实现没有对它的依赖。
+当前范围：cmd/mirrordock/version.go、version_test.go、scripts/build.sh，删除 scripts/version.sh，更新 README、AGENTS 和目录规范。构建改用 Go 内置模块版本；标准 tag、伪版本与 dirty 状态不再被旧脚本覆盖。显式链接注入优先，用于无 Git 的源码包与既有 Docker VERSION 参数。目录基线升为 1.1.0，新增 §8.1 并复核 §13 案例和 AGENTS 引用。旧版“直接构建只读提交 ID”的结论已被本节替代。
 
-- Go 1.27.2 darwin/arm64；Web 构建通过。首次 Go 构建因沙箱禁止默认缓存写入失败，改用 GOCACHE="$PWD/.cache/go-build" 后完整构建通过，产物 bin/mirrordock。
-- go test -race -count=1 ./cmd/mirrordock 与 go vet ./cmd/mirrordock 通过；sh -n scripts/build.sh scripts/version.sh 和 git diff --check 通过。
-- 临时 Git 仓库实测：无 Git 为 dev、无 tag 为短 ID、精确轻量 tag 优先、离开 tag 后回退短 ID、嵌套源码归档不误用父仓库版本。
-- 临时目录执行真实二进制 --version、--help，无配置即可成功退出；冲突配置别名退出码为 2。本机构建显示 a2e0f8cc1568 (modified)；链接注入 v1.2.3 实测显示 tag、revision 和 modified。
-- OCR 外部自动审查已尝试，但因未配置 LLM endpoint 失败，未执行外部模型审查。随后使用 open-code-review-delegate 的本地 preview/rule，由当前 Codex 完成审查，未启动子代理、未发送源码到外部模型。
-- OCR 清单 6/6 已审查：Dockerfile、main.go、cli.go、version.go、build.sh、version.sh。额外人工覆盖 cli_test.go、version_test.go（OCR 默认排除测试）及 README；video-rename/ 的 5 个参考文件明确排除。修复 Docker VERSION 链接参数引用方式，统一拒绝双引号，避免含单引号的 tag 被错误解析；无遗留正确性、安全性或性能阻断项。
-- 未执行：Docker 镜像完整构建、Linux 运行验收、全套后端及浏览器 E2E（本次无业务/Web 源码变化）。参考目录仍包含其他模块的 import，删除前不使用 go test ./... 作为本次检查入口。没有执行真实同步或性能测试，未修改镜像数据与凭证。
+- 工具链实测 Go 1.27.2 darwin/arm64，并读取 use-modern-go 完整指南。`GOCACHE="$PWD/.cache/go-build" sh scripts/build.sh` 通过，包含 Vue 类型检查、Vite 构建和 Go 编译，产物 bin/mirrordock。
+- 审查后执行 `GOCACHE="$PWD/.cache/go-build" go test -race -count=1 ./cmd/mirrordock`、同缓存配置的 `go vet ./cmd/mirrordock`，均通过；`sh -n scripts/build.sh` 与 `git diff --check` 通过。单元回归覆盖原有 CLI 解析及版本优先级、空元数据、`(devel)`、伪版本、dirty 和显式覆盖。
+- 在临时目录内，用当前 version.go 与项目相同模块名/Go 版本建立独立 Git 仓库，执行真实 `go build`：11 个构建场景通过，包括无 Git、无 Git 注入、无 tag、忽略 `1.1`/`v1.2`、标准轻量 tag、dirty、覆盖版本仍保留 modified、tag 后提交的伪版本、注解预发布 tag、关闭 VCS 及关闭 VCS 后注入。二进制位于仓库外，测试结束删除临时仓库；未给项目仓库创建 tag。
+- 在无配置的临时工作目录运行实际应用 `--version` 与 `--help`，均成功退出。当前仓库无 tag，本次版本为 `v0.0.0-20261009102508-0e2b7e8e744c+dirty (revision=0e2b7e8e744c)`。普通构建不需要手动注入，运行时无需 Git。
+- OCR 外部入口 `ocr review --audience agent --background ... --output test-results/version-standard/ocr-external.txt` 退出码 1，原因为 `no valid LLM endpoint configured`，未执行外部模型审查、未发送源码。随后使用 open-code-review-delegate 的本地 preview/rule，由当前 Codex 审查全部变更；不宣称独立外部模型复核。
+- OCR reviewable 的 version.go、build.sh 为 2/2 reviewed、0 skipped。默认排除的 version_test.go（default_path）、删除的 version.sh（deleted），以及 README、AGENTS、目录规范、本验收文档（unsupported_ext）另行完整复核，总覆盖 8/8。检查入口顺序、链接覆盖、dirty 去重、回退规则、删除脚本引用和文档一致性，无遗留已确认的正确性、安全性或性能阻断项。规则、覆盖清单、哈希、测试脚本与结果位于 `test-results/version-standard/`。
+- 未执行：完整 Docker 镜像构建、Linux 运行验收、全套后端、Web 格式检查及浏览器 E2E（本次无业务/Web 源码变化）。无 Git 注入已在本机真实 Go 构建验证，不代替容器验收。本次无下载性能改动或性能结论；未运行真实同步，未修改用户镜像与凭证。

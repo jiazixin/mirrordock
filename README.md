@@ -16,7 +16,23 @@ sh scripts/build.sh
 ./bin/mirrordock --version
 ```
 
-构建脚本自动读取当前 HEAD 的精确 tag（含轻量 tag）；没有 tag 时使用 12 位短提交 ID，无 Git 元数据时为 dev。版本通过 Go 链接参数写入，运行时不调用 Git；Go 的 VCS 元数据额外显示提交 ID 和 modified 标记。直接 `go build` 仍可读取编译时记录的提交 ID，但不会自动解析 tag；`--version` 和 `--help` 不读取配置或启动服务。交叉编译可使用 `GOOS=linux GOARCH=amd64 CGO_ENABLED=0 sh scripts/build.sh`。
+发布 tag 采用 `v主版本.次版本.修订版本`，例如 `v1.1.0`、`v1.2.0`，预发布为 `v1.2.0-rc.1`；不使用 `1.1`、`v1.2` 等非规范 tag。普通构建不需要注入版本：Go 1.24 起会在可识别的 Git 仓库中将模块版本写入二进制，本项目通过 `debug.ReadBuildInfo().Main.Version` 读取。精确标准 tag 显示对应版本，非标签提交显示 Go 生成的伪版本，未提交修改保留 `+dirty`；额外显示 12 位提交 ID。应以包路径构建，并保留 `.git` 与对应 tag，不使用 `-buildvcs=false` 关闭此能力。Go 模块的 tag 必须匹配模块路径的主版本及子目录规则，见 [Go 官方版本说明](https://go.dev/ref/mod#versions)。
+
+版本优先级为显式链接注入（非空且非 `dev`）→ Go 主模块版本（非空且非 `(devel)`）→ 12 位提交 ID → `dev`。显式覆盖仍保留可取得的 modified 状态；运行时不调用 Git。`--version` 和 `--help` 不读取配置或启动服务。直接构建与交叉编译如下：
+
+```sh
+npm --prefix web run build
+go build -trimpath -o bin/mirrordock ./cmd/mirrordock
+# 或由脚本先构建 Web，再交叉编译 Go
+GOOS=linux GOARCH=amd64 CGO_ENABLED=0 sh scripts/build.sh
+```
+
+源码压缩包没有 Git 信息时可显式注入；以下 `v1.1.0` 是示例，必须替换为与源码对应的真实版本，不能把未知来源或未提交修改标为正式发行版：
+
+```sh
+npm --prefix web run build
+go build -trimpath -ldflags='-X main.version=v1.1.0' -o bin/mirrordock ./cmd/mirrordock
+```
 
 `web/dist/` 是唯一 Web 输出，由 `web/embed.go` 嵌入二进制，不提交 Git。干净检出直接执行 Go 构建或全量测试会因缺少嵌入文件失败。容器构建也先构建 Web。Docker 上下文不包含 Git，需传入 VERSION；未传时显示 dev，容器构建不附带 Git dirty 元数据。管理页面按路由加载，资源随二进制发布，无 CDN 或远程字体。
 
@@ -136,9 +152,9 @@ PATH=/path/to/modern-rsync:$PATH MIRRORDOCK_TEST_RSYNC=/path/to/modern-rsync/rsy
 
 ## 部署与目录
 
-`docker build --build-arg VERSION="$(sh scripts/version.sh)" -t mirrordock .` 使用先 Vue 后 Go 的多阶段构建，EL9 运行层先应用已发布安全更新，再安装 rsync/DNF。Docker 与真实 EL 验收以当前验收文档为准。配置中的 path 和 mirror_root 可设为 `/var/lib/mirrordock` 与 `/srv/mirrors`。
+`docker build --build-arg VERSION=v1.1.0 -t mirrordock .` 使用先 Vue 后 Go 的多阶段构建；VERSION 示例必须替换为与源码对应的真实版本，构建上下文无 `.git`，无法自动核对版本或 dirty 状态。EL9 运行层先应用已发布安全更新，再安装 rsync/DNF。Docker 与真实 EL 验收以当前验收文档为准。配置中的 path 和 mirror_root 可设为 `/var/lib/mirrordock` 与 `/srv/mirrors`。
 
-国内网络可使用 `docker build --build-arg VERSION="$(sh scripts/version.sh)" --build-arg GOPROXY=https://goproxy.cn --build-arg ROCKY_MIRROR=https://mirror.nju.edu.cn/rocky -t mirrordock .`。参数选择构建依赖下载源，默认仍为 Go 官方代理和 Rocky 镜像列表，保留 Go 校验数据库与 RPM 签名检查；Rocky 源保留在镜像的软件源配置中，应用同步仍使用任务私有仓库。基础镜像加速由 Docker 引擎的 `registry-mirrors` 设置，例如按 [毫秒镜像说明](https://1ms.run/guide) 配置用户选择的源；这些设置不写入应用 YAML。
+国内网络可使用 `docker build --build-arg VERSION=v1.1.0 --build-arg GOPROXY=https://goproxy.cn --build-arg ROCKY_MIRROR=https://mirror.nju.edu.cn/rocky -t mirrordock .`（同样替换示例版本）。参数选择构建依赖下载源，默认仍为 Go 官方代理和 Rocky 镜像列表，保留 Go 校验数据库与 RPM 签名检查；Rocky 源保留在镜像的软件源配置中，应用同步仍使用任务私有仓库。基础镜像加速由 Docker 引擎的 `registry-mirrors` 设置，例如按 [毫秒镜像说明](https://1ms.run/guide) 配置用户选择的源；这些设置不写入应用 YAML。
 
 ```sh
 docker run --rm --name mirrordock -p 8080:8080 -e TZ=Asia/Shanghai \
@@ -157,7 +173,7 @@ internal/{config,observability,database,sync,runs,mirrors,notifications,app}/
 web/                     唯一 npm/Vite 边界；Vue、E2E、embed.go
 configs/                 注释案例；本地实例忽略
 deploy/                  systemd 定义
-scripts/                 构建、版本识别、favicon 与目录图标生成工具
+scripts/                 构建、favicon 与目录图标生成工具
 docs/                    当前设计、实施、验收与本次计划
 bin/ data/ .cache/        忽略的本机二进制、状态与缓存
 test-results/            忽略的 Go/OCR/构建报告
