@@ -435,3 +435,15 @@ OCR 排除原因：default_path 18（测试与锁文件），unsupported_ext 17�
 5. **已知模块告警处置**：openpgp 告警保留为不适用记录，项目未导入；未来引入相关包时必须重新评估，不把当前无可达调用结论沿用于新增功能。
 
 此前自动审批拒绝追加依赖元数据发送。**2026-10-03 用户明确授权后，该阻塞已解除**，npm 官方审计与三个平台的 Go 官方漏洞详细扫描均实际执行完成。只发送审计所需依赖元数据，未发送源码或配置凭据；外部 OCR LLM 授权范围没有扩大。
+
+## 2026-10-09：CLI 版本与构建注入
+
+范围：cmd/mirrordock 的 CLI 拆分、版本显示与启动日志，scripts/build.sh、scripts/version.sh、Dockerfile 和 README。用户临时参考目录 video-rename/ 未修改，正式实现没有对它的依赖。
+
+- Go 1.27.2 darwin/arm64；Web 构建通过。首次 Go 构建因沙箱禁止默认缓存写入失败，改用 GOCACHE="$PWD/.cache/go-build" 后完整构建通过，产物 bin/mirrordock。
+- go test -race -count=1 ./cmd/mirrordock 与 go vet ./cmd/mirrordock 通过；sh -n scripts/build.sh scripts/version.sh 和 git diff --check 通过。
+- 临时 Git 仓库实测：无 Git 为 dev、无 tag 为短 ID、精确轻量 tag 优先、离开 tag 后回退短 ID、嵌套源码归档不误用父仓库版本。
+- 临时目录执行真实二进制 --version、--help，无配置即可成功退出；冲突配置别名退出码为 2。本机构建显示 a2e0f8cc1568 (modified)；链接注入 v1.2.3 实测显示 tag、revision 和 modified。
+- OCR 外部自动审查已尝试，但因未配置 LLM endpoint 失败，未执行外部模型审查。随后使用 open-code-review-delegate 的本地 preview/rule，由当前 Codex 完成审查，未启动子代理、未发送源码到外部模型。
+- OCR 清单 6/6 已审查：Dockerfile、main.go、cli.go、version.go、build.sh、version.sh。额外人工覆盖 cli_test.go、version_test.go（OCR 默认排除测试）及 README；video-rename/ 的 5 个参考文件明确排除。修复 Docker VERSION 链接参数引用方式，统一拒绝双引号，避免含单引号的 tag 被错误解析；无遗留正确性、安全性或性能阻断项。
+- 未执行：Docker 镜像完整构建、Linux 运行验收、全套后端及浏览器 E2E（本次无业务/Web 源码变化）。参考目录仍包含其他模块的 import，删除前不使用 go test ./... 作为本次检查入口。没有执行真实同步或性能测试，未修改镜像数据与凭证。

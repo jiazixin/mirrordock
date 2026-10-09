@@ -12,12 +12,13 @@ Go **1.27.2** + Vue 3 的软件源同步与 HTTP/HTTPS 镜像服务。生产目�
 
 ```sh
 npm --prefix web ci
-npm --prefix web run build
-mkdir -p bin
-go build -trimpath -o bin/mirrordock ./cmd/mirrordock
+sh scripts/build.sh
+./bin/mirrordock --version
 ```
 
-`web/dist/` 是唯一 Web 输出，由 `web/embed.go` 嵌入二进制，不提交 Git。干净检出直接执行 Go 构建或全量测试会因缺少嵌入文件失败。容器构建也先构建 Web。管理页面按路由加载，资源随二进制发布，无 CDN 或远程字体。
+构建脚本自动读取当前 HEAD 的精确 tag（含轻量 tag）；没有 tag 时使用 12 位短提交 ID，无 Git 元数据时为 dev。版本通过 Go 链接参数写入，运行时不调用 Git；Go 的 VCS 元数据额外显示提交 ID 和 modified 标记。直接 `go build` 仍可读取编译时记录的提交 ID，但不会自动解析 tag；`--version` 和 `--help` 不读取配置或启动服务。交叉编译可使用 `GOOS=linux GOARCH=amd64 CGO_ENABLED=0 sh scripts/build.sh`。
+
+`web/dist/` 是唯一 Web 输出，由 `web/embed.go` 嵌入二进制，不提交 Git。干净检出直接执行 Go 构建或全量测试会因缺少嵌入文件失败。容器构建也先构建 Web。Docker 上下文不包含 Git，需传入 VERSION；未传时显示 dev，容器构建不附带 Git dirty 元数据。管理页面按路由加载，资源随二进制发布，无 CDN 或远程字体。
 
 Logo 唯一源为 `web/src/assets/logo.svg`。修改后用安装了 Pillow 的 Python 执行 `python3 scripts/generate-favicon.py`，再构建；普通构建不需要 Python。公开目录 Phosphor Regular 图标随 `internal/mirrors/listing-icons.html` 嵌入，包含 MIT 授权；`scripts/import-directory-icons.py` 仅用于从固定上游提交重新导入。
 
@@ -135,9 +136,9 @@ PATH=/path/to/modern-rsync:$PATH MIRRORDOCK_TEST_RSYNC=/path/to/modern-rsync/rsy
 
 ## 部署与目录
 
-`docker build -t mirrordock .` 使用先 Vue 后 Go 的多阶段构建，EL9 运行层先应用已发布安全更新，再安装 rsync/DNF。Docker 与真实 EL 验收以当前验收文档为准。配置中的 path 和 mirror_root 可设为 `/var/lib/mirrordock` 与 `/srv/mirrors`。
+`docker build --build-arg VERSION="$(sh scripts/version.sh)" -t mirrordock .` 使用先 Vue 后 Go 的多阶段构建，EL9 运行层先应用已发布安全更新，再安装 rsync/DNF。Docker 与真实 EL 验收以当前验收文档为准。配置中的 path 和 mirror_root 可设为 `/var/lib/mirrordock` 与 `/srv/mirrors`。
 
-国内网络可使用 `docker build --build-arg GOPROXY=https://goproxy.cn --build-arg ROCKY_MIRROR=https://mirror.nju.edu.cn/rocky -t mirrordock .`。参数选择构建依赖下载源，默认仍为 Go 官方代理和 Rocky 镜像列表，保留 Go 校验数据库与 RPM 签名检查；Rocky 源保留在镜像的软件源配置中，应用同步仍使用任务私有仓库。基础镜像加速由 Docker 引擎的 `registry-mirrors` 设置，例如按 [毫秒镜像说明](https://1ms.run/guide) 配置用户选择的源；这些设置不写入应用 YAML。
+国内网络可使用 `docker build --build-arg VERSION="$(sh scripts/version.sh)" --build-arg GOPROXY=https://goproxy.cn --build-arg ROCKY_MIRROR=https://mirror.nju.edu.cn/rocky -t mirrordock .`。参数选择构建依赖下载源，默认仍为 Go 官方代理和 Rocky 镜像列表，保留 Go 校验数据库与 RPM 签名检查；Rocky 源保留在镜像的软件源配置中，应用同步仍使用任务私有仓库。基础镜像加速由 Docker 引擎的 `registry-mirrors` 设置，例如按 [毫秒镜像说明](https://1ms.run/guide) 配置用户选择的源；这些设置不写入应用 YAML。
 
 ```sh
 docker run --rm --name mirrordock -p 8080:8080 -e TZ=Asia/Shanghai \
@@ -156,7 +157,7 @@ internal/{config,observability,database,sync,runs,mirrors,notifications,app}/
 web/                     唯一 npm/Vite 边界；Vue、E2E、embed.go
 configs/                 注释案例；本地实例忽略
 deploy/                  systemd 定义
-scripts/                 favicon 与目录图标生成工具
+scripts/                 构建、版本识别、favicon 与目录图标生成工具
 docs/                    当前设计、实施、验收与本次计划
 bin/ data/ .cache/        忽略的本机二进制、状态与缓存
 test-results/            忽略的 Go/OCR/构建报告

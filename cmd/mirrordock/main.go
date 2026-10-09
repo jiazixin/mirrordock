@@ -3,7 +3,7 @@ package main
 import (
 	"context"
 	"errors"
-	"flag"
+	"fmt"
 	"log/slog"
 	"mirrordock/internal/app"
 	"mirrordock/internal/config"
@@ -21,36 +21,20 @@ func main() {
 }
 
 func run() int {
-	var short, long string
-	flag.StringVar(&short, "f", "", "配置文件路径")
-	flag.StringVar(&long, "config", "", "配置文件路径")
-	flag.Parse()
-	invalidEmpty := false
-	flag.Visit(func(f *flag.Flag) {
-		if (f.Name == "f" || f.Name == "config") && f.Value.String() == "" {
-			invalidEmpty = true
-		}
-	})
-	if invalidEmpty {
-		slog.Error("配置文件路径不能留空")
-		return 1
+	options, err := parseArgs(os.Args[1:])
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 2
 	}
-	file := "config.yaml"
-	if short != "" {
-		file = short
+	if options.Help {
+		fmt.Print(usageText)
+		return 0
 	}
-	if long != "" {
-		if short != "" && short != long {
-			slog.Error("-f 和 --config 不一致")
-			return 1
-		}
-		file = long
+	if options.Version {
+		fmt.Println("mirrordock", versionString())
+		return 0
 	}
-	if flag.NArg() > 0 {
-		slog.Error("不接受额外位置参数")
-		return 1
-	}
-	cfg, err := config.Open(file)
+	cfg, err := config.Open(options.ConfigPath)
 	if err != nil {
 		slog.Error("启动失败", "error", err)
 		return 1
@@ -72,7 +56,7 @@ func run() int {
 		slog.Error("启动失败", "error", err)
 		return 1
 	}
-	slog.Info("MirrorDock 已启动", "address", application.Server.Addr, "admin", "/admin/", "config", application.Config.File())
+	slog.Info("MirrorDock 已启动", "version", versionString(), "address", application.Server.Addr, "admin", "/admin/", "config", application.Config.File())
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	done := make(chan error, 1)

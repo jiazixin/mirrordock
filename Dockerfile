@@ -6,6 +6,7 @@ COPY web/ ./
 RUN npm run build
 
 FROM golang:1.27.2-bookworm AS go
+ARG VERSION=dev
 ARG GOPROXY=https://proxy.golang.org,direct
 WORKDIR /build
 COPY go.mod go.sum ./
@@ -14,7 +15,8 @@ COPY cmd/ cmd/
 COPY internal/ internal/
 COPY web/embed.go web/embed.go
 COPY --from=web /build/web/dist web/dist
-RUN CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /mirrordock ./cmd/mirrordock
+RUN case "$VERSION" in *\"*) echo 'VERSION contains an unsupported double quote' >&2; exit 1 ;; esac \
+    && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X \"main.version=${VERSION}\"" -o /mirrordock ./cmd/mirrordock
 
 FROM rockylinux:9
 ARG ROCKY_MIRROR
