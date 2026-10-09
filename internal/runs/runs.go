@@ -426,6 +426,12 @@ func (e *Engine) requestCleanup() {
 	}
 }
 func (e *Engine) Get(id int64) (*Run, error) {
+	return e.GetContext(e.ctx, id)
+}
+
+func (e *Engine) GetContext(ctx context.Context, id int64) (*Run, error) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
 	e.mu.Lock()
 	if r := e.current[id]; r != nil {
 		out := cloneRun(r)
@@ -437,13 +443,19 @@ func (e *Engine) Get(id int64) (*Run, error) {
 	}
 	e.mu.Unlock()
 	var r Run
-	if err := e.store.Run(id, &r); err != nil {
+	if err := e.store.RunContext(ctx, id, &r); err != nil {
 		return nil, err
 	}
 	return &r, nil
 }
 func (e *Engine) List(state, source string, limit, offset int, filters ...database.RunFilter) ([]*Run, int, error) {
-	records, total, err := e.store.ListRuns(state, source, limit, offset, filters...)
+	return e.ListContext(e.ctx, state, source, limit, offset, filters...)
+}
+
+func (e *Engine) ListContext(ctx context.Context, state, source string, limit, offset int, filters ...database.RunFilter) ([]*Run, int, error) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	records, total, err := e.store.ListRunsContext(ctx, state, source, limit, offset, filters...)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -452,13 +464,15 @@ func (e *Engine) List(state, source string, limit, offset int, filters ...databa
 }
 
 // Latest includes old active tasks and quiet sources even after many newer runs.
-func (e *Engine) Latest() ([]*Run, error) {
+func (e *Engine) Latest(ctx context.Context) ([]*Run, error) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
 	sources := e.cfg.Current().Sources
 	ids := make([]string, len(sources))
 	for i, source := range sources {
 		ids[i] = source.ID
 	}
-	records, err := e.store.LatestRuns(ids)
+	records, err := e.store.LatestRunsContext(ctx, ids)
 	if err != nil {
 		return nil, err
 	}

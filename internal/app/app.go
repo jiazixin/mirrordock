@@ -44,6 +44,7 @@ type App struct {
 	lock          *os.File
 	Server        *http.Server
 	once          sync.Once
+	progress      progressFrames
 	sse           chan struct{}
 	closing       chan struct{}
 }
@@ -275,7 +276,7 @@ func (a *App) reload(w http.ResponseWriter, r *http.Request) {
 func (a *App) listRuns(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	if q.Get("latest") == "1" {
-		rows, err := a.Runs.Latest()
+		rows, err := a.Runs.Latest(r.Context())
 		if err != nil {
 			failure(w, err)
 			return
@@ -310,7 +311,7 @@ func (a *App) listRuns(w http.ResponseWriter, r *http.Request) {
 			filter.Until = end.UTC().Format(time.RFC3339Nano)
 		}
 	}
-	rows, total, err := a.Runs.List(q.Get("state"), q.Get("source"), limit, max(0, offset), filter)
+	rows, total, err := a.Runs.ListContext(r.Context(), q.Get("state"), q.Get("source"), limit, max(0, offset), filter)
 	if err != nil {
 		failure(w, err)
 		return
@@ -319,7 +320,7 @@ func (a *App) listRuns(w http.ResponseWriter, r *http.Request) {
 }
 func (a *App) getRun(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	run, err := a.Runs.Get(id)
+	run, err := a.Runs.GetContext(r.Context(), id)
 	if err != nil {
 		respond(w, 404, map[string]string{"error": "记录不存在"})
 		return
@@ -450,11 +451,13 @@ func (a *App) events(w http.ResponseWriter, r *http.Request) {
 		if !a.auth.authorized(r) {
 			return
 		}
-		items, err := a.Runs.Latest()
-		if err != nil {
-			return
-		}
-		b, err := json.Marshal(map[string]any{"runs": items, "downloads": a.Mirrors.Stats(), "publications": a.Mirrors.Publications(), "schedules": a.Runs.ScheduleInfo()})
+		b, err := a.progress.get(r.Context(), func(ctx context.Context) ([]byte, error) {
+			items, err := a.Runs.Latest(ctx)
+			if err != nil {
+				return nil, err
+			}
+			return json.Marshal(map[string]any{"runs": items, "downloads": a.Mirrors.Stats(), "publications": a.Mirrors.Publications(), "schedules": a.Runs.ScheduleInfo()})
+		})
 		if err != nil {
 			return
 		}

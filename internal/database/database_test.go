@@ -2,7 +2,10 @@ package database
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json/v2"
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -228,5 +231,147 @@ func TestRunTimeBoundsHandleWholeAndFractionalSeconds(t *testing.T) {
 	_, total, err = s.ListRuns("", "", 50, 0, RunFilter{From: "2026-10-01T00:00:00.000000001Z", Until: "2026-10-02T00:00:00.1Z"})
 	if err != nil || total != 3 {
 		t.Fatal(total, err)
+	}
+}
+
+func TestManagementReadsDoNotWaitForWriter(t *testing.T) {
+	s, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	id, err := s.CreateRun("quiet", "paused", "now", map[string]any{"state": "paused"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx, err := s.DB.BeginTx(t.Context(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec("UPDATE runs SET state='running' WHERE id=?", id); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	rows, total, err := s.ListRunsContext(ctx, "paused", "", 50, 0)
+	if err != nil || total != 1 || len(rows) != 1 {
+		t.Fatalf("list blocked on writer: %d %d %v", len(rows), total, err)
+	}
+	rows, err = s.LatestRunsContext(ctx, []string{"missing", "quiet"})
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("latest blocked on writer: %d %v", len(rows), err)
+	}
+	var record map[string]any
+	if err := s.RunContext(ctx, id, &record); err != nil || record["state"] != "paused" {
+		t.Fatal(record, err)
+	}
+	cancel()
+	if _, _, err := s.ListRunsContext(ctx, "", "", 50, 0); !errors.Is(err, context.Canceled) {
+		t.Fatal("list ignored cancellation", err)
+	}
+	if _, err := s.LatestRunsContext(ctx, []string{"quiet"}); !errors.Is(err, context.Canceled) {
+		t.Fatal("latest ignored cancellation", err)
+	}
+}
+
+func TestConnectionPragmasSurviveRecreation(t *testing.T) {
+	s, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	// Closing every idle connection forces each query through a fresh connection.
+	for _, pool := range []*sql.DB{s.DB, s.ReadDB} {
+		pool.SetMaxIdleConns(0)
+		for pragma, want := range map[string]int{"foreign_keys": 1, "synchronous": 2, "busy_timeout": 5000} {
+			var value int
+			if err := pool.QueryRow("PRAGMA " + pragma).Scan(&value); err != nil || value != want {
+				t.Fatalf("%s=%d want %d: %v", pragma, value, want, err)
+			}
+		}
+	}
+	var queryOnly int
+	if err := s.ReadDB.QueryRow("PRAGMA query_only").Scan(&queryOnly); err != nil || queryOnly != 1 {
+		t.Fatal(queryOnly, err)
+	}
+}
+
+func TestLatestBatchUsesSourceIndex(t *testing.T) {
+	s, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	rows, err := s.ReadDB.QueryContext(t.Context(), "EXPLAIN QUERY PLAN "+latestRunsQuery, `["one","two"]`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var plan string
+	for rows.Next() {
+		var id, parent, unused int
+		var detail string
+		if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+			t.Fatal(err)
+		}
+		plan += detail + "\n"
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(plan, "runs_source_id") || strings.Contains(plan, "SCAN runs") {
+		t.Fatal(plan)
+	}
+}
+
+func BenchmarkLatestRuns(b *testing.B) {
+	for _, count := range []int{10, 100, 1000} {
+		b.Run(fmt.Sprint(count), func(b *testing.B) {
+			s, err := Open(b.TempDir())
+			if err != nil {
+				b.Fatal(err)
+			}
+			defer s.Close()
+			sources := make([]string, count)
+			tx, err := s.DB.Begin()
+			if err != nil {
+				b.Fatal(err)
+			}
+			for i := range count {
+				sources[i] = fmt.Sprint(i)
+				if _, err := tx.Exec("INSERT INTO runs(source_id,state,created_at,data) VALUES(?,'succeeded','now','{}')", sources[i]); err != nil {
+					b.Fatal(err)
+				}
+			}
+			if err := tx.Commit(); err != nil {
+				b.Fatal(err)
+			}
+			b.Run("per-source", func(b *testing.B) {
+				b.ReportAllocs()
+				for b.Loop() {
+					out := [][]byte{}
+					for _, source := range sources {
+						var data []byte
+						if err := s.ReadDB.QueryRowContext(b.Context(), "SELECT data FROM runs WHERE source_id=? ORDER BY id DESC LIMIT 1", source).Scan(&data); err != nil {
+							b.Fatal(err)
+						}
+						out = append(out, data)
+					}
+					if len(out) != count {
+						b.Fatal(len(out))
+					}
+				}
+			})
+			b.Run("batch", func(b *testing.B) {
+				b.ReportAllocs()
+				for b.Loop() {
+					rows, err := s.LatestRunsContext(b.Context(), sources)
+					if err != nil || len(rows) != count {
+						b.Fatal(len(rows), err)
+					}
+				}
+			})
+		})
 	}
 }

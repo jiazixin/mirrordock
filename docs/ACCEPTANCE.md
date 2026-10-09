@@ -1,8 +1,60 @@
-# 上线前验收记录
+# 验收记录
+
+## 管理界面与查询性能移植（2026-10-09）
+
+范围：本轮工作区的 8 个新增/修改生产源码文件、5 个测试文件，以及 README、设计和计划。参考目录仅用于阅读，未修改；未修改用户配置、镜像或凭据，未推送或发布。所有测试使用临时数据、隔离端口和受控上游。
+
+**结果：本轮实现与验证完成。** 运行详情加入同步阶段、四项统计和折叠区；日志按需读取、终态补读到末尾后停止，隐藏/收起/关闭取消请求。暂停和中断任务仍检测恢复。管理运行读取使用最多四条只读连接，计数与页内容共用事务；最新任务从逐源查询改为单次索引批量读取；SSE 共用最多一秒的序列化快照。写入协议、两同步 worker 与公开下载热路径保持原语义。
+
+### 已执行检查
+
+| 检查 | 结果 |
+| --- | --- |
+| `npm --prefix web run format:check`、`npm --prefix web run build` | 通过，Web 构建包含 TypeScript 检查；先于 Go 编译 |
+| `GOCACHE=/tmp/mirrordock-go-cache go vet ./...` | 通过 |
+| `go test -race -count=1 ./internal/database ./internal/runs ./internal/app` | 通过；新增读取隔离、连接重建参数、查询计划、SSE 并发合并/失败恢复/等待取消 |
+| `go test -race -count=1 ./...` | 全仓通过；指定仓库缓存的现代 rsync，隔离夹具；见 `test-results/admin-go-all.txt` |
+| 详情相关 E2E | 6/6 通过；复核后补强首个尝试延后出现的回归，再运行完整套件 |
+| `npm --prefix web run test:e2e` | 最终 **13/13 通过，1.8 分钟**；含真实隔离 rsync 失败切换、日志下载与多轮尾部读取；见 `test-results/admin-e2e-full.txt` |
+| 详情边界 | 首个尝试在 running 状态稍后出现、保留历史尝试、终态发生在日志读取途中、18 页积压日志、折叠/隐藏停止、返回恢复、终态停止与手动刷新、关闭取消、错误恢复、summary 键盘焦点均通过 |
+| 视觉复核 | 已查看桌面和 320px 详情截图；E2E 同时检查 375px，统计为两列且弹窗无横向溢出 |
+| 无参考目录独立构建 | 从实际工作区源码生成临时副本，排除参考目录、用户状态、node_modules 和 dist；`npm --prefix web ci --offline` → Web 构建 → Go 构建通过 |
+| 独立二进制冒烟 | 空源配置：认证状态、公开首页、管理首页、夹具账号登录均为 200；SIGTERM 退出码 0。清单与结果见 `test-results/admin-standalone.json`、`admin-standalone-smoke.json` |
+| 差异与范围 | `git diff --check` 通过；13 个已审查源码/测试的 SHA-256 复核一致；生产源码与构建入口无对参考目录的引用 |
+
+Go 测试使用 `GOCACHE=/tmp/mirrordock-go-cache`；真实 rsync 通过 `MIRRORDOCK_TEST_RSYNC=$PWD/.cache/rsync/rsync-3.5.1/rsync` 指定并加入 PATH。E2E 使用本轮构建的 `/tmp/mirrordock-admin-test`。首次 Go 检查因默认缓存写权限失败，随后在临时缓存重跑；首次 app 测试因沙箱禁止监听回环端口失败，获准后重跑通过。这些初次失败不算通过项。
+
+### 本机查询对照
+
+macOS arm64 / Apple M2 Max / Go 1.27.1，临时 SQLite、热缓存、每源一条 `{}` 快照。命令：`go test ./internal/database -run '^$' -bench BenchmarkLatestRuns -benchmem -count=3 -benchtime=200ms`。旧查询方式与新方式在同一实现、相同只读池中对照；下表取三轮中位数。
+
+| 配置源数 | 逐源查询 | 单次批量查询 | 查询耗时缩短 |
+| --- | --- | --- | --- |
+| 10 | 0.104 ms | 0.0289 ms | 约 72% |
+| 100 | 1.040 ms | 0.114 ms | 约 89% |
+| 1000 | 10.667 ms | 0.980 ms | 约 91% |
+
+1000 源时分配约从 1.03 MB/次降为 0.13 MB/次；原始三轮数据见 `test-results/admin-query-bench.txt`。该基准隔离 SQL 往返与结果读取开销，使用极小快照，不含真实 JSON 解析、SSE 网络传输、写入竞争、冷磁盘或同步。不能将其比例解释为整个页面、rsync 或下载吞吐提升。共享帧回归验证同一有效期内 8 个调用者只执行一次读取，未进行生产 SSE 吞吐测试。
+
+### OCR 与覆盖清单
+
+`ocr review --audience agent --exclude 'video-rename/**' --output ...` 因 **未配置有效 LLM 端点**退出，外部 OCR LLM 审查未执行，也没有外发源码。随后使用 `ocr delegate preview --format json` 和 `ocr delegate rule --format json`，由当前 Codex 按规则审查全部 8 个生产差异文件：
+
+- `internal/app/app.go`、`internal/app/progress.go`：共享帧所有权、等待取消、错误不缓存、认证和 SSE 关闭。
+- `internal/database/database.go`、`internal/runs/runs.go`：单写/只读连接隔离、每连接 PRAGMA、事务/Rows 释放、请求上下文、索引访问与历史语义。
+- `web/src/components/Modal.vue`、`web/src/features/runs/RunDetail.vue`、`web/src/features/runs/useRunDetail.ts`、`web/src/features/runs/run-detail.css`：焦点、窄屏、陈旧响应、终态日志收尾、可恢复任务、显示与生命周期。
+
+`reviewed_files=8 / skipped_files=0 / coverage_rate=100%` 只指本轮 8 个生产文件。OCR 默认排除的 5 个 Go/E2E 测试另行逐项复核；Markdown 另行检查。参考目录因未修改且非交付依赖排除。审查修正了首个尝试稍后出现时日志不启动的边界，并补充回归；折叠后的日志错误不再显示无效重试按钮，保留日志 DOM 与跟随设置。未遗留本轮已识别的正确性、安全性或性能阻塞项。机器记录见 `test-results/admin-ocr-preview.json`、`admin-ocr-rules.json`、`admin-review-coverage.json`。
+
+### 验证边界与后续范围
+
+本轮未重复 Linux/EL、真实生产多 TB/百万文件、冷缓存、断电、外部通知或在线依赖漏洞审计。离线 npm 安装输出的审计提示不视为最新在线漏洞检查。查询仍需等候引擎现有状态锁；5 秒期限约束数据库操作，不承诺所有锁等待都在 5 秒内结束。尚未改动检查点持久化锁、增加统计缓存/批量操作 API 或扫描并发，这些需单独测量并验证一致性。参考项目可以删除，不影响本轮独立构建和运行。
+
+## 历史完整验收（2026-10-02 至 2026-10-03）
 
 验证日期：**2026-10-02 至 2026-10-03**。范围为当前完整工作区，包含开始时已存在的后端统计、时间筛选、共享开关和 UI 对齐改动，以及本次新增修复；保留用户配置协议与已有修改。未推送、发布正式服务、发送外部消息或启动完整发行版同步。
 
-**最新结论：R1–R7 已修复；下载与日志清理优化也已完成，最终程序在用户提供的 AlmaLinux 10.2 x86_64 虚拟机验收通过。** 最新实现、对照数据、测试与未验证边界见下节；其他章节保留为对应版本的历史证据。
+**当轮结论：R1–R7 已修复；下载与日志清理优化也已完成，最终程序在用户提供的 AlmaLinux 10.2 x86_64 虚拟机验收通过。** 当轮实现、对照数据、测试与未验证边界见下节；其他章节保留为对应版本的历史证据。
 
 ## 下载、日志优化与目标 Linux 验收（2026-10-03）
 

@@ -54,12 +54,21 @@ func Open(dir string) (*Store, error) {
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return nil, err
 	}
-	db, err := sql.Open("sqlite", filepath.Join(dir, "data.sqlite"))
+	file, err := filepath.Abs(filepath.Join(dir, "data.sqlite"))
+	if err != nil {
+		return nil, err
+	}
+	options := url.Values{}
+	for _, pragma := range []string{"foreign_keys(1)", "synchronous(FULL)", "busy_timeout(5000)"} {
+		options.Add("_pragma", pragma)
+	}
+	dsn := &url.URL{Scheme: "file", Path: file, RawQuery: options.Encode()}
+	db, err := sql.Open("sqlite", dsn.String())
 	if err != nil {
 		return nil, err
 	}
 	db.SetMaxOpenConns(1)
-	if _, err = db.Exec("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000; PRAGMA synchronous=FULL;" + initialSchema); err != nil {
+	if _, err = db.Exec("PRAGMA journal_mode=WAL;" + initialSchema); err != nil {
 		db.Close()
 		return nil, err
 	}
@@ -67,19 +76,17 @@ func Open(dir string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
-	file, err := filepath.Abs(filepath.Join(dir, "data.sqlite"))
+	options.Set("mode", "ro")
+	options.Add("_pragma", "query_only(1)")
+	dsn.RawQuery = options.Encode()
+	reader, err := sql.Open("sqlite", dsn.String())
 	if err != nil {
 		db.Close()
 		return nil, err
 	}
-	readURL := &url.URL{Scheme: "file", Path: file, RawQuery: "mode=ro"}
-	reader, err := sql.Open("sqlite", readURL.String())
-	if err != nil {
-		db.Close()
-		return nil, err
-	}
-	reader.SetMaxOpenConns(1)
-	if _, err = reader.Exec("PRAGMA busy_timeout=5000; PRAGMA query_only=ON;"); err != nil {
+	reader.SetMaxOpenConns(4)
+	reader.SetMaxIdleConns(4)
+	if err = reader.Ping(); err != nil {
 		reader.Close()
 		db.Close()
 		return nil, err
@@ -185,8 +192,12 @@ func (s *Store) SaveRun(id int64, state string, value any) error {
 }
 
 func (s *Store) Run(id int64, out any) error {
+	return s.RunContext(context.Background(), id, out)
+}
+
+func (s *Store) RunContext(ctx context.Context, id int64, out any) error {
 	var b []byte
-	if err := s.DB.QueryRow("SELECT data FROM runs WHERE id=?", id).Scan(&b); err != nil {
+	if err := s.ReadDB.QueryRowContext(ctx, "SELECT data FROM runs WHERE id=?", id).Scan(&b); err != nil {
 		return err
 	}
 	return json.Unmarshal(b, out)
@@ -230,22 +241,35 @@ func (s *Store) RunState(ctx context.Context, id int64) (string, error) {
 	return state, err
 }
 
-// LatestRuns reads one indexed row per configured source, independent of how
-// many runs other sources have produced. It does not count or scan history.
+// The correlated primary-key lookup seeks the (source_id,id DESC) index once
+// per requested source, without scanning unrelated history or making N queries.
+const latestRunsQuery = `SELECT r.data FROM json_each(?) AS source
+ JOIN runs r ON r.id=(SELECT id FROM runs WHERE source_id=source.value ORDER BY id DESC LIMIT 1)
+ ORDER BY CAST(source.key AS INTEGER)`
+
 func (s *Store) LatestRuns(sources []string) ([][]byte, error) {
+	return s.LatestRunsContext(context.Background(), sources)
+}
+
+func (s *Store) LatestRunsContext(ctx context.Context, sources []string) ([][]byte, error) {
+	data, err := json.Marshal(sources)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := s.ReadDB.QueryContext(ctx, latestRunsQuery, string(data))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
 	out := [][]byte{}
-	for _, source := range sources {
+	for rows.Next() {
 		var b []byte
-		err := s.DB.QueryRow("SELECT data FROM runs WHERE source_id=? ORDER BY id DESC LIMIT 1", source).Scan(&b)
-		if errors.Is(err, sql.ErrNoRows) {
-			continue
-		}
-		if err != nil {
+		if err := rows.Scan(&b); err != nil {
 			return nil, err
 		}
 		out = append(out, b)
 	}
-	return out, nil
+	return out, rows.Err()
 }
 
 type RunFilter struct {
@@ -255,6 +279,10 @@ type RunFilter struct {
 }
 
 func (s *Store) ListRuns(state, source string, limit, offset int, filters ...RunFilter) ([][]byte, int, error) {
+	return s.ListRunsContext(context.Background(), state, source, limit, offset, filters...)
+}
+
+func (s *Store) ListRunsContext(ctx context.Context, state, source string, limit, offset int, filters ...RunFilter) ([][]byte, int, error) {
 	query := " WHERE 1=1"
 	args := []any{}
 	if state == "failure" {
@@ -292,12 +320,18 @@ func (s *Store) ListRuns(state, source string, limit, offset int, filters ...Run
 			args = append(args, filters[0].Trigger)
 		}
 	}
+	// Count and page must describe the same WAL snapshot, even during enqueue.
+	tx, err := s.ReadDB.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, 0, err
+	}
+	defer tx.Rollback()
 	var total int
-	if err := s.DB.QueryRow("SELECT count(*) FROM runs"+query, args...).Scan(&total); err != nil {
+	if err := tx.QueryRowContext(ctx, "SELECT count(*) FROM runs"+query, args...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
 	args = append(args, limit, offset)
-	rows, err := s.DB.Query("SELECT data FROM runs"+query+" ORDER BY id DESC LIMIT ? OFFSET ?", args...)
+	rows, err := tx.QueryContext(ctx, "SELECT data FROM runs"+query+" ORDER BY id DESC LIMIT ? OFFSET ?", args...)
 	if err != nil {
 		return nil, 0, err
 	}

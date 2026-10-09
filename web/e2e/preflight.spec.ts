@@ -108,9 +108,11 @@ test('live detail follows new attempts, keeps historical selection and stops req
     await page.getByRole('link', { name: '运行记录', exact: true }).click()
     await page.getByRole('button', { name: '查看记录详情' }).click()
     await expect(page.getByRole('dialog')).toContainText('排队中')
+    await page.locator('summary').filter({ hasText: '原始日志' }).click()
     run.state = 'running'
-    run.attempts.push({ number: 1, candidate: 'src1', started_at: now })
     await expect(page.getByRole('dialog')).toContainText('运行中')
+    // The first attempt can arrive after preparation, without a state change.
+    run.attempts.push({ number: 1, candidate: 'src1', started_at: now })
     const attempts = page.getByRole('combobox', { name: '选择日志尝试' })
     await expect(attempts).toHaveText('尝试 #1')
     await expect(page.locator('.log-view')).toContainText('日志尝试 1')
@@ -189,6 +191,162 @@ test('logout cannot be undone by a delayed config refresh', async ({ page, reque
     await page.getByLabel('管理员密码').fill('preflight-fixture-password')
     await page.getByRole('button', { name: '登录管理台' }).click()
     await expect(page.locator('.page-heading')).toBeVisible()
+  } finally {
+    release?.()
+    await server.close()
+  }
+})
+
+function detailRun(state: string) {
+  const now = new Date().toISOString()
+  return {
+    id: 1,
+    source_id: 'fixture',
+    name: '详情读取生命周期',
+    type: 'rsync',
+    state,
+    trigger: 'manual',
+    created_at: now,
+    started_at: now,
+    elapsed_seconds: 10,
+    budget_seconds: 60,
+    progress: {
+      phase: 'transfer',
+      bytes: 100,
+      received_bytes: null,
+      success: 0,
+      failed: 0,
+      skipped: 0,
+    },
+    attempts: [{ number: 1, candidate: 'rsync://fixture.example/repository/', started_at: now }],
+    events: [],
+    snapshot: {},
+  }
+}
+
+test('terminal detail drains a bounded log backlog then stops and preserves disclosure focus', async ({
+  page,
+  request,
+}) => {
+  const server = await fixture(page, request)
+  try {
+    const run = detailRun('succeeded')
+    let detailReads = 0,
+      logReads = 0
+    const content = Buffer.from('x'.repeat(17 * 128 * 1024) + '终态日志尾部')
+    await page.route('**/api/runs?*', (route) =>
+      route.fulfill({ json: { items: [run], total: 1 } }),
+    )
+    await page.route('**/api/runs/1', (route) => {
+      detailReads++
+      return route.fulfill({ json: run })
+    })
+    await page.route('**/api/events', (route) =>
+      route.fulfill({ contentType: 'text/event-stream', body: '' }),
+    )
+    await page.route('**/api/runs/1/logs?*', (route) => {
+      logReads++
+      const offset = Number(new URL(route.request().url()).searchParams.get('offset'))
+      const next = Math.min(content.length, offset + 128 * 1024)
+      return route.fulfill({
+        json: { text: content.subarray(offset, next).toString(), next_offset: next },
+      })
+    })
+    await server.login()
+    await page.getByRole('link', { name: '运行记录', exact: true }).click()
+    await page.getByRole('button', { name: '查看记录详情' }).click()
+    await expect(page.getByRole('dialog')).toContainText('自动刷新已停止')
+    expect(logReads).toBe(0)
+    const logs = page.locator('summary').filter({ hasText: '原始日志' })
+    await logs.focus()
+    await page.keyboard.press('Enter')
+    await expect(page.locator('.log-view')).toContainText('终态日志尾部', { timeout: 12000 })
+    expect(logReads).toBe(18)
+    await page.waitForTimeout(3300)
+    expect(logReads).toBe(18)
+    expect(detailReads).toBe(1)
+    await page.getByRole('button', { name: '刷新运行详情' }).click()
+    await expect.poll(() => detailReads).toBe(2)
+    const configuration = page.locator('summary').filter({ hasText: '配置快照与事件' })
+    await configuration.focus()
+    await page.keyboard.press('Tab')
+    await expect(page.getByRole('button', { name: '关闭', exact: true })).toBeFocused()
+  } finally {
+    await server.close()
+  }
+})
+
+test('detail pauses hidden and folded reads, resumes, and reads after in-flight terminal transition', async ({
+  page,
+  request,
+}) => {
+  const server = await fixture(page, request)
+  let release: (() => void) | undefined
+  try {
+    const run = detailRun('running')
+    let detailReads = 0,
+      logReads = 0,
+      hold = false
+    await page.route('**/api/runs?*', (route) =>
+      route.fulfill({ json: { items: [run], total: 1 } }),
+    )
+    await page.route('**/api/runs/1', (route) => {
+      detailReads++
+      return route.fulfill({ json: run })
+    })
+    await page.route('**/api/events', (route) =>
+      route.fulfill({ contentType: 'text/event-stream', body: '' }),
+    )
+    await page.route('**/api/runs/1/logs?*', async (route) => {
+      logReads++
+      const terminal = run.state === 'succeeded'
+      if (hold) {
+        hold = false
+        await new Promise<void>((resolve) => {
+          release = resolve
+        })
+        release = undefined
+      }
+      return route.fulfill({
+        json: { text: terminal ? '最终收尾日志' : '活动日志', next_offset: 0 },
+      })
+    })
+    await server.login()
+    await page.getByRole('link', { name: '运行记录', exact: true }).click()
+    await page.getByRole('button', { name: '查看记录详情' }).click()
+    const logs = page.locator('summary').filter({ hasText: '原始日志' })
+    await logs.click()
+    await expect(page.locator('.log-view')).toContainText('活动日志')
+    await logs.click()
+    const foldedReads = logReads
+    await page.waitForTimeout(3300)
+    expect(logReads).toBe(foldedReads)
+    await logs.click()
+    await expect(page.locator('.log-view')).toContainText('活动日志')
+    await page.evaluate(() => {
+      Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' })
+      document.dispatchEvent(new Event('visibilitychange'))
+    })
+    const hiddenReads = [detailReads, logReads]
+    await page.waitForTimeout(3300)
+    expect([detailReads, logReads]).toEqual(hiddenReads)
+    await page.evaluate(() => {
+      Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' })
+      document.dispatchEvent(new Event('visibilitychange'))
+    })
+    await expect.poll(() => detailReads).toBeGreaterThan(hiddenReads[0])
+    await expect(page.getByRole('button', { name: '刷新日志', exact: true })).toBeEnabled()
+    hold = true
+    await page.getByRole('button', { name: '刷新日志', exact: true }).click()
+    await expect.poll(() => !!release).toBe(true)
+    run.state = 'succeeded'
+    await page.getByRole('button', { name: '刷新运行详情' }).click()
+    await expect(page.getByRole('dialog').locator('.badge')).toHaveText('成功')
+    release!()
+    await expect(page.locator('.log-view')).toContainText('最终收尾日志', { timeout: 12000 })
+    const finalReads = [detailReads, logReads]
+    await page.waitForTimeout(3300)
+    expect([detailReads, logReads]).toEqual(finalReads)
   } finally {
     release?.()
     await server.close()

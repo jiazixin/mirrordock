@@ -95,6 +95,7 @@ test('log refresh releases its state and follow defaults on, toggles and survive
     await page.getByRole('button', { name: '取消', exact: true }).click()
     await page.getByRole('link', { name: '运行记录', exact: true }).click()
     await page.getByRole('button', { name: '查看记录详情' }).first().click()
+    await page.locator('summary').filter({ hasText: '原始日志' }).click()
     const refresh = page.getByRole('button', { name: '刷新日志', exact: true })
     const follow = page.getByRole('button', { name: '持续跟随最新日志', exact: true })
     const log = page.locator('.log-view')
@@ -161,6 +162,7 @@ test('log refresh releases its state and follow defaults on, toggles and survive
     }
     await page.getByRole('button', { name: '关闭', exact: true }).click()
     await page.getByRole('button', { name: '查看记录详情' }).first().click()
+    await page.locator('summary').filter({ hasText: '原始日志' }).click()
     await expect(follow).toHaveAttribute('aria-pressed', 'true')
     await release()
     await expect.poll(atBottom).toBe(true)

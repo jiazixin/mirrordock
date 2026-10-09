@@ -11,7 +11,7 @@ const key = (event: KeyboardEvent) => {
   if (event.key === 'Tab' && panel.value) {
     const list = Array.from(
       panel.value.querySelectorAll<HTMLElement>(
-        'button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),a[href]',
+        'button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),a[href],summary',
       ),
     ).filter((element) => element.getClientRects().length > 0)
     const first = list[0],

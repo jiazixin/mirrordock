@@ -193,6 +193,7 @@ test('real configuration, rsync failover, publication, records and responsive UI
     await page.screenshot({ path: testInfo.outputPath('batches.png'), fullPage: true })
     await page.getByRole('button', { name: '查看运行详情' }).first().click()
     await expect(page.getByRole('dialog')).toContainText('UPSTREAM_ERROR')
+    await page.locator('summary').filter({ hasText: '原始日志' }).click()
     const attempt = page.getByRole('combobox', { name: '选择日志尝试' })
     await expect(attempt).toHaveText('尝试 #2')
     await attempt.click()
@@ -225,6 +226,8 @@ test('real configuration, rsync failover, publication, records and responsive UI
     const logFile = path.join(dir, 'data', 'logs', String(runID), '2.log')
     const fullLog = '完整日志起点\n' + '0123456789abcdef\n'.repeat(140000) + '完整日志终点\n'
     await appendFile(logFile, fullLog)
+    // Completed tasks no longer poll; an external append requires explicit refresh.
+    await page.getByRole('button', { name: '刷新日志', exact: true }).click()
     await expect(page.locator('.log-view')).toContainText('完整日志终点', { timeout: 12000 })
     await expect(page.locator('.log-view')).not.toContainText('完整日志起点')
     const beforeDownload = await readFile(logFile, 'utf8')
