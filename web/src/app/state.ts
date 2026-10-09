@@ -1,5 +1,5 @@
 import { reactive } from 'vue'
-import { api } from './api'
+import { api, cancelSessionRequests } from './api'
 import type { ConfigView, Configuration, Publication, Run, SystemInfo } from './types'
 
 export const state = reactive({
@@ -103,6 +103,7 @@ export function disconnectEvents() {
 }
 
 export function resetState() {
+  cancelSessionRequests()
   sessionID++
   refreshID++
   refreshController?.abort()
@@ -125,6 +126,7 @@ export async function perform<T>(operation: () => Promise<T>): Promise<T | undef
   try {
     return await operation()
   } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') return undefined
     notify(error instanceof Error ? error.message : String(error), 'error')
     return undefined
   }

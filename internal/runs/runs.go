@@ -114,19 +114,7 @@ func New(cfg *config.Manager, store *database.Store, m *mirrors.Manager, runner 
 	e := &Engine{cfg: cfg, store: store, mirror: m, runner: runner, data: config.Resolve(cfg.File(), cfg.Startup().Path), ctx: ctx, cancel: cancel, current: map[int64]*Run{}, working: map[int64]*active{}, wake: make(chan struct{}, 2), cleanupWake: make(chan struct{}, 1), location: location, retryDelay: 5 * time.Second, scheduleIDs: map[string]cron.EntryID{}}
 	e.admitSync, e.storageCheck, e.checkpointInterval = m.BeginSync, m.CheckSpace, 5*time.Second
 	e.clearing, e.removeLog = make(map[int64]chan struct{}), os.Remove
-	if done, err := store.State("public-source-urls-v1"); err != nil {
-		cancel()
-		return nil, err
-	} else if done != "done" {
-		if err := store.RewriteRunFacts(redactHistoricalURLs); err != nil {
-			cancel()
-			return nil, err
-		}
-		if err := store.SetState("public-source-urls-v1", "done"); err != nil {
-			cancel()
-			return nil, err
-		}
-	}
+
 	for _, state := range []string{"queued", "running", "pausing", "paused", "interrupted"} {
 		records, _, err := store.ListRuns(state, "", 10000, 0)
 		if err != nil {

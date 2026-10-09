@@ -2,7 +2,7 @@
 
 开始工作前必须完整读取 [目录规范.md](目录规范.md)，再读取 [README.md](README.md)、[当前设计](docs/DESIGN.md) 和受影响模块。目录基线只在原文件维护，不复制正文。
 
-本项目是一个 Go 后端配套 Vue Web 应用。Go 工具链固定 **1.27.1**，使用 `use-modern-go` 技能及其版本指南；新增 JSON 使用 `encoding/json/v2`。前端使用 Vue 3、TypeScript、Vite、npm，唯一输出为 `web/dist/`，由 `web/embed.go` 嵌入；凡需编译嵌入包的检查先构建 Web。
+本项目是一个 Go 后端配套 Vue Web 应用。Go 工具链固定 **1.27.2**，使用 `use-modern-go` 技能及其版本指南；新增 JSON 使用 `encoding/json/v2`。前端使用 Vue 3、TypeScript、Vite、npm，唯一输出为 `web/dist/`，由 `web/embed.go` 嵌入；凡需编译嵌入包的检查先构建 Web。
 
 用户已确定的配置协议优先于目录基线的默认协议：`-f` / `--config` 选择 YAML，无参数读取工作目录的 `config.yaml`，相对路径以配置文件目录为基准；数据库为 `<path>/data.sqlite`。具体字段见 `configs/config.example.yaml`，不擅自恢复用户删除的配置字段。程序使用启动时区。源下载直接使用 `/<dest>/`，管理页面使用 `/admin/`，管理 API 使用 `/api/`。
 

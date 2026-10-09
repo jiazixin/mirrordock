@@ -652,6 +652,7 @@ func (m *Manager) save(c Config, revision string, tokenUpdate, proxyUpdate *stri
 	c.MirrorRoot = m.cfg.MirrorRoot
 	c.TLS = m.cfg.TLS
 	c.Auth = m.cfg.Auth
+	c.Log = m.cfg.Log
 	c.Settings.GitHub.Token = m.cfg.Settings.GitHub.Token
 	if tokenUpdate != nil {
 		c.Settings.GitHub.Token = *tokenUpdate

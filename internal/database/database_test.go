@@ -375,3 +375,41 @@ func BenchmarkLatestRuns(b *testing.B) {
 		})
 	}
 }
+
+func BenchmarkNotificationResultCursor(b *testing.B) {
+	s, err := Open(b.TempDir())
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer s.Close()
+	const count = 100000
+	_, err = s.DB.Exec(`WITH RECURSIVE ids(id) AS (VALUES(1) UNION ALL SELECT id+1 FROM ids WHERE id<100000) INSERT INTO run_results(id,data) SELECT id,'{}' FROM ids;
+ INSERT INTO notifications(channel,run_id,event,title,body,failure,state,next_at,updated_at) SELECT 'webhook',id,'batch.finished','','',0,'sent',0,'' FROM run_results;`)
+	if err != nil {
+		b.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name, query string
+		args        []any
+	}{
+		{"history_antijoin", "SELECT data FROM run_results WHERE id>? AND NOT EXISTS(SELECT 1 FROM notifications n WHERE n.run_id=run_results.id AND n.channel=?) ORDER BY id LIMIT 100", []any{0, "webhook"}},
+		{"insertion_cursor", "SELECT sequence,data FROM run_results WHERE sequence>? ORDER BY sequence LIMIT 100", []any{count}},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				rows, err := s.ReadDB.QueryContext(b.Context(), tc.query, tc.args...)
+				if err != nil {
+					b.Fatal(err)
+				}
+				if rows.Next() {
+					b.Fatal("processed results were rescanned")
+				}
+				err = errors.Join(rows.Err(), rows.Close())
+				if err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}

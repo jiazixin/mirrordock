@@ -35,10 +35,10 @@ func githubHTTP(proxy string) (*http.Client, *http.Transport, error) {
 	if u != nil {
 		transport.Proxy = http.ProxyURL(u)
 	}
-	return &http.Client{Transport: transport, CheckRedirect: githubRedirect}, transport, nil
+	return &http.Client{Transport: transport, CheckRedirect: downloadRedirect}, transport, nil
 }
 
-func githubRedirect(r *http.Request, via []*http.Request) error {
+func downloadRedirect(r *http.Request, via []*http.Request) error {
 	if len(via) >= 10 {
 		return errors.New("too many redirects")
 	}
@@ -58,7 +58,7 @@ func githubAPIRedirect(r *http.Request, via []*http.Request) error {
 	if len(via) > 0 && (r.URL.Scheme != via[0].URL.Scheme || r.URL.Host != via[0].URL.Host) {
 		return errors.New("GitHub API cross-origin redirect rejected")
 	}
-	return githubRedirect(r, via)
+	return downloadRedirect(r, via)
 }
 
 type AssetIdentity struct {
@@ -126,7 +126,7 @@ func GitHubWithClient(ctx context.Context, client *github.Client, httpClient *ht
 	total := int64(0)
 	for _, r := range releases {
 		tag := url.PathEscape(r.GetTagName())
-		if tag == "" || tag == "." || tag == ".." {
+		if !safeGitHubName(tag) {
 			return &Failure{Code: "INVALID_TAG", Message: "Release tag 无法转换成安全目录"}
 		}
 		keep[tag] = true
@@ -166,8 +166,8 @@ func GitHubWithClient(ctx context.Context, client *github.Client, httpClient *ht
 	for _, entry := range assets {
 		a := entry.Asset
 		name := a.GetName()
-		if name == "" || name == "." || name == ".." || path.Base(name) != name || strings.ContainsAny(name, "\\\x00\r\n") {
-			return &Failure{Code: "INVALID_ASSET", Message: "资产名称不是安全文件名"}
+		if !safeGitHubName(name) {
+			return &Failure{Code: "INVALID_ASSET", Message: "资产名称不安全或与内部保留名称冲突"}
 		}
 		dir := filepath.Join(t.Directory, entry.Tag)
 		if st, err := os.Lstat(dir); err == nil && st.Mode()&os.ModeSymlink != 0 {
@@ -243,6 +243,15 @@ func GitHubWithClient(ctx context.Context, client *github.Client, httpClient *ht
 	emit(Progress{Phase: "verify", ReceivedBytes: new(networkBytes), Bytes: total, Total: total, Percent: new(float64(100)), Files: len(assets), Success: success, Skipped: skipped})
 	return nil
 }
+
+// Public serving hides these paths; accepting them also lets an asset collide
+// with another asset's partial file or its private identity sidecar.
+func safeGitHubName(name string) bool {
+	return name != "" && name != "." && name != ".." && path.Base(name) == name &&
+		!strings.ContainsAny(name, "\\\x00\r\n") && !strings.HasPrefix(name, ".mirrordock") &&
+		!strings.HasSuffix(name, ".part") && name != ".rsync-partial" && name != ".~tmp~"
+}
+
 func githubError(err error, proxy string) error {
 	if errors.Is(err, context.Canceled) {
 		return context.Canceled

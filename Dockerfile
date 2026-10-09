@@ -5,7 +5,7 @@ RUN npm ci
 COPY web/ ./
 RUN npm run build
 
-FROM golang:1.27.1-bookworm AS go
+FROM golang:1.27.2-bookworm AS go
 ARG GOPROXY=https://proxy.golang.org,direct
 WORKDIR /build
 COPY go.mod go.sum ./

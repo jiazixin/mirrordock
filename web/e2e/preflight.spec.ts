@@ -352,3 +352,36 @@ test('detail pauses hidden and folded reads, resumes, and reads after in-flight 
     await server.close()
   }
 })
+
+test('old session requests cannot expire a new login', async ({ page, request }) => {
+  const server = await fixture(page, request)
+  let release: (() => void) | undefined
+  let held = false
+  try {
+    await server.login()
+    await page.route('**/api/system/checks', async (route) => {
+      if (held) return route.continue()
+      held = true
+      await new Promise<void>((resolve) => {
+        release = resolve
+      })
+      await route.fulfill({ status: 401, json: { error: 'old session' } }).catch(() => {})
+    })
+    await page.getByRole('link', { name: '系统设置', exact: true }).click()
+    await page.getByRole('tab', { name: '系统配置', exact: true }).click()
+    await expect.poll(() => !!release).toBe(true)
+    await page.getByRole('button', { name: '退出登录' }).click()
+    await expect(page.getByLabel('管理员密码')).toBeVisible()
+    await page.getByLabel('管理员密码').fill('preflight-fixture-password')
+    await page.getByRole('button', { name: '登录管理台' }).click()
+    await expect(page.locator('.page-heading')).toBeVisible()
+    await page.unroute('**/api/system/checks')
+    release!()
+    await page.waitForTimeout(300)
+    await expect(page.locator('.page-heading')).toBeVisible()
+    await expect(page.getByLabel('管理员密码')).toHaveCount(0)
+  } finally {
+    release?.()
+    await server.close()
+  }
+})

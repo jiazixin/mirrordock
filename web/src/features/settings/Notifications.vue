@@ -89,6 +89,8 @@ const help = ref('')
 const pinned = ref('')
 let timer: ReturnType<typeof setInterval> | undefined
 let disposed = false
+let settingsController: AbortController | undefined
+let recordsController: AbortController | undefined
 const zoneFormatter = computed(() => {
   try {
     return new Intl.DateTimeFormat('zh-CN', {
@@ -136,19 +138,30 @@ function updateView(view: View, initialize = false) {
   }
 }
 async function load() {
+  settingsController?.abort()
+  const controller = new AbortController()
+  settingsController = controller
   try {
-    const view = await api<View>('/notifications')
-    if (!disposed) updateView(view, true)
+    const view = await api<View>('/notifications', 'GET', undefined, controller.signal)
+    if (!disposed && !controller.signal.aborted) updateView(view, true)
   } catch (e) {
-    if (!disposed) error.value = e instanceof Error ? e.message : '通知设置读取失败'
+    if (!disposed && !controller.signal.aborted)
+      error.value = e instanceof Error ? e.message : '通知设置读取失败'
   }
 }
 async function refreshRecords() {
+  if (disposed) return
+  recordsController?.abort()
+  const controller = new AbortController()
+  recordsController = controller
   const request = ++recordRevision
   refreshing.value = true
   try {
     const result = await api<{ items: DeliveryRecord[]; total: number }>(
       `/notifications/records?limit=${pageSize.value}&offset=${(page.value - 1) * pageSize.value}`,
+      'GET',
+      undefined,
+      controller.signal,
     )
     if (!disposed && request === recordRevision) {
       total.value = result.total
@@ -161,7 +174,7 @@ async function refreshRecords() {
       recordError.value = ''
     }
   } catch (e) {
-    if (!disposed && request === recordRevision)
+    if (!disposed && request === recordRevision && !controller.signal.aborted)
       recordError.value = e instanceof Error ? e.message : '发送记录读取失败'
   } finally {
     if (request === recordRevision) refreshing.value = false
@@ -244,6 +257,8 @@ onMounted(() => {
 })
 onBeforeUnmount(() => {
   disposed = true
+  settingsController?.abort()
+  recordsController?.abort()
   clearInterval(timer)
 })
 </script>

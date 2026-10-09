@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onBeforeUnmount, ref } from 'vue'
 import { RefreshCw, ShieldCheck } from '@lucide/vue'
 import { api } from '../../app/api'
 import { perform } from '../../app/state'
@@ -7,6 +7,7 @@ import type { SystemChecks } from '../../app/types'
 
 const checks = ref<SystemChecks>()
 const checking = ref(false)
+const controller = new AbortController()
 function diskSize(bytes: number | undefined) {
   if (bytes === undefined) return '未知'
   return bytes >= 1024 ** 4
@@ -105,7 +106,7 @@ async function check() {
   checking.value = true
   checks.value = undefined
   try {
-    checks.value = await api<SystemChecks>('/system/checks')
+    checks.value = await api<SystemChecks>('/system/checks', 'GET', undefined, controller.signal)
   } finally {
     checking.value = false
   }
@@ -113,6 +114,7 @@ async function check() {
 onMounted(() => {
   void perform(check)
 })
+onBeforeUnmount(() => controller.abort())
 </script>
 
 <template>

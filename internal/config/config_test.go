@@ -90,11 +90,18 @@ func TestLogConfiguration(t *testing.T) {
 		t.Fatal(err)
 	}
 	b, err := os.ReadFile(file)
-	if err != nil || !strings.Contains(string(b), "# keep log comment") || m.Current().Log != c.Log || !m.View().RestartRequired || m.Startup().Log != Defaults().Log {
-		t.Fatal("log writeback/restart state incorrect", err)
+	if err != nil || !strings.Contains(string(b), "# keep log comment") || m.Current().Log != Defaults().Log || m.View().RestartRequired {
+		t.Fatal("browser save changed deployment logging", err)
+	}
+	text = base + "log:\n  level: error\n  path: ./logs/server.log\n  format: text\n"
+	if err := os.WriteFile(file, []byte(text), 0600); err != nil {
+		t.Fatal(err)
 	}
 	if err := m.Reload(); err != nil || m.Current().Log != c.Log {
 		t.Fatal("log reload failed", err)
+	}
+	if !m.View().RestartRequired || m.Startup().Log != Defaults().Log {
+		t.Fatal("YAML logging edit did not retain startup settings")
 	}
 	for _, link := range []string{"hardlink.log", "symlink.log"} {
 		p := filepath.Join(filepath.Dir(file), link)

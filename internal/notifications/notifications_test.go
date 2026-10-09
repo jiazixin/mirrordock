@@ -55,15 +55,15 @@ func TestRecordPage(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	records, total, err := s.RecordPage(50, 100)
+	records, total, err := s.RecordPage(t.Context(), 50, 100)
 	if err != nil || total != 125 || len(records) != 25 || records[0].RunID != 25 || records[24].RunID != 1 {
 		t.Fatalf("last page: records=%v total=%d err=%v", records, total, err)
 	}
-	records, total, err = s.RecordPage(1000, -1)
+	records, total, err = s.RecordPage(t.Context(), 1000, -1)
 	if err != nil || total != 125 || len(records) != 100 || records[0].RunID != 125 {
 		t.Fatalf("bounded page: records=%d total=%d err=%v", len(records), total, err)
 	}
-	records, total, err = s.RecordPage(50, 200)
+	records, total, err = s.RecordPage(t.Context(), 50, 200)
 	if err != nil || total != 125 || len(records) != 0 {
 		t.Fatalf("empty page: records=%d total=%d err=%v", len(records), total, err)
 	}
@@ -656,5 +656,102 @@ func TestConcurrentTestsAreRejectedAndTimeoutIsSanitized(t *testing.T) {
 	client.Timeout = 20 * time.Millisecond
 	if err := send(t.Context(), client, "webhook", config.Notification{Endpoint: slow.URL + "/sensitive-token"}, Message{}); err == nil || strings.Contains(err.Error(), "sensitive-token") {
 		t.Fatal("timeout leaked", err)
+	}
+}
+
+func TestRecordPageUsesCancelableReadPool(t *testing.T) {
+	s, _, store := fixture(t)
+	writer, err := store.DB.Conn(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	records, total, err := s.RecordPage(ctx, 50, 0)
+	if err != nil || total != 0 || len(records) != 0 {
+		t.Fatalf("writer pool blocked records: %v", err)
+	}
+	cancelled, stop := context.WithCancel(t.Context())
+	stop()
+	if _, _, err := s.RecordPage(cancelled, 50, 0); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancel ignored: %v", err)
+	}
+}
+
+func TestNotificationCursorHandlesLateCompletionAndRestart(t *testing.T) {
+	s, cfg, store := fixture(t)
+	old := createRun(t, store, "running", 0)
+	saveChannel(t, s, "webhook", Update{Enabled: true, Endpoint: "http://127.0.0.1:1/fixture"})
+	early := createRun(t, store, "running", 0)
+	for range 105 {
+		createRun(t, store, "succeeded", 0)
+	}
+	if err := s.enqueueLocked(); err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	if err := store.ReadDB.QueryRow("SELECT count(*) FROM notifications").Scan(&count); err != nil || count != 100 {
+		t.Fatal(count, err)
+	}
+	early.State = "succeeded"
+	if err := store.SaveRun(early.ID, early.State, early); err != nil {
+		t.Fatal(err)
+	}
+	old.State = "succeeded"
+	if err := store.SaveRun(old.ID, old.State, old); err != nil {
+		t.Fatal(err)
+	}
+	restarted, err := New(cfg, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restarted.Close()
+	if err := restarted.enqueueLocked(); err != nil {
+		t.Fatal(err)
+	}
+	if err := restarted.enqueueLocked(); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ReadDB.QueryRow("SELECT count(*) FROM notifications").Scan(&count); err != nil || count != 106 {
+		t.Fatal(count, err)
+	}
+	if err := store.ReadDB.QueryRow("SELECT count(*) FROM notifications WHERE run_id=?", early.ID).Scan(&count); err != nil || count != 1 {
+		t.Fatal("late completion missing", count, err)
+	}
+	if err := store.ReadDB.QueryRow("SELECT count(*) FROM notifications WHERE run_id=?", old.ID).Scan(&count); err != nil || count != 0 {
+		t.Fatal("pre-activation run notified", count, err)
+	}
+	state, err := store.State("notification_activation_webhook")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var a activation
+	if err := json.Unmarshal([]byte(state), &a); err != nil || a.Cursor != 107 {
+		t.Fatal(a, err)
+	}
+}
+
+func TestNotificationCursorReplaysFailedQueuePage(t *testing.T) {
+	s, _, store := fixture(t)
+	saveChannel(t, s, "webhook", Update{Enabled: true, Endpoint: "http://127.0.0.1:1/fixture"})
+	for range 3 {
+		createRun(t, store, "succeeded", 0)
+	}
+	if _, err := store.DB.Exec("CREATE TRIGGER reject_queue BEFORE INSERT ON notifications WHEN NEW.run_id=2 BEGIN SELECT RAISE(ABORT,'fixture'); END"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.enqueueLocked(); err == nil {
+		t.Fatal("queue error lost")
+	}
+	if _, err := store.DB.Exec("DROP TRIGGER reject_queue"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.enqueueLocked(); err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	if err := store.ReadDB.QueryRow("SELECT count(*) FROM notifications").Scan(&count); err != nil || count != 3 {
+		t.Fatal(count, err)
 	}
 }

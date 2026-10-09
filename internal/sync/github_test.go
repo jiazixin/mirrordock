@@ -324,3 +324,67 @@ func TestFailedAssetRetainsBytesSinceLastProgressTick(t *testing.T) {
 		t.Fatal(err, received, latest)
 	}
 }
+
+func TestGitHubRejectsReservedPublicationNames(t *testing.T) {
+	for _, name := range []string{".mirrordock-release-sync", ".mirrordock-asset-pkg.json", "pkg.part", ".rsync-partial", ".~tmp~"} {
+		for _, tag := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/tag=%t", name, tag), func(t *testing.T) {
+				client, server := assetClient(t, func(w http.ResponseWriter, r *http.Request) {
+					switch r.URL.Path {
+					case "/repos/o/r/releases":
+						tagName := "v1"
+						if tag {
+							tagName = name
+						}
+						fmt.Fprintf(w, `[{"id":1,"tag_name":%q}]`, tagName)
+					case "/repos/o/r/releases/1/assets":
+						fmt.Fprintf(w, `[{"id":2,"name":%q,"size":3}]`, name)
+					default:
+						t.Error("reserved name reached download", r.URL.Path)
+						http.Error(w, "unexpected", 500)
+					}
+				})
+				dir := t.TempDir()
+				task := Task{Directory: dir, Source: config.Source{GitHubRelease: config.GitHubRelease{Repository: "o/r"}}, Settings: config.Settings{GitHub: config.GitHubSettings{ReleaseCount: 1}}}
+				err := GitHubWithClient(t.Context(), client, server.Client(), task, func(Progress) {}, io.Discard)
+				code := "INVALID_ASSET"
+				if tag {
+					code = "INVALID_TAG"
+				}
+				if err == nil || AsFailure(err).Code != code {
+					t.Fatal(err)
+				}
+				entries, err := os.ReadDir(dir)
+				if err != nil || len(entries) != 0 {
+					t.Fatal("reserved path created", entries, err)
+				}
+			})
+		}
+	}
+}
+
+func TestDownloadRedirectRejectsHTTPSDowngrade(t *testing.T) {
+	var insecureReads atomic.Int32
+	insecure := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		insecureReads.Add(1)
+		fmt.Fprint(w, "substituted key")
+	}))
+	defer insecure.Close()
+	secure := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, insecure.URL, http.StatusFound)
+	}))
+	defer secure.Close()
+	client := secure.Client()
+	client.CheckRedirect = downloadRedirect
+	req, err := http.NewRequestWithContext(t.Context(), "GET", secure.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := client.Do(req)
+	if res != nil {
+		res.Body.Close()
+	}
+	if err == nil || !strings.Contains(err.Error(), "HTTPS downgrade rejected") || insecureReads.Load() != 0 {
+		t.Fatal("HTTPS key download reached plaintext endpoint", err, insecureReads.Load())
+	}
+}

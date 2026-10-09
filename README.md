@@ -1,12 +1,12 @@
 # MirrorDock · 源仓
 
-Go **1.27.1** + Vue 3 的软件源同步与 HTTP/HTTPS 镜像服务。生产目标为 Linux，macOS 用于开发和本机验证。支持系统 rsync、可选 DNF 4 reposync、GitHub Release assets 下载；管理台位于 `/admin/`，管理 API 位于 `/api/`，公开镜像直接使用 `/<dest>/`。
+Go **1.27.2** + Vue 3 的软件源同步与 HTTP/HTTPS 镜像服务。生产目标为 Linux，macOS 用于开发和本机验证。支持系统 rsync、可选 DNF 4 reposync、GitHub Release assets 下载；管理台位于 `/admin/`，管理 API 位于 `/api/`，公开镜像直接使用 `/<dest>/`。
 
 支持手动和 cron 同步、备用来源、累计超时、自动重试、暂停/继续/取消、SQLite 历史、日志详情与手动清理、运行分析及任务结果通知。同步成功并校验后发布，失败保留上一发布代。当前验收结果与部署环境待验项见 [ACCEPTANCE.md](docs/ACCEPTANCE.md)。
 
 ## 安装与构建
 
-需要 Go 1.27.1、Node.js >=22.12、npm。部署 rsync 应为包含发行版安全补丁的 **3.1+** 版本；macOS 自带旧版本不支持所需参数。Reposync 使用 DNF 4、`dnf-plugins-core` 和开启 GPG 检查时所需的 `rpmkeys`；受控仓库已验证 Rocky 9 和 AlmaLinux 10.2，具体架构与范围见验收记录，不承诺兼容 DNF5。GitHub 下载不需要 gh。
+需要 Go 1.27.2、Node.js >=22.12、npm。部署 rsync 应为包含发行版安全补丁的 **3.1+** 版本；macOS 自带旧版本不支持所需参数。Reposync 使用 DNF 4、`dnf-plugins-core` 和开启 GPG 检查时所需的 `rpmkeys`；受控仓库已验证 Rocky 9 和 AlmaLinux 10.2，具体架构与范围见验收记录，不承诺兼容 DNF5。GitHub 下载不需要 gh。
 
 从仓库根执行，必须先生成 Web，再编译 Go：
 
@@ -62,9 +62,9 @@ Rsync 使用 `src1`、`src2` 等按数字升序尝试；各来源应为同一仓
 
 Reposync 使用单个 `src1`，生成任务私有 repo、缓存和密钥库，不修改 `/etc/yum.repos.d`。完整镜像要求下载元数据，并拒绝 `download_metadata=true` 与 `newest_only=true` 组合。GPG 包签名检查不等于仓库元数据签名验证；参数和真实发行版安装仍须在目标 EL 验收。
 
-配置中的来源地址和 `gpg_keys` 为公开地址，不支持 URL 鉴权，不能包含用户信息、查询参数或片段；这些地址会作为运行事实保存。GitHub 从 API 获取的临时签名资产 URL 不受此配置限制。启动时按 100 条分页脱敏历史 `runs` 与 `run_results` 中的来源/公钥地址及相关尝试、事件和错误 URL，成功后记录迁移标记；失败阻止启动并可重试，不删除记录。
+配置中的来源地址和 `gpg_keys` 为公开地址，不支持 URL 鉴权，不能包含用户信息、查询参数或片段；这些地址会作为运行事实保存。GitHub 从 API 获取的临时签名资产 URL 不受此配置限制。新运行快照仍防御性脱敏。1.0 使用全新数据库结构，不包含发布前测试数据库的兼容迁移；首次上线使用新的数据目录。
 
-GitHub 按发布时间选最近 N 个符合条件的 Release，仅下载 assets，不下载自动源码 ZIP/TAR。源内 `release_count: 0` 继承系统值；glob 可筛选附件。大小、身份及可用 digest 校验后才复用或续传，Range 不兼容时重新下载。开启旧版本清理也只在本轮成功后生效。
+GitHub 按发布时间选最近 N 个符合条件的 Release，仅下载 assets，不下载自动源码 ZIP/TAR。源内 `release_count: 0` 继承系统值；glob 可筛选附件。tag 和附件不得使用 `.mirrordock*`、`.rsync-partial`、`.~tmp~` 或 `*.part` 等内部保留名称。大小、身份及可用 digest 校验后才复用或续传，Range 不兼容时重新下载。开启旧版本清理也只在本轮成功后生效。
 
 GitHub Token 直接存放 `settings.github.token`，读取 API 仅返回存在标记，页面留空保留，显式清空删除。`settings.github.proxy` 支持 HTTP/HTTPS/SOCKS5/SOCKS5h，API 和附件共用，空字符串直连，不读取代理环境变量；代理失败不绕过代理。HTTP/mixed 入口用 `http://`，`https://` 要求代理入口自身支持 TLS；特殊字符需 URL 编码。**按已确认协议，受登录保护的 API 返回完整代理地址，页面明文回填；其认证信息仍不进入运行快照、审计或日志。** Token 与代理在每次实际执行时读取。
 

@@ -1,5 +1,73 @@
 # 验收记录
 
+## 1.0 发布前最终验收（2026-10-09）
+
+本节是本轮交付结论，后文保留历史记录，不代表当前工具链或当前扫描结果。检查包括全仓测试、核心运行/发布/鉴权/数据库/连接池/前端请求生命周期审查，以及本轮全部代码差异复核。应用版本已更新为 **1.0.0**，工具链按用户确认统一升级为 **Go 1.27.2**。本轮已识别的代码阻塞问题均已修复，下面列出的门禁通过或已完成明确告警判定。未提交、推送、打标签或发布。
+
+测试通过 SSH 在用户指定的 `mirrordock` 主机原生执行，隔离工作区为 `/home/ops/work/mirrordock-release-20261009`。系统为 AlmaLinux 10.2 x86_64、内核 6.12.0-211.22.1.el10_2、XFS、20 个逻辑 CPU、约 3.54 GiB RAM；`lscpu` 明确报告 **KVM**，不是裸机验收。SELinux 为 **Permissive**。原生工具链为 Go 1.27.2、Node 24.21.0、系统 rsync 3.4.4、DNF 4.20.0。Go/Node 官方压缩包均核对官方 SHA-256。只使用临时数据、隔离端口、受控 rsync/RPM 上游和小型公开 GitHub 附件，不修改用户镜像或应用凭据。
+
+### 本轮修复
+
+| 问题 | 修复与回归 |
+| --- | --- |
+| 旧 Go 标准库安全问题 | Go 1.27.1 扫描报告标准库调用告警；按用户确认升到 1.27.2，同步 go.mod、Dockerfile、协作规则与文档。[官方发布记录](https://go.dev/doc/devel/release#go1.27.2)；未将扫描可达性当作每项已可实际利用 |
+| 通知队列反复扫描完整历史，占用写连接 | run_results 增加独立自增插入序号，按序号每页最多 100 条前进，保留 run_id 唯一与首个终态；入队全部成功后推进持久游标，失败重放由唯一键去重。覆盖跨页、晚完成、重启和中途写入失败 |
+| 通知读取与并发边界 | 记录计数和页内容共用五秒可取消的只读事务；占满单写连接时仍能读取。启用边界的 run ID 和结果序号在同一 SQL 快照取得；设置视图和 revision 也来自同一配置快照，避免并发重载错配 |
+| 前端旧会话及卸载请求 | 退出统一中止会话 API；处理 401 和 JSON 结果前再次检查取消，旧 401 不会退出新登录。环境检查、通知设置/分页卸载及换页取消旧请求；新增旧会话回归 |
+| 页面保存覆盖部署日志配置 | 浏览器保存保留 log 字段；修改 YAML 后重载并提示重启。测试覆盖注释保留、API 保存隔离和启动值不变 |
+| GitHub tag/附件与内部文件冲突 | 拒绝 `.mirrordock*`、`.rsync-partial`、`.~tmp~`、`*.part`，防止覆盖身份侧车、暂存文件或发布隐藏文件。10 个 tag/附件组合回归 |
+| GPG 公钥 HTTPS 降级 | 公钥下载复用受限重定向策略，禁止 HTTPS 跳到 HTTP。受控 TLS 测试确认明文目标没有收到请求 |
+| APT 校验被静默截断 | 超过 8 MiB 的 Release 明确失败，不能只检查前缀后当成完整校验通过；测试将缺失引用放在读取上限之后 |
+
+按“尚未部署，无需兼容”的要求删除发布前历史 URL 脱敏迁移和空转的 schema_migrations 版本表；新运行快照继续防御性脱敏。**首次上线使用新的 state 数据目录**，不承诺兼容旧测试数据库。已有镜像导入、当前版本重启恢复、日志保留和失败保留旧发布代的行为仍在回归范围内。
+
+### 执行结果
+
+本地证据根为 `test-results/release-1.0/`，远端简要输出已归档在其中的 `linux/`，脚本与详细夹具保留在上述远端工作区。证据目录被 Git 忽略。
+
+| 检查 | 结果及证据 |
+| --- | --- |
+| Web 格式、TypeScript、构建 | 本机与 Linux 均通过；`web-format-final.txt`、`web-build-final.txt`。入口 JS 126.25 kB，Vite 估算 gzip 49.71 kB；这不是服务端动态压缩承诺 |
+| Linux vet / 全量 race | Go 1.27.2 原生编译，8 个 internal 包、132 个顶层测试、含子测试共 228 个通过，**0 测试跳过、0 race 报告**；cmd/web 无测试文件单独计。`linux/linux-race-final.json` |
+| 本机补充 race | 最终全仓运行出现一次 app 登录请求五秒超时，其余包通过；随后完整 app 与 notifications 在 race 下复跑通过。保留 `local-race-final.json` 与 `local-race-recheck.txt`，不把初次失败写成通过 |
+| Linux 浏览器 E2E | **14/14 通过，约两分钟**，含真实隔离 rsync、备用来源、发布/日志/分页/通知、旧响应、键盘焦点和移动布局。`linux/e2e-linux-final.txt`；生成 77 张截图，抽查桌面源列表、Release 分析、375px 通知与 320px 公开目录，未发现阻塞性错位 |
+| Linux HTTP / HTTPS | 完整正文、HEAD、ETag/304、单段及非法 Range、24 个并发 Range 通过；TLS HTTP2 协商通过。strace 观察到 HTTP/1.1 成功 sendfile **43 次**、HTTPS **0 次**，符合设计。`linux/http-final.txt` |
+| 混合负载与恢复 | 5003 文件、2050 条历史日志，12 个下载客户端和 8 个慢客户端，与同步/暂停/继续/清日志并行；无变化代复用、硬链接、预算暂停、清理和强杀后继续均通过。`linux/stress-final.txt` |
+| RPM 完整路径 | AlmaLinux 10.2 x86_64 的 DNF4 reposync，实际签名 noarch RPM 同步及私有 installroot 安装通过；未签名包拒绝，旧元数据/正文保留，宿主默认 RPM 密钥库不变。`linux/rpm-final.txt` |
+| 磁盘不足 | 隔离 4 GiB XFS loop：不足时排队不耗预算、空间恢复自动启动、运行中低余量触发 DISK_SPACE、保留旧代，并在隔离卷观测 ENOSPC；卷已卸载。`linux/space-final.txt` |
+| 冷/热缓存 | 128 MiB 文件、三轮单文件 fadvise + mincore；热缓存读盘 0，冷轮实际读取约 131 MB，未全局 drop_caches。`linux/cache-result.txt`；仅客体页缓存测试，不宣称清空宿主/磁盘缓存 |
+| 离线备份恢复 | 同路径恢复 2054 条事实，发布代 ID、正文 SHA 与通知密钥保留。`linux/backup-result.txt`；不是跨路径迁移或断电测试 |
+| systemd | 非 root、NOFILE=8192、NoNewPrivileges、ProtectSystem=strict、ProtectHome、PrivateTmp 下启动/下载/SIGTERM 均通过；临时 unit 已停止，夹具归档到远端 evidence/systemd-sandbox。`linux/systemd-result.txt` |
+| 真实 GitHub Release | 用授权 SOCKS5h 代理与临时 Token 下载公开 `jqlang/jq` 的 jq-1.8.2：jq-linux-amd64 与 sha256sum.txt；正文 2,267,912 字节，SHA-256 同时匹配 API digest 和上游校验文件。第二次复用两项、保持发布代。运行数据库/日志/API 不含 Token，临时 Token 文件与 YAML 已删除。`linux/github-final.txt` |
+| 实际 Dockerfile | Linux amd64 从 Node → Go 1.27.2 → Rocky 9 多阶段构建通过；默认入口/默认配置路径、UID 5000、只读根、隔离网络、/tmp 与 /var/tmp tmpfs、鉴权、嵌入资源、系统工具、HEAD/Range/ETag 和退出码 0 均通过。`linux/docker-build.txt`、`linux/docker-runtime-recheck.txt` |
+| 制品一致性 | 当前 132 个源码/构建文件 SHA-256 与 Linux 验收副本一致；`source-manifest.json`、`source-and-cleanup-check.txt`。原生二进制 SHA-256 为 `42144d58fe085d88a6eefd384b7a96a1d5667965f0ccaad2eb6303257fb45c23` |
+
+### 数据库与压力实测
+
+SQLite 保持 WAL/FULL、单写连接与最多四条只读连接；读事务、连接重建 PRAGMA、索引访问、低 FD、根租约、不可变代和并发发布既有回归均包含在 Linux 全量测试中。公开文件下载热路径仍不访问数据库。
+
+100,000 条已处理终态的热库空扫描，三轮中位数：原历史反连接查询 **74.041 ms/次**，插入游标查询 **9.834 μs/次**。这是同机 SQL 对照，结果行均为零，不等于页面或下载整体加速比例；原始值见 `linux/notification-bench-linux.txt`。macOS 对照为约 105 ms 与 9.108 μs，单独记录在 `notification-bench-local.txt`。
+
+最终混合负载：管理 API P50 **7.63 ms**、P95 **15.29 ms**、最大 **16.64 ms**；RSS 峰值 **33.52 MiB**、FD 峰值 **50**，CPU 均值 **0.47 核**，清日志耗时 **2.22 秒**。10 秒窗口完成 4850 个 8 MiB 下载，另有慢客户端逐段校验。回环网络与客体缓存的合成吞吐不能替代物理网卡、公网、真实多 TB 镜像或生产容量结论；测试期间另有容器构建活动，数据作为当前主机验收观测，不作严格硬件基准。
+
+### 供应链与审查
+
+`go mod verify` 通过。Linux 首次官方 Go 模块代理访问超时，原生测试改用本机已验证模块生成的临时 vendor，vendor 不提交；随后实际 Docker 构建通过 Goproxy.cn 拉取模块，保持 Go 校验数据库。Rocky 构建使用南京大学镜像，保持 RPM 签名校验；运行镜像查询发行版 available security advisories 无条目，不等于对全部 OS 包完成独立 CVE 扫描。Docker 镜像 ID 为 `sha256:161120ff3777cb52c8628a5adb89f5c273c26c3800cd3674f6ce204aa3575339`，基础镜像 digest 与版本在构建日志中。
+
+本机和 Linux 使用 npm 官方 registry 在线审计均为 **0 漏洞**，包含开发依赖；Linux 实际安装的 **52 个包 registry 签名通过、33 个包 provenance attestation 通过**。本机为 52/32，平台依赖不同，未混成一个计数。证据 `linux/npm-audit-linux.json`、`linux/npm-signatures-linux.txt`。
+
+Go 官方漏洞库源码扫描：Go 1.27.2、linux/amd64 下 **0 可达漏洞、0 导入包漏洞**；模块级保留 GO-2026-5932（x/crypto/openpgp），项目实际只使用 bcrypt 等包，无 OpenPGP 依赖。生产二进制原始扫描出现一条需要复核的模块告警，详见下一段。
+
+剥离符号的 Docker 制品执行 `govulncheck -mode=binary` 返回 **退出码 3 / GO-2026-5932**，没有将这次命令记成通过。`-mode=extract` 确认未提取符号；govulncheck v1.8.0 在此条件下按模块精度报告全部已知告警，与[官方说明](https://pkg.go.dev/golang.org/x/vuln/cmd/govulncheck#hdr-Limitations)一致。[该告警](https://pkg.go.dev/vuln/GO-2026-5932)只针对 OpenPGP 包。复核：Linux/amd64、CGO=0 的实际依赖清单不含 OpenPGP，制品中也没有该包路径；从同一 Docker builder 层离线重建保留符号的审计副本，与生产制品的 ELF `.text` 机器码逐字节一致，该副本二进制扫描 **退出码 0、0 符号命中**。因此本轮将该项判定为剥离符号造成的模块级非适用告警，保留原始告警而不替换密码算法或过滤扫描输出。证据：`govulncheck-docker-binary.txt/json`、`docker-vulnerability-extract.json`、`linux-dependencies.txt`、`binary-code-sha256.txt`、`govulncheck-symbols-binary.txt`。扫描器限制不能用作忽略其他新告警的通用理由。
+
+OCR 外部入口实际执行后退出码 1，原因 `no valid LLM endpoint configured`；没有外发源码，未宣称外部独立模型审查通过。按项目流程使用 `ocr delegate preview/rule`，由当前 Codex 审查所有 **17 个 reviewable 文件**；默认排除的 15 个测试、删除文件、go.mod、lockfile 与文档逐项另行复核，总覆盖 32/32、0 skipped，覆盖清单见 `ocr-preview-final.json`、`ocr-rules-final.json`、`ocr-report.json`。审查补强了通知启用边界必须同一快照，以及配置视图与 revision 的一致性。没有遗留本轮已识别的代码阻塞项。
+
+初次失败均保留：本机新 E2E 未切到环境检查页签、Linux Chromium 缺少系统库、真实 GitHub 夹具误填不存在的 retry_delay、只读容器缺少 /var/tmp tmpfs；修正测试夹具/环境后对应完整路径通过。匿名 GitHub 代理出口先遇配额耗尽，随后按用户授权 Token 完成真实测试。工具安装与浏览器运行依赖留在测试主机，未修改其部署安全策略；没有仍运行的本轮应用测试进程或隔离 loop 挂载。
+
+### 未验证的部署条件
+
+本轮不覆盖裸机物理链路、SELinux Enforcing、宿主微码/虚拟化安全状态、真实断电/存储故障、生产百万文件/多 TB/数日长稳、跨路径备份恢复、全部发行版与架构、完整公网发行版同步或外部通知提供商投递。网页交互与移动布局在 Chromium 中验收，不扩大为所有浏览器支持承诺。Go/OS/npm 的安全结论有扫描时点，发布后仍需跟随上游补丁。上述边界与已通过项目门禁应一并阅读。
+
 ## 管理界面与查询性能移植（2026-10-09）
 
 范围：本轮工作区的 8 个新增/修改生产源码文件、5 个测试文件，以及 README、设计和计划。参考目录仅用于阅读，未修改；未修改用户配置、镜像或凭据，未推送或发布。所有测试使用临时数据、隔离端口和受控上游。

@@ -46,7 +46,7 @@ func (a *App) notificationRoutes(api *http.ServeMux) {
 			limit, _ = strconv.Atoi(r.URL.Query().Get("limit"))
 		}
 		offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
-		records, total, err := a.Notifications.RecordPage(limit, offset)
+		records, total, err := a.Notifications.RecordPage(r.Context(), limit, offset)
 		if err != nil {
 			respond(w, 500, map[string]string{"error": "发送记录读取失败"})
 			return

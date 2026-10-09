@@ -257,14 +257,18 @@ func validatePrimary(ctx context.Context, root *os.Root, base, p string) error {
 	}
 }
 func validateAPT(ctx context.Context, root *os.Root, p string) error {
+	const maxReleaseBytes = 8 << 20
 	f, err := root.Open(p)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
-	b, err := io.ReadAll(io.LimitReader(f, 8<<20))
+	b, err := io.ReadAll(io.LimitReader(f, maxReleaseBytes+1))
 	if err != nil {
 		return err
+	}
+	if len(b) > maxReleaseBytes {
+		return errors.New("APT Release 超过 8 MiB 校验上限")
 	}
 	inHashes := false
 	for line := range strings.SplitSeq(string(b), "\n") {

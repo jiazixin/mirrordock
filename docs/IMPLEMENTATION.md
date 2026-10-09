@@ -4,7 +4,7 @@
 
 ## 数据与接口
 
-数据库由 `internal/database` 启动建表/索引，当前 schema 4。运行数据以单条 JSON 聚合 attempts/events/脱敏快照；发布指针独立存储。历史保留，日志清理不删除事实。WAL/FULL 单写连接，分析走有界只读快照。`runs(source_id,id DESC)` 支持每源最新状态，不能用全局最近 50/100 条代替。
+数据库由 `internal/database` 启动建表/索引，1.0 初始 schema（无发布前兼容迁移）。运行数据以单条 JSON 聚合 attempts/events/脱敏快照；发布指针独立存储。历史保留，日志清理不删除事实。WAL/FULL 单写连接，分析走有界只读快照。`runs(source_id,id DESC)` 支持每源最新状态，不能用全局最近 50/100 条代替。
 
 | 接口 | 用途 |
 | --- | --- |
@@ -22,7 +22,7 @@
 
 除 auth status/login 外管理 API 均鉴权；写操作同源校验。完整代理 URL 回填是已确认协议例外，Token/密码/通知凭据不返回。运行快照不保存代理/Token/通知密文。
 
-来源 URL 与 GPG 公钥 URL 禁止用户信息、查询参数及片段。`internal/runs/snapshot.go` 负责新快照与历史地址脱敏，`internal/database/redact.go` 用 100 条 keyset 分页重写 runs/run_results，不改变状态、索引列及首个终态的时点；迁移全部成功后设置一次性标记，失败可重试。此操作不改写 YAML、原始日志文件或外部备份。
+来源 URL 与 GPG 公钥 URL 禁止用户信息、查询参数及片段。`internal/runs/snapshot.go` 负责新快照的防御性脱敏。首次上线使用新的 state；发布前的历史地址迁移代码已删除。run_results 的自增 sequence 表示结果插入顺序，用于通知有界扫描，id 唯一约束继续保留首个终态事实。
 
 ## 源码定位
 

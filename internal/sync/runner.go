@@ -181,7 +181,7 @@ func importRepoKeys(ctx context.Context, private string, keys []string, emit fun
 		IdleConnTimeout: 30 * time.Second, MaxIdleConns: 4, MaxIdleConnsPerHost: 2,
 	}
 	defer transport.CloseIdleConnections()
-	client := &http.Client{Transport: transport, Timeout: 30 * time.Second}
+	client := &http.Client{Transport: transport, Timeout: 30 * time.Second, CheckRedirect: downloadRedirect}
 	args := []string{"--root", filepath.Join(private, "root"), "--import"}
 	for i, address := range keys {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, address, nil)

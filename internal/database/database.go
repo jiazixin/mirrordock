@@ -17,13 +17,12 @@ import (
 
 // initialSchema is applied on every open; existing tables and records are preserved.
 const initialSchema = `
-CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY);
 CREATE TABLE IF NOT EXISTS runs (id INTEGER PRIMARY KEY AUTOINCREMENT, source_id TEXT NOT NULL, state TEXT NOT NULL, created_at TEXT NOT NULL, data BLOB NOT NULL);
 CREATE INDEX IF NOT EXISTS runs_source_state ON runs(source_id,state);
 CREATE INDEX IF NOT EXISTS runs_source_id ON runs(source_id,id DESC);
 CREATE INDEX IF NOT EXISTS runs_state_id ON runs(state,id DESC);
 CREATE INDEX IF NOT EXISTS runs_created_at ON runs(created_at);
-CREATE TABLE IF NOT EXISTS run_results (id INTEGER PRIMARY KEY, data BLOB NOT NULL);
+CREATE TABLE IF NOT EXISTS run_results (sequence INTEGER PRIMARY KEY AUTOINCREMENT, id INTEGER NOT NULL UNIQUE, data BLOB NOT NULL);
 CREATE TABLE IF NOT EXISTS publications (source_id TEXT PRIMARY KEY, data BLOB NOT NULL);
 CREATE TABLE IF NOT EXISTS app_state (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 
@@ -37,10 +36,6 @@ CREATE TABLE IF NOT EXISTS notifications (
 );
 CREATE INDEX IF NOT EXISTS notifications_due ON notifications(state,next_at,id);
 
-INSERT OR IGNORE INTO schema_migrations(version) VALUES(1);
-INSERT OR IGNORE INTO schema_migrations(version) VALUES(2);
-INSERT OR IGNORE INTO schema_migrations(version) VALUES(3);
-INSERT OR IGNORE INTO schema_migrations(version) VALUES(4);
 `
 
 type Store struct {

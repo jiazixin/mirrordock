@@ -389,7 +389,7 @@ func (a *App) info(w http.ResponseWriter, r *http.Request) {
 		return config.Resolve(file, value)
 	}
 	respond(w, 200, map[string]any{
-		"timezone": a.location.String(), "utc_offset_seconds": offset, "version": "0.1.0",
+		"timezone": a.location.String(), "utc_offset_seconds": offset, "version": "1.0.0",
 		"go": strings.TrimPrefix(runtime.Version(), "go"), "os": runtime.GOOS, "arch": runtime.GOARCH, "cpus": runtime.NumCPU(),
 		"tls": c.TLS.Cert != "", "publications": a.Mirrors.Publications(), "downloads": a.Mirrors.Stats(), "schedules": a.Runs.ScheduleInfo(),
 		"deployment": map[string]any{

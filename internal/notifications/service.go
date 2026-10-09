@@ -21,6 +21,7 @@ import (
 type activation struct {
 	Enabled bool  `json:"enabled"`
 	Cutoff  int64 `json:"cutoff"`
+	Cursor  int64 `json:"cursor"`
 }
 type ChannelView struct {
 	Kind        string `json:"kind"`
@@ -145,15 +146,15 @@ func (s *Service) SetTimezone(zone string) error {
 func (s *Service) View() (SettingsView, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	cfg := s.cfg.Current()
-	out := SettingsView{Channels: []ChannelView{}, Revision: s.cfg.View().Revision}
+	cfg := s.cfg.View()
+	out := SettingsView{Channels: []ChannelView{}, Revision: cfg.Revision}
 	var err error
 	out.Timezone, err = s.timezone()
 	if err != nil {
 		return out, err
 	}
 	for _, kind := range config.NotificationChannels {
-		c := cfg.Settings.Notifications[kind]
+		c := cfg.Config.Settings.Notifications[kind]
 		plain, err := s.plain(kind, c)
 		if err != nil {
 			return out, err
@@ -227,7 +228,9 @@ func (s *Service) syncLocked() error {
 			}
 		}
 		if c.Enabled && !a.Enabled {
-			if err = s.store.DB.QueryRow("SELECT COALESCE(MAX(id),0) FROM runs").Scan(&a.Cutoff); err != nil {
+			// Capture both boundaries in one SQLite snapshot: a newly created
+			// run must not finish between separate reads and be skipped forever.
+			if err = s.store.ReadDB.QueryRowContext(s.ctx, "SELECT COALESCE((SELECT MAX(id) FROM runs),0),COALESCE((SELECT MAX(sequence) FROM run_results),0)").Scan(&a.Cutoff, &a.Cursor); err != nil {
 				return err
 			}
 		}
@@ -271,14 +274,18 @@ func (s *Service) enqueueLocked() error {
 		if err = json.Unmarshal([]byte(state), &a); err != nil {
 			return err
 		}
-		rows, err := s.store.DB.Query("SELECT data FROM run_results WHERE id>? AND NOT EXISTS(SELECT 1 FROM notifications n WHERE n.run_id=run_results.id AND n.channel=?) ORDER BY id LIMIT 100", a.Cutoff, kind)
+		// Completion order differs from run ID order: an older paused task can
+		// finish after a newer task. Seek a durable insertion cursor so each scan
+		// remains bounded without missing those late results or rescanning history.
+		rows, err := s.store.ReadDB.QueryContext(s.ctx, "SELECT sequence,data FROM run_results WHERE sequence>? ORDER BY sequence LIMIT 100", a.Cursor)
 		if err != nil {
 			return err
 		}
 		records := []runs.Run{}
+		cursor := a.Cursor
 		for rows.Next() {
 			var b []byte
-			if err = rows.Scan(&b); err != nil {
+			if err = rows.Scan(&cursor, &b); err != nil {
 				break
 			}
 			var r runs.Run
@@ -292,6 +299,9 @@ func (s *Service) enqueueLocked() error {
 			return err
 		}
 		for _, r := range records {
+			if r.ID <= a.Cutoff {
+				continue
+			}
 			m, failed := resultMessage(&r, zone)
 			status, reason := "waiting", ""
 			if c.OnlyFailure && !failed {
@@ -299,6 +309,18 @@ func (s *Service) enqueueLocked() error {
 				reason = "不符合仅失败通知条件"
 			}
 			if _, err = s.store.DB.Exec("INSERT OR IGNORE INTO notifications(channel,run_id,event,title,body,failure,state,next_at,updated_at,error) VALUES(?,?,?,?,?,?,?,0,?,?)", kind, r.ID, m.Event, m.Title, m.Body, failed, status, time.Now().UTC().Format(time.RFC3339Nano), reason); err != nil {
+				return err
+			}
+		}
+		if cursor != a.Cursor {
+			a.Cursor = cursor
+			encoded, err := json.Marshal(a)
+			if err != nil {
+				return err
+			}
+			// Advance only after every queue write succeeds. A crash before this
+			// write safely replays the bounded page via UNIQUE(channel,run_id).
+			if err := s.store.SetState("notification_activation_"+kind, string(encoded)); err != nil {
 				return err
 			}
 		}
@@ -386,33 +408,36 @@ func (s *Service) Scan() error {
 	return nil
 }
 func (s *Service) Records() ([]Record, error) {
-	return s.recordItems(30, 0)
+	records, _, err := s.RecordPage(s.ctx, 30, 0)
+	return records, err
 }
 
-func (s *Service) RecordPage(limit, offset int) ([]Record, int, error) {
-	var total int
-	if err := s.store.DB.QueryRow("SELECT count(*) FROM notifications").Scan(&total); err != nil {
+func (s *Service) RecordPage(ctx context.Context, limit, offset int) ([]Record, int, error) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	tx, err := s.store.ReadDB.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
 		return nil, 0, err
 	}
-	records, err := s.recordItems(min(100, max(1, limit)), max(0, offset))
-	return records, total, err
-}
-
-func (s *Service) recordItems(limit, offset int) ([]Record, error) {
-	rows, err := s.store.DB.Query("SELECT id,channel,run_id,state,attempts,updated_at,error FROM notifications ORDER BY id DESC LIMIT ? OFFSET ?", limit, offset)
+	defer tx.Rollback()
+	var total int
+	if err := tx.QueryRowContext(ctx, "SELECT count(*) FROM notifications").Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	rows, err := tx.QueryContext(ctx, "SELECT id,channel,run_id,state,attempts,updated_at,error FROM notifications ORDER BY id DESC LIMIT ? OFFSET ?", min(100, max(1, limit)), max(0, offset))
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer rows.Close()
 	out := []Record{}
 	for rows.Next() {
 		var r Record
 		if err = rows.Scan(&r.ID, &r.Channel, &r.RunID, &r.State, &r.Attempts, &r.UpdatedAt, &r.Error); err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		out = append(out, r)
 	}
-	return out, rows.Err()
+	return out, total, rows.Err()
 }
 func (s *Service) Test(ctx context.Context, kind string) error {
 	s.mu.Lock()
