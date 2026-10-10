@@ -1,6 +1,7 @@
 package mirrors
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
@@ -266,12 +267,9 @@ func TestProjectAndReleaseListingMetadata(t *testing.T) {
 	calls := 0
 	projectLast := time.Now().UTC().Add(-time.Minute).Truncate(time.Second)
 	projectNext := projectLast.Add(time.Hour)
-	m.ListingInfo = func(id string) SourceListingInfo {
+	m.ListingInfo = func(context.Context) map[string]SourceListingInfo {
 		calls++
-		if id != source.ID {
-			t.Fatal(id)
-		}
-		return SourceListingInfo{State: "failed", Last: projectLast, Next: projectNext}
+		return map[string]SourceListingInfo{source.ID: {State: "failed", Last: projectLast, Next: projectNext}}
 	}
 	read := func(p string) string {
 		t.Helper()
@@ -353,7 +351,9 @@ func TestOrdinaryMirrorProjectListing(t *testing.T) {
 	if _, err := m.Publish(t.Context(), source, 1); err != nil {
 		t.Fatal(err)
 	}
-	m.ListingInfo = func(string) SourceListingInfo { return SourceListingInfo{State: "succeeded"} }
+	m.ListingInfo = func(context.Context) map[string]SourceListingInfo {
+		return map[string]SourceListingInfo{source.ID: {State: "succeeded"}}
+	}
 	w := httptest.NewRecorder()
 	m.ServeHTTP(w, httptest.NewRequest("GET", "/", nil))
 	if html := w.Body.String(); !strings.Contains(html, `class="project-table"`) || !strings.Contains(html, "1.0 KiB") || !strings.Contains(html, "同步成功") {

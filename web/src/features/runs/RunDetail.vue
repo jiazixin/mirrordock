@@ -28,7 +28,11 @@ const logView = ref<HTMLElement>()
 const steps = ['准备', '传输', '校验', '发布']
 const step = computed(() => {
   if (run.value?.state === 'succeeded') return 4
-  if (!run.value?.started_at || run.value.progress.phase === 'waiting_space') return -1
+  if (
+    !run.value?.started_at ||
+    ['waiting_space', 'waiting_downloads'].includes(run.value.progress.phase)
+  )
+    return -1
   return (
     (
       { prepare: 0, scan: 0, transfer: 1, verify: 2, publish: 3, complete: 3 } as Record<

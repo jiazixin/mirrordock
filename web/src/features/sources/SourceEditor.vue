@@ -64,7 +64,11 @@ const flags = [
   { key: 'delete', label: '删除上游已移除文件', description: '同步清理上游已删除的文件' },
 ] as const
 const repoFlags = [
-  { key: 'download_metadata', label: '下载 metadata', description: '同步仓库元数据' },
+  {
+    key: 'download_metadata',
+    label: '下载 metadata',
+    description: '关闭时仅发布 RPM 文件，不提供可直接安装的仓库元数据',
+  },
   { key: 'gpgcheck', label: '检查包签名', description: '验证 RPM 包的 GPG 签名' },
   { key: 'delete', label: '清理上游已删除 RPM', description: '同步清理上游已删除的 RPM' },
   { key: 'module_hotfixes', label: 'module_hotfixes', description: '允许仓库包绕过模块过滤' },
@@ -184,6 +188,7 @@ async function save() {
         v-if="draft.type !== 'github_release'"
       >
         <h3>同步来源<span>按数字顺序尝试，切换不重置任务预算</span></h3>
+        <p v-if="draft.type === 'rsync'">地址须包含模块；模块内目录须以 / 结尾。</p>
         <div
           class="upstream-row"
           v-for="(upstream, index) in upstreams"
@@ -229,6 +234,7 @@ async function save() {
             rows="3"
             placeholder="一行一条，例如 isos/**"
           />
+          <small>排除规则只停止同步，不会删除此前已同步的文件。</small>
         </label>
         <div class="source-option-grid">
           <OptionCard

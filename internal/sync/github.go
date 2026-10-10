@@ -228,6 +228,45 @@ func GitHubWithClient(ctx context.Context, client *github.Client, httpClient *ht
 		}
 	}
 	if t.Settings.GitHub.PruneOldReleases {
+		selected := map[string]map[string]bool{}
+		for _, entry := range assets {
+			if selected[entry.Tag] == nil {
+				selected[entry.Tag] = map[string]bool{".mirrordock-release-sync": true}
+			}
+			selected[entry.Tag][entry.Asset.GetName()] = true
+			selected[entry.Tag][filepath.Base(identityFile(entry.Asset.GetName()))] = true
+		}
+		for tag := range keep {
+			dir := filepath.Join(t.Directory, tag)
+			st, err := os.Lstat(dir)
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			if err != nil {
+				return err
+			}
+			if !st.IsDir() {
+				return &Failure{Code: "INVALID_ASSET", Message: "Release 目录必须为真实目录"}
+			}
+			entries, err := os.ReadDir(dir)
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			if err != nil {
+				return err
+			}
+			for _, entry := range entries {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				if selected[tag][entry.Name()] {
+					continue
+				}
+				if err := os.RemoveAll(filepath.Join(dir, entry.Name())); err != nil {
+					return err
+				}
+			}
+		}
 		entries, err := os.ReadDir(t.Directory)
 		if err != nil {
 			return err
@@ -256,11 +295,15 @@ func githubError(err error, proxy string) error {
 	if errors.Is(err, context.Canceled) {
 		return context.Canceled
 	}
-	if _, ok := errors.AsType[*github.RateLimitError](err); ok {
-		return &Failure{Code: "GITHUB_RATE_LIMIT", Message: "GitHub API 配额已用尽，请等待限流重置或检查 Token"}
+	if limit, ok := errors.AsType[*github.RateLimitError](err); ok {
+		return &Failure{Code: "GITHUB_RATE_LIMIT", Message: "GitHub API 配额已用尽，等待限流重置后重试", Retryable: true, RetryAt: limit.Rate.Reset.Time}
 	}
-	if _, ok := errors.AsType[*github.AbuseRateLimitError](err); ok {
-		return &Failure{Code: "GITHUB_RATE_LIMIT", Message: "GitHub API 触发临时限流，请稍后重试", Retryable: true}
+	if limit, ok := errors.AsType[*github.AbuseRateLimitError](err); ok {
+		at := time.Now().Add(time.Minute)
+		if limit.RetryAfter != nil {
+			at = time.Now().Add(*limit.RetryAfter)
+		}
+		return &Failure{Code: "GITHUB_RATE_LIMIT", Message: "GitHub API 触发临时限流，请稍后重试", Retryable: true, RetryAt: at}
 	}
 	if e, ok := errors.AsType[*github.ErrorResponse](err); ok && e.Response != nil {
 		// Do not echo upstream messages: a proxy can return arbitrary text or credentials.
@@ -391,7 +434,17 @@ func verifyAsset(ctx context.Context, target string, id AssetIdentity) error {
 	}
 	return nil
 }
+
+const assetIdleTimeout = 5 * time.Minute
+
+var errAssetIdle = errors.New("asset body idle timeout")
+
 func downloadAsset(ctx context.Context, client *github.Client, httpClient *http.Client, owner, repo string, assetID int64, id AssetIdentity, target string, tick func(int64), proxy string, received ...func(int64)) (bool, error) {
+	return downloadAssetIdle(ctx, client, httpClient, owner, repo, assetID, id, target, tick, proxy, assetIdleTimeout, received...)
+}
+func downloadAssetIdle(ctx context.Context, client *github.Client, httpClient *http.Client, owner, repo string, assetID int64, id AssetIdentity, target string, tick func(int64), proxy string, idle time.Duration, received ...func(int64)) (bool, error) {
+	ctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
 	if sameIdentity(target, id) && verifyAsset(ctx, target, id) == nil {
 		tick(id.Size)
 		return true, nil
@@ -487,7 +540,16 @@ func downloadAsset(ctx context.Context, client *github.Client, httpClient *http.
 		if err = ctx.Err(); err != nil {
 			return false, err
 		}
+		// Only network reads consume the idle allowance, not disk I/O or hashing.
+		fired := make(chan struct{})
+		timer := time.AfterFunc(idle, func() { cancel(errAssetIdle); close(fired) })
 		count, readErr := stream.Read(buf)
+		if !timer.Stop() {
+			<-fired
+		}
+		if errors.Is(context.Cause(ctx), errAssetIdle) {
+			return false, &Failure{Code: "DOWNLOAD_IDLE", Message: "资产正文长时间无数据，已保存暂存文件", Retryable: true}
+		}
 		if count > 0 {
 			for _, report := range received {
 				report(int64(count))

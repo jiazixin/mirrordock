@@ -19,6 +19,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 type Snapshot struct {
@@ -66,7 +67,7 @@ type Run struct {
 
 func (r *Run) SetID(id int64) { r.ID = id }
 func Terminal(state string) bool {
-	return slices.Contains([]string{"succeeded", "failed", "timed_out", "cancelled", "interrupted"}, state)
+	return slices.Contains([]string{"succeeded", "failed", "timed_out", "cancelled"}, state)
 }
 func reserved(state string) bool {
 	return !slices.Contains([]string{"succeeded", "failed", "timed_out", "cancelled"}, state)
@@ -115,38 +116,70 @@ func New(cfg *config.Manager, store *database.Store, m *mirrors.Manager, runner 
 	e.admitSync, e.storageCheck, e.checkpointInterval = m.BeginSync, m.CheckSpace, 5*time.Second
 	e.clearing, e.removeLog = make(map[int64]chan struct{}), os.Remove
 
-	for _, state := range []string{"queued", "running", "pausing", "paused", "interrupted"} {
-		records, _, err := store.ListRuns(state, "", 10000, 0)
+	sources := cfg.Current().Sources
+	var after int64
+	for {
+		records, err := store.RecoverableRuns(ctx, after)
 		if err != nil {
+			cancel()
 			return nil, err
 		}
 		for _, b := range records {
 			var r Run
-			if err = json.Unmarshal(b, &r); err != nil {
+			if err := json.Unmarshal(b, &r); err != nil {
+				cancel()
 				return nil, err
 			}
+			after = r.ID
+			previousState := r.State
 			if r.State == "running" || r.State == "pausing" {
-				r.State = "interrupted"
+				if r.State == "pausing" {
+					r.State = "paused"
+				} else {
+					r.State = "interrupted"
+				}
 				r.ErrorCode = "SERVICE_INTERRUPTED"
-				r.Error = "服务中断；可继续使用剩余预算"
+				r.Error = "服务中断；保留剩余预算"
 				e.event(&r, r.Error)
 				if len(r.Attempts) > 0 {
 					r.Attempts[len(r.Attempts)-1].EndedAt = time.Now().UTC()
 					r.Attempts[len(r.Attempts)-1].ErrorCode = r.ErrorCode
 				}
-				if err = store.SaveRun(r.ID, r.State, r); err != nil {
+			}
+			sourceIndex := slices.IndexFunc(sources, func(s config.Source) bool {
+				return s.ID == r.SourceID && s.Dest == r.Dest && s.Type == r.Type && s.Enabled
+			})
+			if r.State == "interrupted" && r.ErrorCode == "SERVICE_INTERRUPTED" && sourceIndex >= 0 && r.ElapsedSeconds < r.BudgetSeconds {
+				r.State = "queued"
+				r.EndedAt = time.Time{}
+				r.Error, r.ErrorCode = "", ""
+				e.event(&r, "服务恢复，自动排队继续；沿用累计预算及重试次数")
+			}
+			if r.State == "interrupted" && r.ErrorCode == "SERVICE_INTERRUPTED" && r.ElapsedSeconds >= r.BudgetSeconds {
+				r.State, r.ErrorCode, r.Error = "timed_out", "TASK_TIMEOUT", "累计执行时间达到任务上限"
+				r.EndedAt = time.Now().UTC()
+			}
+			if r.State != previousState {
+				if err := store.SaveRun(r.ID, r.State, r); err != nil {
+					cancel()
 					return nil, err
 				}
 			}
-			e.current[r.ID] = &r
+			if reserved(r.State) {
+				e.current[r.ID] = &r
+			}
 			if r.State == "queued" {
 				e.pending = append(e.pending, &r)
 			}
 		}
+		if len(records) < 100 {
+			break
+		}
 	}
-	slices.SortFunc(e.pending, func(a, b *Run) int { return int(a.ID - b.ID) })
+	slices.SortFunc(e.pending, func(a, b *Run) int { return cmp.Compare(a.ID, b.ID) })
 	e.cron = cron.New(cron.WithLocation(location), cron.WithChain(cron.Recover(cron.DefaultLogger)))
 	if err := e.Schedules(); err != nil {
+		cancel()
 		return nil, err
 	}
 	return e, nil
@@ -190,8 +223,11 @@ func (e *Engine) Start() {
 			case <-ticker.C:
 				e.mu.Lock()
 				spaceErr := e.storageCheck()
+				if spaceErr != nil && !errors.Is(spaceErr, mirrors.ErrLowSpace) {
+					slog.Error("check mirror capacity", "error", spaceErr)
+				}
 				for id, a := range e.working {
-					if spaceErr != nil {
+					if errors.Is(spaceErr, mirrors.ErrLowSpace) {
 						a.cancel(spaceErr)
 					}
 					r := e.current[id]
@@ -211,7 +247,9 @@ func (e *Engine) Close() {
 	<-e.cron.Stop().Done()
 	e.mu.Lock()
 	for _, a := range e.working {
-		a.intent = "interrupted"
+		if a.intent == "" {
+			a.intent = "interrupted"
+		}
 		a.cancel(errors.New("service shutdown"))
 	}
 	e.mu.Unlock()
@@ -260,8 +298,11 @@ func (e *Engine) ApplyConfig(c config.Config, revision string, token, proxy *str
 	if err != nil {
 		return err
 	}
-	e.mirror.Restrict(c.Sources)
-	return e.Schedules()
+	reconcileErr := e.mirror.Reconcile(e.ctx, e.cfg.Current().Sources)
+	if reconcileErr != nil {
+		reconcileErr = fmt.Errorf("配置已保存，但发布目录接入失败，请修复后重新载入配置: %w", reconcileErr)
+	}
+	return errors.Join(reconcileErr, e.Schedules())
 }
 
 func (e *Engine) Reload() error {
@@ -284,10 +325,15 @@ func (e *Engine) Reload() error {
 	if err != nil {
 		return err
 	}
-	e.mirror.Restrict(e.cfg.Current().Sources)
-	return e.Schedules()
+	reconcileErr := e.mirror.Reconcile(e.ctx, e.cfg.Current().Sources)
+	if reconcileErr != nil {
+		reconcileErr = fmt.Errorf("配置已载入，但发布目录接入失败，请修复后重新载入配置: %w", reconcileErr)
+	}
+	return errors.Join(reconcileErr, e.Schedules())
 }
 func (e *Engine) Enqueue(sourceID, trigger string) (*Run, error) {
+	e.configMu.Lock()
+	defer e.configMu.Unlock()
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.cfg.View().RestartRequired {
@@ -494,6 +540,17 @@ func (e *Engine) worker() {
 			return
 		}
 		if e.mirror.Busy() {
+			e.mu.Lock()
+			for _, r := range e.pending {
+				if r.State == "queued" && r.Progress.Phase != "waiting_downloads" {
+					r.Progress.Phase = "waiting_downloads"
+					e.event(r, "公开下载繁忙，保持排队；负载降低后自动执行")
+					if err := e.save(r); err != nil {
+						slog.Error("save download wait", "error", err)
+					}
+				}
+			}
+			e.mu.Unlock()
 			select {
 			case <-e.ctx.Done():
 				return
@@ -707,10 +764,21 @@ func (e *Engine) execute(ctx context.Context, id int64, snapshot Snapshot) error
 				run.Progress = p
 			}
 		}
-		err = e.runner.Run(ctx, syncer.Task{Source: s, Settings: settings, Directory: work, Candidate: candidate, Token: token}, emit, &redactedWriter{writer: log, secrets: secrets})
-		closeErr := log.Close()
+		writer := &redactedWriter{writer: log, secrets: secrets}
+		err = e.runner.Run(ctx, syncer.Task{Source: s, Settings: settings, Directory: work, Candidate: candidate, Token: token}, emit, writer)
+		closeErr := errors.Join(writer.Flush(), log.Close())
 		if err == nil {
 			err = closeErr
+		}
+		if err == nil {
+			e.mu.Lock()
+			r.Progress.Phase = "publish"
+			r.Progress.Percent, r.Progress.ETA = nil, nil
+			e.mu.Unlock()
+			_, err = e.mirror.Publish(ctx, s, id)
+			if _, ok := errors.AsType[*mirrors.ValidationError](err); ok {
+				err = &syncer.Failure{Code: "UPSTREAM_INCONSISTENT", Message: err.Error(), Retryable: true, SourceFailure: true}
+			}
 		}
 		e.mu.Lock()
 		r = e.current[id]
@@ -732,25 +800,19 @@ func (e *Engine) execute(ctx context.Context, id int64, snapshot Snapshot) error
 			return saveErr
 		}
 		if err == nil {
-			e.mu.Lock()
-			r.Progress.Phase = "publish"
-			r.Progress.Percent = nil
-			r.Progress.ETA = nil
-			e.mu.Unlock()
-			_, err = e.mirror.Publish(ctx, s, id)
-			return err
+			return nil
 		}
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
 		failure := syncer.AsFailure(err)
 		failure.Message = redact(failure.Message, secrets...)
+		// Source-local permanent failures can still use another mirror.
+		if s.Type == "rsync" && (failure.Retryable || failure.SourceFailure) && index+1 < len(candidates) {
+			continue
+		}
 		if !failure.Retryable {
 			return failure
-		}
-		// Try Rsync fallbacks before spending another retry round.
-		if s.Type == "rsync" && index+1 < len(candidates) {
-			continue
 		}
 		e.mu.Lock()
 		r = e.current[id]
@@ -764,6 +826,10 @@ func (e *Engine) execute(ctx context.Context, id int64, snapshot Snapshot) error
 		r.RetryCount++
 		delay := e.retryDelay * time.Duration(1<<min(r.RetryCount-1, 4))
 		r.RetryAt = time.Now().UTC().Add(delay)
+		if failure.RetryAt.After(r.RetryAt) {
+			r.RetryAt = failure.RetryAt
+			delay = time.Until(r.RetryAt)
+		}
 		r.CandidateIndex = 0
 		received, incomplete := receivedBytes(r.Attempts)
 		r.Progress = syncer.Progress{Phase: "retry", ReceivedBytes: received, ReceivedIncomplete: incomplete}
@@ -816,14 +882,57 @@ func redact(v string, secrets ...string) string {
 	return syncer.CleanLog(v)
 }
 
+// Keep possible secret prefixes between writes, even when the producer splits
+// a credential across chunks. Pending storage is bounded by the longest secret.
 type redactedWriter struct {
 	writer  io.Writer
 	secrets []string
+	pending []byte
 }
 
 func (w *redactedWriter) Write(p []byte) (int, error) {
-	_, err := io.WriteString(w.writer, redact(string(p), w.secrets...))
-	return len(p), err
+	w.pending = append(w.pending, p...)
+	return len(p), w.flush(false)
+}
+func (w *redactedWriter) Flush() error { return w.flush(true) }
+func (w *redactedWriter) flush(final bool) error {
+	var out strings.Builder
+	i := 0
+	text := string(w.pending)
+	for i < len(w.pending) {
+		rest := text[i:]
+		matched, partial := "", false
+		for _, secret := range w.secrets {
+			if secret == "" {
+				continue
+			}
+			if strings.HasPrefix(rest, secret) && len(secret) > len(matched) {
+				matched = secret
+			}
+			if !final && len(rest) < len(secret) && strings.HasPrefix(secret, rest) {
+				partial = true
+			}
+		}
+		if partial {
+			break
+		}
+		if matched != "" {
+			out.WriteString("[REDACTED]")
+			i += len(matched)
+			continue
+		}
+		if !final && !utf8.FullRune(w.pending[i:]) {
+			break
+		}
+		_, n := utf8.DecodeRune(w.pending[i:])
+		out.Write(w.pending[i : i+n])
+		i += n
+	}
+	if _, err := io.WriteString(w.writer, syncer.CleanLog(out.String())); err != nil {
+		return err
+	}
+	w.pending = append(w.pending[:0], w.pending[i:]...)
+	return nil
 }
 func (e *Engine) Schedules() error {
 	e.mu.Lock()
@@ -873,6 +982,16 @@ func (e *Engine) Log(id int64, attempt int, offset int64) (string, int64, error)
 		return "", 0, err
 	}
 	b, err := io.ReadAll(io.LimitReader(f, min(128<<10, max(0, size-offset))))
+	// Do not consume a partial UTF-8 rune at the byte budget or a live append.
+	if len(b) > 0 {
+		start := len(b) - 1
+		for start > 0 && !utf8.RuneStart(b[start]) {
+			start--
+		}
+		if !utf8.FullRune(b[start:]) {
+			b = b[:start]
+		}
+	}
 	return syncer.CleanLog(string(b)), offset + int64(len(b)), err
 }
 
@@ -1000,7 +1119,7 @@ func (e *Engine) clearRunLogs(ctx context.Context, r Run) (cleared int, err erro
 		// fails. Missing files can be marked again after a persistence failure.
 		saveErr := e.save(&r)
 		if saveErr != nil {
-			return 0, errors.Join(err, saveErr)
+			return cleared, errors.Join(err, saveErr)
 		}
 		e.mu.Lock()
 		if current := e.current[r.ID]; current != nil {

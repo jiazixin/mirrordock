@@ -370,8 +370,12 @@ func (c Config) Validate(file string) error {
 		if s.Dest == "" || path.Clean(s.Dest) != s.Dest || strings.HasPrefix(s.Dest, "/") || strings.ContainsAny(s.Dest, "\\\x00\r\n") {
 			return fmt.Errorf("%s 的 dest 必须是规范相对目录", s.ID)
 		}
+		first, _, _ := strings.Cut(s.Dest, "/")
+		if first == "admin" || first == "api" || first == "favicon.ico" {
+			return fmt.Errorf("%s 的 dest 包含保留路径", s.ID)
+		}
 		for seg := range strings.SplitSeq(s.Dest, "/") {
-			if seg == ".." || seg == "." || strings.HasPrefix(seg, ".") || seg == "admin" || seg == "api" || seg == "favicon.ico" {
+			if seg == ".." || seg == "." || strings.HasPrefix(seg, ".") {
 				return fmt.Errorf("%s 的 dest 包含保留路径", s.ID)
 			}
 		}
@@ -423,6 +427,10 @@ func (c Config) Validate(file string) error {
 				if err != nil || u.Scheme != "rsync" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
 					return fmt.Errorf("%s 的来源必须是 rsync:// 地址", s.ID)
 				}
+				remote := strings.Trim(u.Path, "/")
+				if remote == "" || (strings.Contains(remote, "/") && !strings.HasSuffix(u.Path, "/")) {
+					return fmt.Errorf("%s 的 rsync 来源必须包含模块，模块内目录须以 / 结尾", s.ID)
+				}
 			}
 			for _, n := range []*int{s.Rsync.UID, s.Rsync.GID} {
 				if n != nil && (*n < 0 || int64(*n) >= math.MaxUint32) {
@@ -449,11 +457,6 @@ func (c Config) Validate(file string) error {
 			}
 			if DefaultBool(s.RepoSync.GPGCheck) && len(s.RepoSync.GPGKeys) == 0 {
 				return errors.New("GPG 检查需要 gpg_keys")
-			}
-			for _, v := range s.RepoSync.GPGKeys {
-				if err := SourceURL(v); err != nil {
-					return err
-				}
 			}
 			for _, a := range s.RepoSync.Architectures {
 				if !idPattern.MatchString(a) {

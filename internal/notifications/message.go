@@ -61,8 +61,10 @@ func resultMessage(r *runs.Run, zone string) (Message, bool) {
 	p := r.Progress
 	total := p.Files
 	count := fmt.Sprintf("总数：%d · 成功：%d（其中复用：%d） · 失败：%d · 未完成：%d", total, p.Success, p.Skipped, p.Failed, max(total-p.Success-p.Failed, 0))
-	if r.Type == "rsync" || r.Type == "reposync" {
-		count += "\n统计说明：执行器未报告的子项计数按 0 展示；退出失败不推算失败文件数。"
+	if r.Type == "rsync" {
+		count = fmt.Sprintf("条目总数（含目录及未变化文件）：%d · 本次传输普通文件：%d\n退出失败不推算失败或未完成文件数。", total, p.Success)
+	} else if r.Type == "reposync" {
+		count = "包数量：执行器未提供可靠统计；不推算失败或未完成文件数。"
 	}
 	settings := r.Snapshot.Settings
 	detail := fmt.Sprintf("累计预算 %s", settings.TaskTimeout)

@@ -95,6 +95,7 @@ sources:
     await page.getByLabel('用户名', { exact: true }).fill('admin')
     await page.getByLabel('管理员密码').fill('notification-fixture-password')
     await page.getByRole('button', { name: '登录管理台' }).click()
+    await page.getByLabel('Rsync I/O 超时').fill('9m')
     await page.getByRole('tab', { name: '通知设置', exact: true }).click()
     await expect(page.locator('.notification-card')).toHaveCount(5)
     const browserZone = await page.evaluate(() => Intl.DateTimeFormat().resolvedOptions().timeZone)
@@ -107,6 +108,28 @@ sources:
     await webhook.getByRole('button', { name: '保存设置' }).click()
     await expect(page.locator('.toast-card').last().getByRole('status')).toContainText('设置已保存')
     await expect(webhook.getByLabel('推送地址')).toHaveValue('')
+    await page.getByRole('tab', { name: 'Rsync', exact: true }).click()
+    await expect(page.getByLabel('Rsync I/O 超时')).toHaveValue('9m')
+    const current = await (await page.request.get(base + '/api/config')).json()
+    current.config.settings.rsync.io_timeout = '8m'
+    const changed = await page.request.put(base + '/api/config', {
+      headers: { 'X-MirrorDock-Request': '1' },
+      data: { config: current.config, revision: current.revision },
+    })
+    expect(changed.status()).toBe(200)
+    await page.getByRole('button', { name: '重新载入配置', exact: true }).click()
+    await expect(page.getByRole('alert')).toContainText('未保存草稿已保留')
+    await expect(page.getByLabel('Rsync I/O 超时')).toHaveValue('9m')
+    await expect(page.getByRole('button', { name: '保存设置', exact: true })).toBeDisabled()
+    await page.getByRole('button', { name: '载入最新设置（丢弃草稿）', exact: true }).click()
+    await expect(page.getByLabel('Rsync I/O 超时')).toHaveValue('8m')
+    await page.getByLabel('Rsync I/O 超时').fill('1s')
+    await page.getByRole('button', { name: '保存设置', exact: true }).click()
+    await expect(page.getByRole('button', { name: '保存设置', exact: true })).toBeEnabled()
+    await page.getByRole('tab', { name: '系统配置', exact: true }).click()
+    await expect(page.getByText('程序版本：', { exact: false })).toBeVisible()
+    await page.getByRole('tab', { name: '通知设置', exact: true }).click()
+
     await expect(webhook.getByLabel('推送地址')).toHaveAttribute(
       'placeholder',
       '已保存，留空保持不变',

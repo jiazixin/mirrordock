@@ -263,7 +263,7 @@ func TestRestartKeepsInterruptedRun(t *testing.T) {
 	}
 	defer restored.Close()
 	r, err = restored.Get(r.ID)
-	if err != nil || r.State != "interrupted" || r.ElapsedSeconds < .02 {
+	if err != nil || r.State != "queued" || r.ElapsedSeconds < .02 {
 		t.Fatal(r, err)
 	}
 	if _, err = restored.Enqueue("test", "manual"); err == nil {
@@ -432,10 +432,9 @@ func TestRetryWaitHonorsBudgetPauseCancelAndRestart(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
-					e.Start()
 					t.Cleanup(e.Close)
 					r, err = e.Get(r.ID)
-					if err != nil || r.State != "interrupted" {
+					if err != nil || r.State != "queued" {
 						t.Fatal(r, err)
 					}
 				}
@@ -445,7 +444,9 @@ func TestRetryWaitHonorsBudgetPauseCancelAndRestart(t *testing.T) {
 				e.mu.Lock()
 				e.current[r.ID].RetryAt = time.Now().Add(-time.Second)
 				e.mu.Unlock()
-				if err = e.Action(r.ID, "resume"); err != nil {
+				if action == "restart" {
+					e.Start()
+				} else if err = e.Action(r.ID, "resume"); err != nil {
 					t.Fatal(err)
 				}
 				waitRetryPhase(t, e, r.ID)

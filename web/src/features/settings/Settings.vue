@@ -20,10 +20,42 @@ const draft = ref<Configuration>()
 const token = ref('')
 const clearToken = ref(false)
 const busy = ref(false)
+const baseline = ref<Configuration>()
+const draftRevision = ref('')
+const conflict = ref(false)
+function adoptLatest() {
+  if (!state.config) return
+  draft.value = clone(state.config.config)
+  baseline.value = clone(state.config.config)
+  draftRevision.value = state.config.revision
+  token.value = ''
+  clearToken.value = false
+  conflict.value = false
+}
 watch(
   () => state.config?.revision,
   () => {
-    if (state.config) draft.value = clone(state.config.config)
+    if (!state.config || busy.value) return
+    const dirty =
+      draft.value &&
+      baseline.value &&
+      (JSON.stringify(draft.value.settings) !== JSON.stringify(baseline.value.settings) ||
+        token.value ||
+        clearToken.value)
+    if (!dirty) {
+      adoptLatest()
+      return
+    }
+    if (JSON.stringify(state.config.config.settings) === JSON.stringify(baseline.value?.settings)) {
+      // Notification/source-only changes can merge without touching settings drafts.
+      const settings = draft.value!.settings
+      draft.value = clone(state.config.config)
+      draft.value.settings = settings
+      baseline.value = clone(state.config.config)
+      draftRevision.value = state.config.revision
+    } else {
+      conflict.value = true
+    }
   },
   { immediate: true },
 )
@@ -41,16 +73,16 @@ function navigateTab(event: KeyboardEvent, index: number) {
   button.parentElement?.querySelectorAll<HTMLButtonElement>('[role="tab"]')[next]?.focus()
 }
 async function save() {
-  if (!draft.value) return
+  if (!draft.value || conflict.value) return
   busy.value = true
   try {
     await saveConfiguration(
       draft.value,
       clearToken.value ? '' : token.value || undefined,
       draft.value.settings.github.proxy,
+      draftRevision.value,
     )
-    token.value = ''
-    clearToken.value = false
+    adoptLatest()
   } finally {
     busy.value = false
   }
@@ -83,7 +115,7 @@ async function reload() {
         <button
           v-if="['execution', 'rsync', 'github'].includes(activeTab)"
           class="button primary"
-          :disabled="busy"
+          :disabled="busy || conflict"
           @click="perform(save)"
         >
           <Save :size="16" />{{ busy ? '保存中…' : '保存设置' }}
@@ -95,6 +127,19 @@ async function reload() {
       class="alert warning"
     >
       配置文件中的账号、日志、监听、目录或 TLS 已修改，请重启程序后生效。
+    </div>
+    <div
+      v-if="conflict"
+      class="alert warning"
+      role="alert"
+    >
+      设置已在其他位置修改，未保存草稿已保留。请复制需要保留的内容，再载入最新设置后重新编辑。
+      <button
+        class="button"
+        @click="adoptLatest"
+      >
+        载入最新设置（丢弃草稿）
+      </button>
     </div>
     <div
       class="tabs settings-tabs"
@@ -249,7 +294,7 @@ async function reload() {
             <OptionCard
               v-model="draft.settings.github.prune_old_releases"
               label="成功后清理超出数量的旧版本"
-              description="本轮同步成功后清理旧版本"
+              description="同步成功后清理旧版本及保留版本内已移除的附件"
             />
           </div>
         </div>
@@ -328,6 +373,7 @@ async function reload() {
       <article class="panel active-config">
         <h2>配置文件</h2>
         <code>{{ state.config?.file }}</code>
+        <p>程序版本：{{ state.info?.version ?? '未知' }}</p>
       </article>
       <EnvironmentChecks />
     </div>

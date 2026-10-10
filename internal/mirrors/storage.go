@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 )
 
@@ -189,4 +190,26 @@ func (m *Manager) CleanupWork(ctx context.Context) error {
 
 func fmtIdentity(dev, ino uint64, sec, nsec int64) string {
 	return fmt.Sprintf("%d:%d:%d:%d", dev, ino, sec, nsec)
+}
+
+// Only called during startup before probes and task execution. These reserved
+// prefixes are generated exclusively by MirrorDock; unknown work stays intact.
+func (m *Manager) cleanupStaleTemporary(ctx context.Context) error {
+	for _, area := range []string{"work", "published"} {
+		dir := filepath.Join(m.Root, ".mirrordock", area)
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			return err
+		}
+		for _, entry := range entries {
+			probe := strings.HasPrefix(entry.Name(), ".reflink-probe-")
+			legacyDNF := area == "work" && strings.HasPrefix(entry.Name(), "dnf-private-")
+			if entry.IsDir() && (probe || legacyDNF) {
+				if err := removeGeneration(ctx, filepath.Join(dir, entry.Name())); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
 }

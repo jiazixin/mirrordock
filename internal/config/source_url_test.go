@@ -41,3 +41,18 @@ func TestSourceURLsRejectCredentialsWithoutRestrictingAssetURLs(t *testing.T) {
 		t.Fatal("unused credential URL accepted")
 	}
 }
+
+func TestRsyncModuleAndDirectoryContentsValidation(t *testing.T) {
+	c := Defaults()
+	c.Auth = Auth{Username: "admin", Password: "fixture"}
+	c.Path = "./state"
+	c.MirrorRoot = "./mirror"
+	c.Sources = []Source{{ID: "repo", Type: "rsync", Name: "Repo", Dest: "nested/api", Upstreams: map[string]string{}}}
+	file := filepath.Join(t.TempDir(), "config.yaml")
+	for address, want := range map[string]bool{"rsync://host": false, "rsync://host/": false, "rsync://host/module": true, "rsync://host/module/path": false, "rsync://host/module/path/": true} {
+		c.Sources[0].Upstreams["src1"] = address
+		if err := c.Validate(file); (err == nil) != want {
+			t.Fatal(address, err)
+		}
+	}
+}

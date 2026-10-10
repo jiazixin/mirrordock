@@ -38,10 +38,12 @@ type Task struct {
 	Token     string
 }
 type Failure struct {
-	Code      string
-	Message   string
-	Retryable bool
-	ExitCode  int
+	Code          string
+	Message       string
+	Retryable     bool
+	SourceFailure bool
+	RetryAt       time.Time
+	ExitCode      int
 }
 
 func (e *Failure) Error() string { return e.Code + ": " + e.Message }
@@ -106,13 +108,15 @@ func RsyncArgs(t Task) []string {
 }
 func Classify(code int, message string) error {
 	switch code {
+	case 2, 3:
+		return &Failure{Code: "UPSTREAM_ERROR", Message: message, SourceFailure: true, ExitCode: code}
 	case 5:
 		permanent := rsyncPermanentLine(message) || strings.Contains(strings.ToLower(message), "permission denied")
-		return &Failure{Code: "UPSTREAM_ERROR", Message: message, Retryable: !permanent, ExitCode: code}
+		return &Failure{Code: "UPSTREAM_ERROR", Message: message, Retryable: !permanent, SourceFailure: true, ExitCode: code}
 	case 10, 12, 30, 35:
-		return &Failure{Code: "UPSTREAM_ERROR", Message: message, Retryable: true, ExitCode: code}
+		return &Failure{Code: "UPSTREAM_ERROR", Message: message, Retryable: true, SourceFailure: true, ExitCode: code}
 	case 23, 24:
-		return &Failure{Code: "PARTIAL_TRANSFER", Message: message, Retryable: !localFailureLine(message), ExitCode: code}
+		return &Failure{Code: "PARTIAL_TRANSFER", Message: message, Retryable: !localFailureLine(message), SourceFailure: !localFailureLine(message), ExitCode: code}
 	default:
 		return &Failure{Code: "PROCESS_FAILED", Message: message, ExitCode: code}
 	}
@@ -127,7 +131,21 @@ func localFailureLine(message string) bool {
 }
 func reposync(ctx context.Context, t Task, emit func(Progress), log io.Writer) error {
 	cfg := t.Source.RepoSync
-	private, err := os.MkdirTemp(filepath.Dir(t.Directory), "dnf-private-")
+	if !config.DefaultBool(cfg.DownloadMetadata) {
+		// Do not expose metadata cloned from an earlier complete-repository run.
+		if err := os.RemoveAll(filepath.Join(t.Directory, "repodata")); err != nil {
+			return err
+		}
+	}
+	if err := os.MkdirAll(t.Directory, 0755); err != nil {
+		return err
+	}
+	private := filepath.Join(t.Directory, ".mirrordock-dnf")
+	// A previous process may have stopped before its deferred cleanup.
+	if err := os.RemoveAll(private); err != nil {
+		return err
+	}
+	err := os.Mkdir(private, 0700)
 	if err != nil {
 		return err
 	}

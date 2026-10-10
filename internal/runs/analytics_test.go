@@ -118,14 +118,14 @@ func TestAnalyticsReposyncFactsAndTypeIsolation(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := a.Summary
-	if a.Type != "reposync" || s.Runs != 8 || s.Succeeded != 2 || s.Failed != 3 || s.Cancelled != 1 || s.Active != 2 || s.DurationSamples != 5 || s.ElapsedSeconds != 60 || s.RetriedRuns != 1 || s.Attempts != 8 || s.FailedAttempts != 4 {
+	if a.Type != "reposync" || s.Runs != 8 || s.Succeeded != 2 || s.Failed != 2 || s.Cancelled != 1 || s.Active != 3 || s.DurationSamples != 4 || s.ElapsedSeconds != 50 || s.RetriedRuns != 1 || s.Attempts != 8 || s.FailedAttempts != 4 {
 		t.Fatalf("reposync summary: %+v", a)
 	}
-	if len(a.Sources) != 2 || a.Sources[0].Name != "RPM 历史源" || len(a.Errors) != 2 || a.Errors[0].Code != "TASK_TIMEOUT" || a.Errors[0].Count != 2 || a.Days[5].Runs != 1 || a.Days[6].Runs != 7 {
+	if len(a.Sources) != 2 || a.Sources[0].Name != "RPM 历史源" || len(a.Errors) != 1 || a.Errors[0].Code != "TASK_TIMEOUT" || a.Errors[0].Count != 2 || a.Days[5].Runs != 1 || a.Days[6].Runs != 7 {
 		t.Fatalf("reposync days/ranking/errors: %+v", a)
 	}
 	filtered, err := Analyze(t.Context(), store, "reposync", "repo", 7, now, loc)
-	if err != nil || filtered.Summary.Runs != 7 || filtered.Summary.ElapsedSeconds != 40 || len(filtered.Sources) != 1 {
+	if err != nil || filtered.Summary.Runs != 7 || filtered.Summary.ElapsedSeconds != 30 || len(filtered.Sources) != 1 {
 		t.Fatal(filtered, err)
 	}
 }

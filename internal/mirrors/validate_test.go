@@ -21,7 +21,7 @@ func TestAPTReleaseCannotHideReferencesPastReadLimit(t *testing.T) {
 	if err := os.WriteFile(file, []byte("SHA256:\n "+strings.Repeat("0", 64)+" 12 missing/Packages\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := Validate(t.Context(), dir, "rsync"); err == nil || !strings.Contains(err.Error(), "missing/Packages") {
+	if err := Validate(t.Context(), dir, "rsync"); err == nil || !strings.Contains(err.Error(), "所有索引均缺失") {
 		t.Fatal("missing reference accepted", err)
 	}
 }

@@ -67,7 +67,7 @@ const resultParts = computed(() =>
   data.value
     ? [
         { label: '成功', count: data.value.summary.succeeded, color: '#315bea' },
-        { label: '失败 / 超时 / 中断', count: data.value.summary.failed, color: '#d66772' },
+        { label: '失败 / 超时', count: data.value.summary.failed, color: '#d66772' },
         { label: '已取消', count: data.value.summary.cancelled, color: '#a8b0bd' },
         { label: '未结束', count: data.value.summary.active, color: '#e8b15b' },
       ]
@@ -272,7 +272,7 @@ onBeforeUnmount(() => {
             {{
               metric === 'bytes'
                 ? '仅汇总成功任务的执行器字节快照，不代表实际网络流量。'
-                : '成功、失败、超时和中断任务的累计执行时间均值；无样本日期以 0 绘制。'
+                : '成功、失败和超时任务的累计执行时间均值；无样本日期以 0 绘制。'
             }}
           </p>
         </article>
@@ -305,7 +305,7 @@ onBeforeUnmount(() => {
             </div>
           </div>
           <p class="chart-footnote">
-            成功率 = 成功 ÷（成功 + 失败 + 超时 + 中断）。取消及未结束任务不计入。
+            成功率 = 成功 ÷（成功 + 失败 + 超时）。取消、中断及未结束任务不计入。
           </p>
         </article>
         <article class="panel insight-panel">

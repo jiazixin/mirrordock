@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"crypto/tls"
+	"database/sql"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
@@ -33,7 +34,9 @@ import (
 type App struct {
 	connections *connections
 	workers     sync.WaitGroup
+	serveMu     sync.Mutex
 
+	Version       string
 	Config        *config.Manager
 	Store         *database.Store
 	Mirrors       *mirrors.Manager
@@ -45,6 +48,7 @@ type App struct {
 	Server        *http.Server
 	once          sync.Once
 	progress      progressFrames
+	listing       progressFrames
 	sse           chan struct{}
 	closing       chan struct{}
 }
@@ -110,46 +114,110 @@ func OpenConfig(cfg *config.Manager) (*App, error) {
 	}
 	engine.ConfigValidator = notifier.ValidateConfig
 	engine.ConfigApplied = notifier.Sync
-	a := &App{Config: cfg, Store: store, Mirrors: m, Runs: engine, Notifications: notifier, auth: auth, location: location, lock: lock, sse: make(chan struct{}, 8), closing: make(chan struct{}), connections: &connections{entries: map[net.Conn]*connection{}, limit: connectionLimit()}}
-	m.ListingInfo = func(id string) mirrors.SourceListingInfo {
-		info := mirrors.SourceListingInfo{Next: engine.ScheduleInfo()[id]}
-		latest, _, err := engine.List("", id, 1, 0)
-		if err == nil && len(latest) > 0 {
-			info.State = latest[0].State
-			info.Last = latest[0].EndedAt
-			if info.Last.IsZero() {
-				completed, _, err := engine.List("succeeded", id, 1, 0)
-				if err == nil && len(completed) > 0 {
-					info.Last = completed[0].EndedAt
+	a := &App{Version: "dev", Config: cfg, Store: store, Mirrors: m, Runs: engine, Notifications: notifier, auth: auth, location: location, lock: lock, sse: make(chan struct{}, 8), closing: make(chan struct{}), connections: &connections{entries: map[net.Conn]*connection{}, limit: connectionLimit()}}
+	m.ListingInfo = func(ctx context.Context) map[string]mirrors.SourceListingInfo {
+		data, err := a.listing.get(ctx, func(ctx context.Context) ([]byte, error) {
+			latest, err := engine.Latest(ctx)
+			if err != nil {
+				return nil, err
+			}
+			infos := map[string]mirrors.SourceListingInfo{}
+			schedules := engine.ScheduleInfo()
+			for _, run := range latest {
+				infos[run.SourceID] = mirrors.SourceListingInfo{State: run.State, Last: run.EndedAt, Next: schedules[run.SourceID]}
+			}
+			missing := []string{}
+			for id, info := range infos {
+				if info.Last.IsZero() {
+					missing = append(missing, id)
 				}
 			}
+			if len(missing) > 0 {
+				queryCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+				completed, err := store.LatestSuccessfulRunsContext(queryCtx, missing)
+				cancel()
+				if err != nil {
+					return nil, err
+				}
+				for _, data := range completed {
+					var run runs.Run
+					if err := json.Unmarshal(data, &run); err != nil {
+						return nil, err
+					}
+					info := infos[run.SourceID]
+					info.Last = run.EndedAt
+					infos[run.SourceID] = info
+				}
+			}
+			for id, next := range schedules {
+				info := infos[id]
+				info.Next = next
+				infos[id] = info
+			}
+			return json.Marshal(infos)
+		})
+		if err != nil {
+			return nil
 		}
-		return info
+		var infos map[string]mirrors.SourceListingInfo
+		_ = json.Unmarshal(data, &infos)
+		return infos
 	}
+
 	a.Server = &http.Server{Addr: net.JoinHostPort(c.Listen, strconv.Itoa(c.Port)), Handler: a.Handler(), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 90 * time.Second, MaxHeaderBytes: 64 << 10, TLSConfig: &tls.Config{MinVersion: tls.VersionTLS12}, ConnState: a.connections.state, ErrorLog: slog.NewLogLogger(slog.Default().Handler(), slog.LevelError)}
 	a.workers.Go(a.watchConnections)
 	return a, nil
 }
 func (a *App) Serve() error {
+	a.serveMu.Lock()
+	select {
+	case <-a.closing:
+		a.serveMu.Unlock()
+		return http.ErrServerClosed
+	default:
+	}
+	unlock := true
+	defer func() {
+		if unlock {
+			a.serveMu.Unlock()
+		}
+	}()
+	c := a.Config.Startup()
+	// Load certificates and bind before any queued task can leave the queue.
+	if c.TLS.Cert != "" {
+		certificate, err := tls.LoadX509KeyPair(config.Resolve(a.Config.File(), c.TLS.Cert), config.Resolve(a.Config.File(), c.TLS.Key))
+		if err != nil {
+			return err
+		}
+		a.Server.TLSConfig.Certificates = []tls.Certificate{certificate}
+	}
+	listener, err := net.Listen("tcp", a.Server.Addr)
+	if err != nil {
+		return err
+	}
+	defer listener.Close()
 	a.Notifications.Start()
 	a.Runs.Start()
-	c := a.Config.Startup()
+	a.serveMu.Unlock()
+	unlock = false
 	if c.TLS.Cert != "" {
-		return a.Server.ListenAndServeTLS(config.Resolve(a.Config.File(), c.TLS.Cert), config.Resolve(a.Config.File(), c.TLS.Key))
+		return a.Server.ServeTLS(listener, "", "")
 	}
-	return a.Server.ListenAndServe()
+	return a.Server.Serve(listener)
 }
 func (a *App) Close(ctx context.Context) error {
 	var err error
 	a.once.Do(func() {
+		a.serveMu.Lock()
 		close(a.closing)
+		a.serveMu.Unlock()
 		a.workers.Wait()
-		a.Runs.Close()
-		a.Notifications.Close()
 		err = a.Server.Shutdown(ctx)
 		if err != nil {
 			_ = a.Server.Close()
 		}
+		a.Runs.Close()
+		a.Notifications.Close()
 		err = errors.Join(err, a.Mirrors.Close(), a.Store.Close(), a.lock.Close())
 	})
 	return err
@@ -186,6 +254,12 @@ func (a *App) Handler() http.Handler {
 	})
 	mux.Handle("/api/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
+		select {
+		case <-a.closing:
+			respond(w, 503, map[string]string{"error": "服务正在关闭"})
+			return
+		default:
+		}
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		if r.Method != "GET" && r.Method != "HEAD" && !csrf(r) {
 			respond(w, 403, map[string]string{"error": "请求未通过同源校验"})
@@ -223,7 +297,7 @@ func failure(w http.ResponseWriter, err error) {
 	respond(w, status, map[string]string{"error": err.Error()})
 }
 func (a *App) login(w http.ResponseWriter, r *http.Request) {
-	if a.auth.limited() {
+	if a.auth.limited(clientIP(r)) {
 		respond(w, 429, map[string]string{"error": "尝试过多，一分钟后重试"})
 		return
 	}
@@ -240,6 +314,7 @@ func (a *App) login(w http.ResponseWriter, r *http.Request) {
 		respond(w, 401, map[string]string{"error": err.Error()})
 		return
 	}
+	a.auth.resetLimit(clientIP(r))
 	http.SetCookie(w, &http.Cookie{Name: "mirrordock_session", Value: token, Path: "/api/", HttpOnly: true, Secure: r.TLS != nil, SameSite: http.SameSiteStrictMode, MaxAge: 43200})
 	respond(w, 200, map[string]any{"ok": true, "username": a.auth.username})
 }
@@ -322,7 +397,11 @@ func (a *App) getRun(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	run, err := a.Runs.GetContext(r.Context(), id)
 	if err != nil {
-		respond(w, 404, map[string]string{"error": "记录不存在"})
+		if errors.Is(err, sql.ErrNoRows) {
+			respond(w, 404, map[string]string{"error": "记录不存在"})
+		} else {
+			respond(w, 503, map[string]string{"error": "记录查询暂时不可用，请重试"})
+		}
 		return
 	}
 	respond(w, 200, run)
@@ -372,7 +451,7 @@ func (a *App) logs(w http.ResponseWriter, r *http.Request) {
 func (a *App) clearLogs(w http.ResponseWriter, r *http.Request) {
 	count, err := a.Runs.ClearLogsContext(r.Context())
 	if err != nil {
-		failure(w, err)
+		respond(w, http.StatusServiceUnavailable, map[string]any{"error": syncer.CleanLog(err.Error()), "cleared": count})
 		return
 	}
 	respond(w, 200, map[string]int{"cleared": count})
@@ -389,7 +468,7 @@ func (a *App) info(w http.ResponseWriter, r *http.Request) {
 		return config.Resolve(file, value)
 	}
 	respond(w, 200, map[string]any{
-		"timezone": a.location.String(), "utc_offset_seconds": offset, "version": "1.0.0",
+		"timezone": a.location.String(), "utc_offset_seconds": offset, "version": a.Version,
 		"go": strings.TrimPrefix(runtime.Version(), "go"), "os": runtime.GOOS, "arch": runtime.GOARCH, "cpus": runtime.NumCPU(),
 		"tls": c.TLS.Cert != "", "publications": a.Mirrors.Publications(), "downloads": a.Mirrors.Stats(), "schedules": a.Runs.ScheduleInfo(),
 		"deployment": map[string]any{

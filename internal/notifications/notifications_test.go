@@ -218,7 +218,7 @@ func TestActivationFilteringAndSnapshots(t *testing.T) {
 	saveChannel(t, s, "webhook", Update{})
 	createRun(t, store, "failed", 1)
 	saveChannel(t, s, "webhook", Update{Enabled: true})
-	createRun(t, store, "interrupted", 0)
+	createRun(t, store, "failed", 0)
 	if err = s.Scan(); err != nil {
 		t.Fatal(err)
 	}
@@ -489,7 +489,7 @@ func TestTimezoneContentAndKeyBackup(t *testing.T) {
 	}
 }
 
-func TestTerminalResultSurvivesQuickResume(t *testing.T) {
+func TestInterruptedDoesNotConsumeFinalNotification(t *testing.T) {
 	s, _, store := fixture(t)
 	var got Message
 	receiver := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -509,8 +509,19 @@ func TestTerminalResultSurvivesQuickResume(t *testing.T) {
 	if err := s.Scan(); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(got.Title, "服务中断") {
-		t.Fatal("terminal transition lost on resume", got)
+	if got.Title != "" {
+		t.Fatal("interrupted sent a final notification", got)
+	}
+	r.State = "succeeded"
+	r.EndedAt = time.Now().UTC()
+	if err := store.SaveRun(r.ID, r.State, r); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Scan(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got.Title, "任务成功") {
+		t.Fatal("final result was lost", got)
 	}
 }
 

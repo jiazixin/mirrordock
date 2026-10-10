@@ -138,7 +138,7 @@ func (s *Store) CreateRun(source, state, created string, value any) (int64, erro
 }
 func terminal(state string) bool {
 	switch state {
-	case "succeeded", "failed", "timed_out", "cancelled", "interrupted":
+	case "succeeded", "failed", "timed_out", "cancelled":
 		return true
 	}
 	return false
@@ -178,12 +178,28 @@ func (s *Store) SaveRun(id int64, state string, value any) error {
 	if n != 1 {
 		return fmt.Errorf("run %d missing", id)
 	}
-	// Preserve the first terminal result even if an interrupted task is resumed
-	// before the independent notification worker scans it.
+	// Only irreversible terminal outcomes enter the notification result stream.
 	if _, err = tx.Exec("INSERT OR IGNORE INTO run_results(id,data) VALUES(?,?)", id, b); err != nil {
 		return err
 	}
 	return tx.Commit()
+}
+
+func (s *Store) RecoverableRuns(ctx context.Context, after int64) ([][]byte, error) {
+	rows, err := s.ReadDB.QueryContext(ctx, "SELECT data FROM runs WHERE id>? AND state IN ('queued','running','pausing','paused','interrupted') ORDER BY id LIMIT 100", after)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := [][]byte{}
+	for rows.Next() {
+		var b []byte
+		if err := rows.Scan(&b); err != nil {
+			return nil, err
+		}
+		out = append(out, b)
+	}
+	return out, rows.Err()
 }
 
 func (s *Store) Run(id int64, out any) error {
@@ -203,7 +219,7 @@ func (s *Store) RunContext(ctx context.Context, id int64, out any) error {
 // NOT INDEXED still permits the integer primary key: the state index would
 // scan and sort the remaining terminal history separately on every page.
 const logCleanupQuery = `SELECT data FROM runs NOT INDEXED
- WHERE id>? AND id<=? AND state IN ('succeeded','failed','timed_out','cancelled','interrupted')
+ WHERE id>? AND id<=? AND state IN ('succeeded','failed','timed_out','cancelled')
  ORDER BY id LIMIT 100`
 
 func (s *Store) LogCleanupPage(ctx context.Context, after, through int64) ([][]byte, error) {
@@ -247,11 +263,19 @@ func (s *Store) LatestRuns(sources []string) ([][]byte, error) {
 }
 
 func (s *Store) LatestRunsContext(ctx context.Context, sources []string) ([][]byte, error) {
+	return s.latestRunsContext(ctx, sources, latestRunsQuery)
+}
+func (s *Store) LatestSuccessfulRunsContext(ctx context.Context, sources []string) ([][]byte, error) {
+	return s.latestRunsContext(ctx, sources, `SELECT r.data FROM json_each(?) AS source
+ JOIN runs r ON r.id=(SELECT id FROM runs WHERE source_id=source.value AND state='succeeded' ORDER BY id DESC LIMIT 1)
+ ORDER BY CAST(source.key AS INTEGER)`)
+}
+func (s *Store) latestRunsContext(ctx context.Context, sources []string, query string) ([][]byte, error) {
 	data, err := json.Marshal(sources)
 	if err != nil {
 		return nil, err
 	}
-	rows, err := s.ReadDB.QueryContext(ctx, latestRunsQuery, string(data))
+	rows, err := s.ReadDB.QueryContext(ctx, query, string(data))
 	if err != nil {
 		return nil, err
 	}

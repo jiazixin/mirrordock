@@ -62,7 +62,7 @@ type Manager struct {
 	bytes         atomic.Int64
 	cache         *metadataCache
 	roots         *rootCache
-	ListingInfo   func(string) SourceListingInfo
+	ListingInfo   func(context.Context) map[string]SourceListingInfo
 }
 
 func New(root string, store *database.Store, sources []config.Source) (*Manager, error) {
@@ -84,6 +84,10 @@ func New(root string, store *database.Store, sources []config.Source) (*Manager,
 	if err != nil {
 		return nil, err
 	}
+	if err := m.cleanupStaleTemporary(context.Background()); err != nil {
+		_ = m.Close()
+		return nil, err
+	}
 	_ = m.ProbeReflink(context.Background())
 	ready := false
 	defer func() {
@@ -91,49 +95,99 @@ func New(root string, store *database.Store, sources []config.Source) (*Manager,
 			_ = m.Close()
 		}
 	}()
-	records, err := store.Publications()
-	if err != nil {
+	if err := m.Reconcile(context.Background(), sources); err != nil {
 		return nil, err
+	}
+
+	ready = true
+	return m, nil
+}
+
+// Reconcile restores retained publications and imports existing directories for
+// both startup and configuration changes. It serializes with publication/GC.
+func (m *Manager) Reconcile(ctx context.Context, sources []config.Source) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.restrictLocked(sources)
+	configured := map[string]bool{}
+	for _, source := range sources {
+		configured[source.ID] = true
+	}
+	records, err := m.store.Publications()
+	if err != nil {
+		return err
 	}
 	byID := map[string]Publication{}
 	for _, b := range records {
 		var p Publication
 		if err = json.Unmarshal(b, &p); err != nil {
-			return nil, err
+			return err
 		}
 		byID[p.SourceID] = p
 	}
 	for _, s := range sources {
 		p, ok := byID[s.ID]
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		oldDest := ""
 		if ok && p.Dest != s.Dest {
+			oldDest = p.Dest
+			p.Dest = s.Dest
+		}
+		if !ok {
+			// A removed source may leave a valid publication under the same dest.
+			// Reuse its immutable generation only if it has no other configured owner.
+			aliasTarget, _ := filepath.EvalSymlinks(filepath.Join(m.Root, filepath.FromSlash(s.Dest)))
+			for _, previous := range byID {
+				if previous.Dest != s.Dest || configured[previous.SourceID] || (previous.Type != "" && previous.Type != s.Type) {
+					continue
+				}
+				// Several removed IDs may retain this destination. Prefer the
+				// existing alias, otherwise the newest committed generation.
+				matches, selectedMatches := previous.Current.Directory == aliasTarget, p.Current.Directory == aliasTarget
+				newer := previous.Current.PublishedAt.After(p.Current.PublishedAt) || (previous.Current.PublishedAt.Equal(p.Current.PublishedAt) && previous.SourceID < p.SourceID)
+				if !ok || (matches && !selectedMatches) || (matches == selectedMatches && newer) {
+					p, ok = previous, true
+				}
+			}
+			if ok {
+				p.SourceID = s.ID
+			}
+		}
+		if live := m.table.Load().entries[s.Dest]; live != nil && live.Publication.SourceID == s.ID && live.Publication.Type == s.Type {
 			continue
 		}
 		if !ok {
-			local := filepath.Join(root, filepath.FromSlash(s.Dest))
+			local := filepath.Join(m.Root, filepath.FromSlash(s.Dest))
 			if st, e := os.Stat(local); e == nil && st.IsDir() {
 				real, e := filepath.EvalSymlinks(local)
-				if e != nil || !config.Within(canonical, real) {
-					return nil, fmt.Errorf("unsafe import %s", s.ID)
+				if e != nil || !config.Within(m.Root, real) {
+					return fmt.Errorf("unsafe import %s", s.ID)
 				}
-				if config.Within(filepath.Join(canonical, ".mirrordock"), real) {
-					return nil, fmt.Errorf("%s 指向内部发布代但没有对应数据库记录，请恢复数据库备份", s.ID)
+				if config.Within(filepath.Join(m.Root, ".mirrordock"), real) {
+					return fmt.Errorf("%s 指向内部发布代但没有对应数据库记录，请恢复数据库备份", s.ID)
 				}
-				if e = Validate(context.Background(), real, s.Type); e != nil {
-					return nil, fmt.Errorf("import %s: %w", s.ID, e)
+				if e = ValidateSource(ctx, real, s); e != nil {
+					return fmt.Errorf("import %s: %w", s.ID, e)
 				}
 				g := Generation{ID: uuid.New().String(), PublishedAt: time.Now().UTC()}
-				g.Directory = filepath.Join(canonical, ".mirrordock", "published", g.ID)
+				g.Directory = filepath.Join(m.Root, ".mirrordock", "published", g.ID)
 				// Normalize an imported directory into an immutable generation before
 				// creating its public alias. Never subsequently copy into the live tree.
 				if e = os.Rename(real, g.Directory); e != nil {
-					return nil, e
+					return e
 				}
 				p = Publication{SourceID: s.ID, Dest: s.Dest, Current: g}
-				if e = store.SavePublication(s.ID, p); e != nil {
+				if e = m.store.SavePublication(s.ID, p); e != nil {
 					// A failed import must leave the original directory available for
 					// the next startup rather than orphaning it in a private generation.
-					return nil, errors.Join(e, os.Rename(g.Directory, real))
+					return errors.Join(e, os.Rename(g.Directory, real))
 				}
+			} else if e != nil && !errors.Is(e, os.ErrNotExist) {
+				return e
+			} else if e == nil {
+				return fmt.Errorf("%s 的 dest 被非目录占用", s.ID)
 			} else {
 				continue
 			}
@@ -142,25 +196,43 @@ func New(root string, store *database.Store, sources []config.Source) (*Manager,
 		if p.Current.Summary == nil {
 			real, e := filepath.EvalSymlinks(p.Current.Directory)
 			if e != nil || !config.Within(m.Root, real) {
-				return nil, errors.New("publication escaped mirror root")
+				return errors.New("publication escaped mirror root")
 			}
-			p.Current.Summary, err = summarizeDirectory(context.Background(), p.Current.Directory, s.Type)
+			p.Current.Summary, err = summarizeDirectory(ctx, p.Current.Directory, s.Type)
 			if err != nil {
-				return nil, err
+				return err
 			}
-			if err = store.SavePublication(s.ID, p); err != nil {
-				return nil, err
+			if err = m.store.SavePublication(s.ID, p); err != nil {
+				return err
 			}
 		}
-		if err = m.register(p); err != nil {
-			return nil, err
+		opened, err := m.openPublication(p)
+		if err != nil {
+			return err
 		}
 		if err = m.alias(p); err != nil {
-			return nil, err
+			return err
+		}
+		if err = m.store.SavePublicationContext(ctx, s.ID, p); err != nil {
+			return err
+		}
+		m.installOpened(opened)
+		if oldDest != "" { // Remove only our own stale alias, never user content.
+			oldPath := filepath.Join(m.Root, filepath.FromSlash(oldDest))
+			if target, err := filepath.EvalSymlinks(oldPath); err == nil && target == p.Current.Directory {
+				if st, err := os.Lstat(oldPath); err == nil && st.Mode()&os.ModeSymlink != 0 {
+					if err := os.Remove(oldPath); err != nil {
+						return err
+					}
+					if err := syncDir(filepath.Dir(oldPath)); err != nil {
+						return err
+					}
+				}
+			}
 		}
 	}
-	ready = true
-	return m, nil
+
+	return nil
 }
 func (m *Manager) openPublication(p Publication) (*opened, error) {
 	o := &opened{Publication: p}
@@ -415,7 +487,7 @@ func (m *Manager) Publish(ctx context.Context, s config.Source, id int64) (Publi
 		return Publication{}, err
 	}
 	work := m.Work(id)
-	if err := Validate(ctx, work, s.Type); err != nil {
+	if err := ValidateSource(ctx, work, s); err != nil {
 		return Publication{}, err
 	}
 	if old := m.table.Load().entries[s.Dest]; old != nil {
@@ -564,6 +636,9 @@ func (m *Manager) Publications() []Publication {
 func (m *Manager) Restrict(sources []config.Source) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.restrictLocked(sources)
+}
+func (m *Manager) restrictLocked(sources []config.Source) {
 	allowed := map[string]string{}
 	for _, s := range sources {
 		allowed[s.Dest] = s.ID

@@ -357,3 +357,49 @@ func TestSystemInfoUsesStartupDeployment(t *testing.T) {
 		}
 	}
 }
+
+func TestListenFailureLeavesQueuedTaskUntouched(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(file, []byte("listen: 127.0.0.1\npath: ./data\nmirror_root: ./mirror\nauth:\n  username: admin\n  password: fixture\nsources:\n  - id: repo\n    name: Repo\n    type: rsync\n    enabled: true\n    dest: repo\n    src1: rsync://127.0.0.1:1/repo/\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	a, err := Open(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close(context.Background())
+	a.Version = "test-build-version"
+	run, err := a.Runs.Enqueue("repo", "manual")
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	a.Server.Addr = listener.Addr().String()
+	if err := a.Serve(); err == nil {
+		t.Fatal("occupied port accepted")
+	}
+	got, err := a.Runs.Get(run.ID)
+	if err != nil || got.State != "queued" || len(got.Attempts) != 0 {
+		t.Fatal(got, err)
+	}
+	w := httptest.NewRecorder()
+	a.info(w, httptest.NewRequest("GET", "/api/system/info", nil))
+	if !strings.Contains(w.Body.String(), "test-build-version") {
+		t.Fatal(w.Body.String())
+	}
+	if err := a.Store.ReadDB.Close(); err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest("GET", "/api/runs/999999", nil)
+	req.SetPathValue("id", "999999")
+	w = httptest.NewRecorder()
+	a.getRun(w, req)
+	if w.Code != 503 {
+		t.Fatal("database failure misreported", w.Code)
+	}
+}

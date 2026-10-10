@@ -56,7 +56,8 @@ func run() int {
 		slog.Error("启动失败", "error", err)
 		return 1
 	}
-	slog.Info("MirrorDock 已启动", "version", versionString(), "address", application.Server.Addr, "admin", "/admin/", "config", application.Config.File())
+	application.Version = versionString()
+	slog.Info("MirrorDock 启动中", "version", versionString(), "address", application.Server.Addr, "admin", "/admin/", "config", application.Config.File())
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	done := make(chan error, 1)

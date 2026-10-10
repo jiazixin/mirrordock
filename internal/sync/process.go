@@ -112,10 +112,10 @@ func (o *processOutput) scan(reader io.Reader) {
 			o.err = err
 			o.cancel(err)
 		}
-		if localFailureLine(line) || (o.name == "dnf" && reposyncPermanentLine(line)) {
+		if localFailureLine(line) || (o.name == "dnf" && strings.Contains(strings.ToLower(line), "permission denied")) {
 			o.localError = line
 		}
-		if o.name == "rsync" && rsyncPermanentLine(line) {
+		if (o.name == "rsync" && rsyncPermanentLine(line)) || (o.name == "dnf" && reposyncPermanentLine(line)) {
 			o.upstreamError = line
 		}
 		if o.name == "dnf" && reposyncNetworkLine(line) {
@@ -218,7 +218,7 @@ func command(ctx context.Context, name string, args []string, emit func(Progress
 			return &Failure{Code: "LOCAL_TRANSFER", Message: o.localError, ExitCode: code}
 		}
 		if o.upstreamError != "" {
-			return &Failure{Code: "UPSTREAM_ERROR", Message: o.upstreamError, ExitCode: code}
+			return &Failure{Code: "UPSTREAM_ERROR", Message: o.upstreamError, SourceFailure: true, ExitCode: code}
 		}
 		if name == "dnf" {
 			return &Failure{Code: "REPOSYNC_FAILED", Message: o.last, Retryable: o.networkError != "", ExitCode: code}

@@ -259,10 +259,19 @@ func (m *Manager) virtual(w http.ResponseWriter, r *http.Request, p string, tabl
 		return
 	}
 	items := []listingItem{}
+	var infos map[string]SourceListingInfo
+	if m.ListingInfo != nil {
+		for name := range children {
+			if table.entries[prefix+name] != nil {
+				infos = m.ListingInfo(r.Context())
+				break
+			}
+		}
+	}
 	for name := range children {
 		item := newListingItem(name, r.URL.EscapedPath()+url.PathEscape(name)+"/", true, nil)
 		if entry := table.entries[prefix+name]; entry != nil {
-			item = projectItem(item, entry.Publication, m.sourceListingInfo(entry.Publication.SourceID))
+			item = projectItem(item, entry.Publication, infos[entry.Publication.SourceID])
 		}
 		items = append(items, item)
 	}
@@ -277,15 +286,31 @@ func (m *Manager) directory(w http.ResponseWriter, r *http.Request, f *os.File, 
 		return
 	}
 	defer func() { <-m.listingGates }()
-	entries, err := f.ReadDir(1001)
-	if err != nil && err != io.EOF {
-		http.Error(w, "directory unavailable", 500)
-		return
+	// Bound retained entries; private files do not consume the public quota.
+	entries := []os.DirEntry{}
+	for len(entries) <= 1000 {
+		if r.Context().Err() != nil {
+			return
+		}
+		batch, err := f.ReadDir(128)
+		if err != nil && err != io.EOF {
+			http.Error(w, "directory unavailable", 500)
+			return
+		}
+		for _, entry := range batch {
+			if !hidden(entry.Name()) {
+				entries = append(entries, entry)
+			}
+		}
+		if err == io.EOF {
+			break
+		}
 	}
 	more := len(entries) > 1000
 	if more {
 		entries = entries[:1000]
 	}
+
 	items := []listingItem{}
 	var publication Publication
 	if len(publications) > 0 {

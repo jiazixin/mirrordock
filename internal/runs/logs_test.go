@@ -31,57 +31,21 @@ func logFixture(t *testing.T, e *Engine, state string, attempts int) *Run {
 	return r
 }
 
-func TestLogCleanupKeepsOtherActionsResponsiveAndSerializesResume(t *testing.T) {
-	started := make(chan struct{}, 2)
-	blocked, release := make(chan struct{}), make(chan struct{})
-	e, _, _, _ := testEngine(t, "30s", runnerFunc(func(ctx context.Context, task syncer.Task, emit func(syncer.Progress), log io.Writer) error {
-		started <- struct{}{}
-		<-ctx.Done()
-		return ctx.Err()
-	}), func(e *Engine) {
-		e.removeLog = func(path string) error { close(blocked); <-release; return os.Remove(path) }
-	})
+func TestLogCleanupPreservesRecoverableLogs(t *testing.T) {
+	e, _, _, _ := testEngine(t, "30s", runnerFunc(func(context.Context, syncer.Task, func(syncer.Progress), io.Writer) error { return nil }))
 	old := logFixture(t, e, "interrupted", 1)
-	e.mu.Lock()
-	e.current[old.ID] = old
-	e.mu.Unlock()
-	active, err := e.Enqueue("test", "manual")
+	if n, err := e.ClearLogs(); err != nil || n != 0 {
+		t.Fatal(n, err)
+	}
+	got, err := e.Get(old.ID)
+	if err != nil || got.Attempts[0].LogCleared {
+		t.Fatal(got, err)
+	}
+	file, _, err := e.LogSnapshot(old.ID, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	<-started
-	done := make(chan error, 1)
-	go func() { _, err := e.ClearLogs(); done <- err }()
-	<-blocked
-	resume := make(chan error, 1)
-	go func() { resume <- e.Action(old.ID, "resume") }()
-	other := make(chan error, 1)
-	go func() { other <- e.Action(active.ID, "pause") }()
-	select {
-	case err := <-other:
-		if err != nil {
-			t.Error(err)
-		}
-	case <-time.After(time.Second):
-		t.Error("filesystem cleanup held the engine lock")
-	}
-	select {
-	case err := <-resume:
-		t.Error("resume raced cleanup", err)
-	default:
-	}
-	close(release)
-	if err := <-done; err != nil {
-		t.Fatal(err)
-	}
-	if err := <-resume; err != nil {
-		t.Fatal(err)
-	}
-	got, err := e.Get(old.ID)
-	if err != nil || !got.Attempts[0].LogCleared {
-		t.Fatal(got, err)
-	}
-	waitState(t, e, active.ID, "paused")
+	file.Close()
 }
 
 func TestLogCleanupCursorExcludesNewHistory(t *testing.T) {
@@ -139,7 +103,7 @@ func TestLogCleanupCancellationAndFailureCanRetry(t *testing.T) {
 				t.Fatal(getErr)
 			}
 			if mode == "save" {
-				if n != 0 || got.Attempts[0].LogCleared {
+				if n != 2 || got.Attempts[0].LogCleared {
 					t.Fatal("failed save marked durable completion", n, got)
 				}
 				if _, err := store.DB.Exec("DROP TRIGGER reject_clear"); err != nil {
@@ -158,4 +122,39 @@ func TestLogCleanupCancellationAndFailureCanRetry(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestLogCleanupKeepsOtherActionsResponsive(t *testing.T) {
+	started, blocked, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	e, _, _, _ := testEngine(t, "30s", runnerFunc(func(ctx context.Context, task syncer.Task, emit func(syncer.Progress), log io.Writer) error {
+		close(started)
+		<-ctx.Done()
+		return ctx.Err()
+	}), func(e *Engine) {
+		e.removeLog = func(path string) error { close(blocked); <-release; return os.Remove(path) }
+	})
+	logFixture(t, e, "succeeded", 1)
+	active, err := e.Enqueue("test", "manual")
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-started
+	done := make(chan error, 1)
+	go func() { _, err := e.ClearLogs(); done <- err }()
+	<-blocked
+	other := make(chan error, 1)
+	go func() { other <- e.Action(active.ID, "pause") }()
+	select {
+	case err := <-other:
+		if err != nil {
+			t.Error(err)
+		}
+	case <-time.After(time.Second):
+		t.Error("filesystem cleanup held the engine lock")
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	waitState(t, e, active.ID, "paused")
 }

@@ -80,13 +80,6 @@ func listingTime(at, now time.Time) (string, string) {
 	return label, at.In(time.Local).Format(time.RFC3339)
 }
 
-func (m *Manager) sourceListingInfo(id string) SourceListingInfo {
-	if m.ListingInfo != nil {
-		return m.ListingInfo(id)
-	}
-	return SourceListingInfo{}
-}
-
 func projectItem(item listingItem, p Publication, info SourceListingInfo) listingItem {
 	item.Project = true
 	item.Status, item.StatusClass = "已发布", "neutral"

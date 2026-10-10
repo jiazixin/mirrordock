@@ -55,9 +55,9 @@ type Analytics struct {
 const analyticsProjection = `WITH facts AS (
  SELECT source_id, created_at, state, COALESCE(json_extract(data,'$.name'),source_id) AS name,
  COALESCE(json_extract(data,'$.error_code'),'UNKNOWN') AS error_code,
- CASE WHEN state IN ('succeeded','failed','timed_out','interrupted')
+ CASE WHEN state IN ('succeeded','failed','timed_out')
  AND json_extract(data,'$.started_at') IS NOT NULL AND COALESCE(json_extract(data,'$.elapsed_seconds'),0)>0 THEN 1 ELSE 0 END AS duration_samples,
- CASE WHEN state IN ('succeeded','failed','timed_out','interrupted') AND json_extract(data,'$.started_at') IS NOT NULL
+ CASE WHEN state IN ('succeeded','failed','timed_out') AND json_extract(data,'$.started_at') IS NOT NULL
  THEN MAX(0,COALESCE(json_extract(data,'$.elapsed_seconds'),0)) ELSE 0 END AS elapsed,
  CASE WHEN state='succeeded' THEN MAX(0,COALESCE(json_extract(data,'$.progress.bytes'),0)) ELSE 0 END AS bytes,
  CASE WHEN state='succeeded' THEN MAX(0,COALESCE(json_extract(data,'$.progress.files'),0)) ELSE 0 END AS files,
@@ -69,8 +69,8 @@ const analyticsProjection = `WITH facts AS (
  CASE WHEN state='succeeded' AND COALESCE(json_extract(data,'$.candidate_index'),0)>0 THEN 1 ELSE 0 END AS fallback
  FROM runs WHERE created_at>=? AND created_at<? AND RTRIM(created_at,'Z')<=? AND json_extract(data,'$.type')=? AND (?='' OR source_id=?)
 ) `
-const analyticsSums = `COUNT(*), SUM(state='succeeded'), SUM(state IN ('failed','timed_out','interrupted')),
- SUM(state='cancelled'), SUM(state NOT IN ('succeeded','failed','timed_out','interrupted','cancelled')),
+const analyticsSums = `COUNT(*), SUM(state='succeeded'), SUM(state IN ('failed','timed_out')),
+ SUM(state='cancelled'), SUM(state NOT IN ('succeeded','failed','timed_out','cancelled')),
  SUM(duration_samples), SUM(elapsed), SUM(bytes), SUM(files), SUM(completed), SUM(reused), SUM(attempts), SUM(failed_attempts), SUM(retried), SUM(fallback)`
 
 func statDest(s *AnalyticsStats) []any {
@@ -165,7 +165,7 @@ func Analyze(ctx context.Context, store *database.Store, kind, source string, da
 	if err != nil {
 		return nil, err
 	}
-	rows, err = tx.QueryContext(ctx, analyticsProjection+`SELECT COALESCE(NULLIF(error_code,''),'UNKNOWN'),COUNT(*) FROM facts WHERE state IN ('failed','timed_out','interrupted') GROUP BY 1 ORDER BY COUNT(*) DESC,1 LIMIT 8`, args...)
+	rows, err = tx.QueryContext(ctx, analyticsProjection+`SELECT COALESCE(NULLIF(error_code,''),'UNKNOWN'),COUNT(*) FROM facts WHERE state IN ('failed','timed_out') GROUP BY 1 ORDER BY COUNT(*) DESC,1 LIMIT 8`, args...)
 	if err != nil {
 		return nil, err
 	}

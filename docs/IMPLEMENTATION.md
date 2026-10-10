@@ -22,7 +22,7 @@
 
 除 auth status/login 外管理 API 均鉴权；写操作同源校验。完整代理 URL 回填是已确认协议例外，Token/密码/通知凭据不返回。运行快照不保存代理/Token/通知密文。
 
-来源 URL 与 GPG 公钥 URL 禁止用户信息、查询参数及片段。`internal/runs/snapshot.go` 负责新快照的防御性脱敏。首次上线使用新的 state；发布前的历史地址迁移代码已删除。run_results 的自增 sequence 表示结果插入顺序，用于通知有界扫描，id 唯一约束继续保留首个终态事实。
+来源 URL 与 GPG 公钥 URL 禁止用户信息、查询参数及片段。`internal/runs/snapshot.go` 负责新快照的防御性脱敏。首次上线使用新的 state；发布前的历史地址迁移代码已删除。run_results 的自增 sequence 表示结果插入顺序，用于通知有界扫描，id 唯一约束继续保留首个不可恢复终态事实（中断不写结果队列）。
 
 ## 源码定位
 
@@ -42,4 +42,4 @@ GitHub 原始日志有资产结果，当前没有每资产独立数据库检索�
 
 `/api/system/checks` 的 `reflink.status` 为 supported/unsupported/error，`detail` 记录实测结果；`storage` 给出 work 文件系统 total/available/reserve/required（下一任务准入）、workers、当前路由 previous 数与数字 work 目录数，读取失败通过 error 返回。目录数不表示物理空间或所有已删除配置源的留存文件。生产同步要求可用 reflink；容量保护为提前停止策略，首次全量及增量峰值仍需实际容量规划。
 
-上线前已完成的旧计划与临时 HTML 预览已删除，避免把历史方案误认为当前实现。本次完整工作区（含已有改动）的审查与回归记录集中在 ACCEPTANCE，不再追加按会话堆叠的历史段落。
+已完成计划归档于 `docs/archive/plans/`，历史版本和方案只作追溯，不能当作当前实现。本次完整工作区（含已有改动）的审查与回归记录集中在 ACCEPTANCE，不再追加按会话堆叠的历史段落。

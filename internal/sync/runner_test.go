@@ -205,6 +205,12 @@ func TestReposyncCommandKeepsNetworkDiagnosticsAndStopsOnPermanentErrors(t *test
 		if err == nil || AsFailure(err).Retryable != tc.retry {
 			t.Fatal(tc.diagnostic, err)
 		}
+		if strings.Contains(tc.diagnostic, "Permission denied") && AsFailure(err).Code != "LOCAL_TRANSFER" {
+			t.Fatal("local permission error misclassified", err)
+		}
+		if tc.diagnostic == "Status code: 404" && AsFailure(err).Code != "UPSTREAM_ERROR" {
+			t.Fatal("HTTP error misclassified", err)
+		}
 	}
 }
 

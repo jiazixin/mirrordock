@@ -388,3 +388,107 @@ func TestDownloadRedirectRejectsHTTPSDowngrade(t *testing.T) {
 		t.Fatal("HTTPS key download reached plaintext endpoint", err, insecureReads.Load())
 	}
 }
+
+func TestAssetIdleTimeoutRetainsPartialAndRetries(t *testing.T) {
+	var assetURL string
+	var finish atomic.Bool
+	client, server := assetClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/repos/") {
+			http.Redirect(w, r, assetURL, 302)
+			return
+		}
+		if finish.Load() {
+			if r.Header.Get("Range") != "bytes=3-" {
+				t.Error("partial not resumed", r.Header.Get("Range"))
+			}
+			w.Header().Set("Content-Range", "bytes 3-5/6")
+			w.WriteHeader(206)
+			io.WriteString(w, "def")
+			return
+		}
+		io.WriteString(w, "abc")
+		w.(http.Flusher).Flush()
+		<-r.Context().Done()
+	})
+	assetURL = server.URL + "/asset"
+	target := filepath.Join(t.TempDir(), "asset.bin")
+	id := AssetIdentity{ID: 1, Size: 6}
+	_, err := downloadAssetIdle(t.Context(), client, server.Client(), "o", "r", 1, id, target, func(int64) {}, "", 30*time.Millisecond)
+	f := AsFailure(err)
+	if f.Code != "DOWNLOAD_IDLE" || !f.Retryable {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(target + ".part")
+	if err != nil || string(b) != "abc" {
+		t.Fatal(string(b), err)
+	}
+	finish.Store(true)
+	if _, err := downloadAssetIdle(t.Context(), client, server.Client(), "o", "r", 1, id, target, func(int64) {}, "", time.Second); err != nil {
+		t.Fatal(err)
+	}
+	b, err = os.ReadFile(target)
+	if err != nil || string(b) != "abcdef" {
+		t.Fatal(string(b), err)
+	}
+}
+
+func TestRateLimitRetainsServerRetryTime(t *testing.T) {
+	reset := time.Now().Add(time.Hour)
+	err := githubError(&github.RateLimitError{Rate: github.Rate{Reset: github.Timestamp{Time: reset}}}, "")
+	f := AsFailure(err)
+	if !f.Retryable || !f.RetryAt.Equal(reset) {
+		t.Fatal(f)
+	}
+}
+
+func TestGitHubPrunesObsoleteAssetsOnlyAfterSuccess(t *testing.T) {
+	var fail atomic.Bool
+	var assetURL string
+	client, server := assetClient(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/repos/o/r/releases":
+			io.WriteString(w, `[{"id":1,"tag_name":"v1","published_at":"2026-01-01T00:00:00Z"}]`)
+		case "/repos/o/r/releases/1/assets":
+			io.WriteString(w, `[{"id":2,"name":"new.bin","size":3}]`)
+		case "/repos/o/r/releases/assets/2":
+			http.Redirect(w, r, assetURL, 302)
+		case "/asset":
+			if fail.Load() {
+				http.Error(w, "failure", 503)
+			} else {
+				io.WriteString(w, "new")
+			}
+		default:
+			http.NotFound(w, r)
+		}
+	})
+	assetURL = server.URL + "/asset"
+	dir := t.TempDir()
+	tag := filepath.Join(dir, "v1")
+	if err := os.Mkdir(tag, 0755); err != nil {
+		t.Fatal(err)
+	}
+	old := filepath.Join(tag, "old.bin")
+	for _, name := range []string{old, identityFile(old), old + ".part", identityFile(old + ".part")} {
+		if err := os.WriteFile(name, []byte("old"), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	task := Task{Directory: dir, Source: config.Source{GitHubRelease: config.GitHubRelease{Repository: "o/r"}}, Settings: config.Settings{GitHub: config.GitHubSettings{ReleaseCount: 1, PruneOldReleases: true}}}
+	fail.Store(true)
+	if err := GitHubWithClient(t.Context(), client, server.Client(), task, func(Progress) {}, io.Discard); err == nil {
+		t.Fatal("failed download passed")
+	}
+	if _, err := os.Stat(old); err != nil {
+		t.Fatal("failed download pruned old asset", err)
+	}
+	fail.Store(false)
+	if err := GitHubWithClient(t.Context(), client, server.Client(), task, func(Progress) {}, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{old, identityFile(old), old + ".part", identityFile(old + ".part")} {
+		if _, err := os.Stat(name); !os.IsNotExist(err) {
+			t.Fatal("obsolete file retained", name, err)
+		}
+	}
+}

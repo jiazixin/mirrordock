@@ -37,6 +37,7 @@ export function bytes(n: number) {
 }
 export const phases: Record<string, string> = {
   waiting_space: '等待镜像盘空间',
+  waiting_downloads: '等待公开下载负载降低',
   retry: '等待重试',
   prepare: '准备目录',
   scan: '扫描来源',

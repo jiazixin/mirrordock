@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"mirrordock/internal/config"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -15,13 +16,16 @@ import (
 )
 
 type session struct{ expires time.Time }
+type loginWindow struct {
+	attempts int
+	start    time.Time
+}
 type auth struct {
 	mu           sync.Mutex
 	username     string
 	passwordHash []byte
 	sessions     map[string]session
-	attempts     int
-	window       time.Time
+	attempts     map[string]loginWindow
 }
 
 func randomToken() string {
@@ -36,7 +40,7 @@ func newAuth(credentials config.Auth) (*auth, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &auth{username: credentials.Username, passwordHash: hash, sessions: map[string]session{}}, nil
+	return &auth{username: credentials.Username, passwordHash: hash, sessions: map[string]session{}, attempts: map[string]loginWindow{}}, nil
 }
 func (a *auth) authorized(r *http.Request) bool {
 	cookie, err := r.Cookie("mirrordock_session")
@@ -52,16 +56,40 @@ func (a *auth) authorized(r *http.Request) bool {
 	delete(a.sessions, cookie.Value)
 	return false
 }
-func (a *auth) limited() bool {
+
+// Use the transport peer, never an untrusted forwarding header. Keep buckets
+// bounded and expire idle entries so arbitrary client addresses cannot grow RAM.
+func clientIP(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
+}
+func (a *auth) limited(ip string) bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	now := time.Now()
-	if now.Sub(a.window) > time.Minute {
-		a.window = now
-		a.attempts = 0
+	for key, v := range a.attempts {
+		if now.Sub(v.start) >= time.Minute {
+			delete(a.attempts, key)
+		}
 	}
-	a.attempts++
-	return a.attempts > 10
+	v, exists := a.attempts[ip]
+	if !exists {
+		if len(a.attempts) >= 4096 {
+			return true
+		}
+		v.start = now
+	}
+	v.attempts++
+	a.attempts[ip] = v
+	return v.attempts > 10
+}
+func (a *auth) resetLimit(ip string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	delete(a.attempts, ip)
 }
 func (a *auth) login(username, password string) (string, error) {
 	if len(password) > 72 || bcrypt.CompareHashAndPassword(a.passwordHash, []byte(password)) != nil || subtle.ConstantTimeCompare([]byte(a.username), []byte(username)) != 1 {

@@ -1,8 +1,117 @@
 # 验收记录
 
+## 问题.md 核查与修复（2026-10-10）
+
+本节是当前工作区结论。逐项核查了用户提供的 `问题.md`（H1–H6、M1–M16、L1–L23，共 45 项），保留该文件原文。结论分为确认缺陷、部分属实、功能边界和有依据的设计选择，未把所有建议直接当作正确实现。以下历史验收仅代表各自日期的代码与环境，不能代替本轮验证。
+
+### 逐项结论
+
+| 编号 | 核查结果与处理 |
+| --- | --- |
+| H1 | 属实。Reposync 关闭元数据时原本仍要求 repodata。增加仅包文件发布模式，去除克隆来的旧 repodata，页面/README 明确该模式不保证可直接安装的 DNF 仓库；完整模式继续校验元数据。 |
+| H2 | 属实。Release 中列出不存在的未压缩形式是合法情况，按全部条目必须存在会误拒绝。校验实际存在的索引、哈希及其包引用，容许压缩副本和部分架构；全部索引缺失仍拒绝。优先 InRelease，不把其他目录中同名 Release 文件当仓库声明。未声称验证 APT 签名。 |
+| H3 | 属实。服务中断原本长期占用源并阻塞 cron。SERVICE_INTERRUPTED 在 ID/类型/dest 仍匹配且启用时自动排队，沿用累计预算、重试数和等待期限；耗尽预算转超时。暂停和其他故障中断不自动运行。 |
+| H4 | 属实。重新添加不同 ID、相同 dest 可遇到旧内部链接无新 ID 记录而启动失败。启动/重载共用 Reconcile，可接管未配置旧源的兼容发布代；同 dest 多份记录优先选已有链接指向的代，否则选最新代。 |
+| H5 | 属实。增加来源失败与本地失败的区分；Unknown module、认证/来源协议错误等可切换备用来源，不必先消耗 retry_count，本地磁盘/权限失败仍停止。 |
+| H6 | 属实。动态添加已有真实目录此前未执行导入。配置保存/重载现在恢复发布记录、校验导入并注册路由，Enqueue 与配置接入串行。YAML 和文件系统不是一个事务：后续接入失败明确返回“配置已保存/载入”，修复后可重载，不伪称整体回滚。 |
+| M1 | 属实。interrupted 不再写入一次性最终结果，不计为分析失败、不触发终态通知；继续后的真实终态正常通知。遵循项目“尚未上线、无旧测试数据库迁移”的协议，未改写旧测试库中已经生成的通知结果。 |
+| M2 | 部分属实。发布前仓库不一致此前不参与重试，已纳入受预算约束的重试/备用源流程。未将 exit 23/24 一律视作成功：上游缺失或不可读可能留下不完整镜像，失败保留旧代比无条件发布更合理。 |
+| M3 | 部分属实。拒绝没有模块的 rsync URL，要求模块内子目录带 `/` 并在 UI 提示；模块根本身不要求尾斜杠，原文“所有路径都需要”过于绝对。 |
+| M4 | 属实。全局登录计数改为连接 IP 分桶（最多 4096 桶、一分钟窗口），成功登录重置。不信任伪造的 X-Forwarded-For；反代后的共享 IP 限制明确记录。 |
+| M5 | 部署限制属实。README 明确不支持 HTTPS 终止后 HTTP 回源的管理模式，可使用 TLS 透传或 HTTPS 回源且保留 Host/Origin。未擅自信任代理头或新增可信代理协议；HTTP 回源支持仍是功能扩展。 |
+| M6 | 部分属实。无 Token 的配额和大仓库成本确实存在，限流已按 reset/retry-after 退避且计入预算。保留分页读取以保证 published_at 选择及附件完整性；API 文档未承诺只取前几页即可得出精确最新发布时间。几百个 Release、每四小时一次不必然耗尽每小时配额。100 页上限保留并明确报错。 |
+| M7 | 属实。附件正文读取加入五分钟空闲期限，取消网络读取、保留暂存身份和正文，归为可重试并可 Range 续传；不把本地写盘/哈希时间当网络空闲。测试用受控服务器缩短期限验证。 |
+| M8 | 属实。现有 prune 开关同时清理保留 tag 内本轮未选中的旧附件/侧车/片段，所有下载成功后才执行；不跟随伪造的 tag 目录符号链接，失败保留旧内容。 |
+| M9 | 属实。公开项目列表去掉逐源 COUNT/SELECT，改为最新任务及必要的历史成功任务最多两次批量索引查询，使用一秒共享缓存和请求取消。文件正文下载热路径仍不访问数据库。 |
+| M10 | 线性全树成本属实，但“百万文件耗时数十分钟”没有本轮实测支撑。未为降低开销跳过持久化/一致性检查，也未引入影响整个挂载点的 syncfs 或破坏 24 小时回退的代数限制。百万文件、inode 压力及混合下载负载留作 Linux 待验，不宣称已优化此项。 |
+| M11 | 属实。重新添加/改 dest 立即恢复路由并复用当前代，移除确认属于本源的旧别名。删除源仍按既定协议保留文件；README 增加停机、备份、精确解除已删除源发布记录、交给 GC 回收的步骤，未加入自动删除用户镜像的行为。 |
+| M12 | 属实。DNF 私有目录移入任务 work 隐藏子目录，重试前及执行后清理；启动在 worker/探测运行前清理旧式 dnf-private 和探测目录，仅匹配保留前缀，未知目录保持不动。 |
+| M13 | 属实。CLI 实际构建版本注入 App，system/info 与设置页使用该值，去除硬编码版本。 |
+| M14 | 属实。先加载证书、绑定监听再启动 worker；关闭先封闭管理入口/排空 HTTP，再停止任务与通知。增加监听失败仍保持 queued 的回归。 |
+| M15 | 缺少通知代理与 Webhook 签名属实，属于尚未实现的功能；不同地区一定不可达的说法没有本轮网络实测。README 明确直连、不读取 GitHub/系统代理、无 HMAC/自定义鉴权头及部署要求；本轮未新增这些配置/功能，未向外部渠道发送消息。 |
+| M16 | 属实。Rsync 通知准确区分含目录的条目总数与实际传输普通文件数，不再用相减表示“未完成”；Reposync 明示不提供可靠包数。 |
+| L1 | 部分属实。修复隐藏项占用 1000 项额度；保留有界读取，明确搜索/排序仅针对已列出的子集。未采用“读取所有名称内存可控”这一未经规模验证的假设，未新增分页。 |
+| L2 | 现象属实、建议不采纳。同大小/mtime 的内容可能不同，仅用路径/大小/mtime 会错误返回 304；新代使用不同 ETag 是不可变代隔离策略。 |
+| L3 | 现象属实、策略保留。统一 attachment 防止同源不受信任内容内联执行；仅凭扩展名或假定 CSP 足够而放宽，不是本轮缺陷修复。 |
+| L4 | 属实。Linux 用 Frsize（无有效值时回退 Bsize），Darwin 保持 Bsize。运行中只有 ErrLowSpace 取消任务；普通探测错误记日志，新任务仍拒绝未知容量准入。 |
+| L5 | 属实。interrupted 排除出清理候选；删除成功但保存失败时返回实际删除数量，API 错误响应也携带 cleared，保留清理与其他任务控制并行回归。 |
+| L6 | 属实。恢复改为 ID 游标每页 100 条，无总条数截断；不重写未变化的暂停等记录。新增跨页恢复、暂停、预算耗尽、类型变更、持久化失败中断回归。 |
+| L7 | 属实。日志写入器跨 Write 保留凭据前缀，最长匹配替换，结束 Flush；逐字节分割位置测试覆盖中文及重叠密钥。 |
+| L8 | 属实。128 KiB 读取末尾退到完整 UTF-8 字符边界，next_offset 按实际消耗字节推进。 |
+| L9 | 主要是文档边界。GitHub 确实直连/显式代理；DNF/rsync 继承环境、公钥下载读环境代理。已区分说明，未改变系统工具的环境协议。 |
+| L10 | 属实。DNF HTTP 401/403/404 等归为上游错误，本地权限、只读/空间错误保持 LOCAL_TRANSFER；测试核对错误码和重试性。 |
+| L11 | 事实属实，但与前一轮用户确认的“新库、删除空迁移设施”决定一致。未恢复已删除 schema 版本表；文档指出未来兼容升级前必须另行设计迁移。 |
+| L12 | 属实。通知/源保存不丢弃设置草稿；其他管理员修改实际设置时保留草稿并提示冲突，保存使用草稿 revision，用户显式丢弃后才载入最新值。E2E 覆盖合并和冲突。 |
+| L13 | 属实。补充 sha/sha1 元数据一致性哈希，仍校验实际内容；不把 SHA-1 当作安全签名保证。 |
+| L14 | 保守新代的现象属实，尚无本轮代增长实测。repomd 摘要不能证明所有包内容未改；保留 inode/ctime 检查，未采用可能误复用旧正文的捷径。 |
+| L15 | 默认容器 root、无固定 HEALTHCHECK 属实，但“不支持非 root”不成立（历史验收已有 UID 5000）。README 增加 --user/卷权限和部署探针说明；任意端口/TLS 配置下不硬编码健康检查。 |
+| L16 | 属实。五份已完成计划移到 docs/archive/plans 并标记历史状态，修复链接及 IMPLEMENTATION/README/DESIGN 的描述。历史版本记录不伪改成当前版本；当前工具链保持 1.27.2。 |
+| L17 | 平台/文件系统边界属实。README 首屏明确仅 Linux/Darwin 与 reflink 硬要求；未承诺其他 Unix 或添加与项目约束相冲突的完整复制降级。 |
+| L18 | 行为属实，属于用户已确认的浏览器通知时区协议，保留；调度/管理台仍使用启动时区。 |
+| L19 | 属实，但标准排除语义不代表应自动删旧内容。UI/README 增加排除不会删除既有文件的提示，保留非破坏性行为。 |
+| L20 | 部分属实。admin/api/favicon 仅限制顶级，删除重复 GPG 校验。不同类型选项随编辑器切换保留是现有协议，文档明确只有当前类型选项生效，未改成拒绝 UI 自身合法草稿。 |
+| L21 | 属实。仅 sql.ErrNoRows 返回 404；数据库失败/超时返回 503，已验证故障读取不伪装成不存在。 |
+| L22 | 属实。下载超过准入阈值时排队任务显示 waiting_downloads，并记录一次进入该阶段的事件，保持排队不耗预算。 |
+| L23 | 现象属实、建议不采纳。拒绝保留/危险 tag 和附件名是上一轮明确的安全修复，不能静默跳过后报告完整同步成功。 |
+
+外部依据：[Debian 仓库格式](https://wiki.debian.org/DebianRepository/Format) 对未压缩索引校验项与实际文件区分（搜索索引可读，正文抓取本轮返回 403）；[rsync 官方手册](https://www.samba.org/ftp/rsync/rsync.1) 说明模块根无需尾斜杠、子目录尾斜杠改变拷贝语义、23/24 表示部分传输；[GitHub Release API](https://docs.github.com/en/rest/releases/releases#list-releases) 与[附件分页 API](https://docs.github.com/en/rest/releases/assets#list-release-assets) 提供分页接口，未提供本项目所需“前几页覆盖全部最新发布时间”的保证。
+
+### 验证与未验证项
+
+本机 Go **1.27.2 darwin/arm64**，测试显式使用 `.cache/rsync/rsync-3.5.1/rsync`。使用临时目录、隔离端口、受控 HTTP/rsync 上游和本地通知接收器；未启动示例完整发行版同步、未修改用户镜像/凭据、未推送或发布。证据均在忽略目录 `test-results/issues-20261010/`。
+
+| 检查 | 结果与证据 |
+| --- | --- |
+| Web 格式、TypeScript、Vite | format:check 与 build 通过；`web-format-check.txt`、`web-build.txt`。Go 编译前已构建 web/dist。 |
+| 全量 Go race | `go-race-final.json`：9 个含测试包通过，148 个顶层测试、含子测试共 258 个通过，0 测试跳过、0 race；web 包无测试文件的包级 skip 不算漏测测试。 |
+| 审查后 Go 复验 | `go-race-review-fixes.json`：runs/sync 两包 55 个顶层、含子测试 114 个通过，无跳过；`go-mirrors-review-fixes.txt`：新增启动遗留目录清理回归和完整 mirrors race 通过。 |
+| vet / Linux 编译 | `go-vet-final.txt`、`linux-build.txt` 均成功；Linux amd64 CGO_ENABLED=0 交叉编译，仅证明编译，不代表 Linux 运行或 Frsize 实测。 |
+| 浏览器 E2E | `e2e.txt`：14/14 通过，约 1.8 分钟；含设置草稿保留/冲突、真实隔离 rsync、通知、公开目录、分页和响应式布局。后续仅后端恢复/错误归类调整，重新构建二进制并复跑同步和通知两项，2/2 通过（38.1 秒），见 `e2e-review-fixes.txt`。抽查系统设置桌面及 375px 截图，实际版本正常显示，无阻塞性溢出。 |
+| 差异检查 | `git diff --check` 通过；归档计划只增加历史状态说明和修正相对链接，保留历史版本事实。 |
+
+初轮测试曾因旧 interrupted 清理/恢复断言、APT 缺失引用提示和列表回调约定变化失败（其中旧清理等待测试被停止）；这些断言已改为新的协议，保留了清理不阻塞其他任务的覆盖。首次全量 race 中，新数据库故障测试误用了仍在内存的 queued 任务，得到 200；改用不在内存的 ID 才能验证数据库故障，最终复跑通过。曾出现一次 Go timeout 参数拼写错误、一次 Prettier 工作目录错误及一次错误的 CleanLog 包引用编译失败，已修正；不把这些失败当作通过。外部 OCR 的失败单独记录在下一节。
+
+本轮未重做 Linux 原生运行、真实 DNF4/完整发行版安装、Linux sendfile/Frsize 观测、生产 TLS 反代网络、通知外网可达性、百万文件/inode/混合下载性能和断电恢复。历史验收不能替代修改后生产验收。性能改动 M9 依据查询结构及回归验证，未报告未经测量的吞吐提升；M10/L14 仍是规模验证项。M5 HTTP 回源可信代理、M15 通知代理/HMAC、L1 全目录分页未实现，仅明确功能边界。
+
+### OCR 审查与覆盖
+
+执行了 `open-code-review` 外部审查入口，退出码 1：`no valid LLM endpoint configured`，因此没有外部模型审查结果，也没有因该调用发送源码。随后使用 `open-code-review-delegate` 的本地 `preview` / `rule`，由当前 Codex 按解析出的 Go/TypeScript/通用规则逐文件复核。并非独立审查模型通过。证据：`ocr-external.txt`、`ocr-preview-final.json`、`ocr-rules-final.json`、`ocr-coverage.json`。
+
+最终清单共 **53 个 path/status 条目**：OCR 自动纳入 23 项，全部审查（23/23，100%）；自动排除 30 项，另外人工审查 29 项，1 项用户原始 `问题.md` 作为需求证据读取但不作为实现代码审查。总体实施/文档覆盖 52/52，未跳过任何本轮新增或修改的源码。排除原因是测试/E2E 的 default_path、Markdown 的 unsupported_ext，以及旧平台文件 deleted；不将工具默认排除等同于完成审查。
+
+| OCR 纳入文件（均已审查） | 重点 |
+| --- | --- |
+| cmd/mirrordock/main.go | 构建版本传递、启动日志真实性 |
+| internal/app/app.go | 监听/关闭顺序、锁顺序、批量缓存、HTTP 错误、版本 |
+| internal/app/auth.go | 有界按 IP 限流、不信任转发头 |
+| internal/config/config.go | 模块/目录 URL、顶级路由与已有配置兼容 |
+| internal/database/database.go | 真正终态、游标恢复、清理和批量查询 |
+| internal/mirrors/http.go | 目录配额、取消、正文下载不访问 DB |
+| internal/mirrors/listing.go | 批量信息替代旧单源接口 |
+| internal/mirrors/mirrors.go | 导入/恢复/别名归属、代引用、错误与锁顺序 |
+| internal/mirrors/storage.go | 启动临时目录清理边界、未知目录保留 |
+| internal/mirrors/validate.go | 仅包模式、APT 压缩/部分架构、SHA-1、错误类别 |
+| internal/mirrors/space_darwin.go | 保持 Darwin 单位 |
+| internal/mirrors/space_linux.go | Frsize 与跨平台编译 |
+| internal/notifications/message.go | Rsync/Reposync 计数含义 |
+| internal/runs/analytics.go | 中断不混入失败/耗时样本 |
+| internal/runs/runs.go | 分页恢复、预算、备用源、日志、配置串行 |
+| internal/sync/github.go | 空闲取消定时器生命周期、续传、限流、清理 |
+| internal/sync/process.go | 本地/上游诊断优先级 |
+| internal/sync/runner.go | rsync 来源失败、DNF 私有路径及旧元数据 |
+| web/src/app/format.ts | 等待下载负载阶段 |
+| web/src/features/analytics/Analytics.vue | 统计口径匹配后端 |
+| web/src/features/runs/RunDetail.vue | 未执行阶段的展示 |
+| web/src/features/settings/Settings.vue | 草稿合并、revision 冲突、实际版本 |
+| web/src/features/sources/SourceEditor.vue | 元数据/排除/地址提示准确性 |
+
+补充审查的测试/E2E 共 14 项：`internal/app/{app_test,auth_test}.go`、`internal/config/source_url_test.go`、`internal/mirrors/{listing_test,validate_test,issues_test}.go`、`internal/notifications/notifications_test.go`、`internal/runs/{analytics_test,logs_test,runs_test,issues_test}.go`、`internal/sync/{github_test,runner_test}.go`、`web/e2e/notifications.spec.ts`。删除的 `internal/mirrors/space_unix.go` 已核对由两份平台文件覆盖。文档共 14 项：README、DESIGN、IMPLEMENTATION、ACCEPTANCE，以及五份计划的原路径删除和 archive/plans 新路径（2026-10-02-release-preflight、2026-10-03-download-logs-linux、2026-10-03-review-fixes、2026-10-03-storage-reflink、2026-10-09-admin-performance）。
+
+审查中修复了：AfterFunc 停止失败时等待回调结束，避免跨读取的迟到取消；历史发布记录选择不确定性；旧别名同步错误被吞；启动恢复重复持久化；DNF 本地权限误归上游；日志清理 API 不回传实际部分删除数；配置已保存但接入失败的含糊错误；文档归档链接。未发现尚未处理的本轮确定性正确性/安全性阻塞项；上表保留的功能边界与未测规模风险不算已验证通过。
+
 ## 1.0 发布前最终验收（2026-10-09）
 
-本节是本轮交付结论，后文保留历史记录，不代表当前工具链或当前扫描结果。检查包括全仓测试、核心运行/发布/鉴权/数据库/连接池/前端请求生命周期审查，以及本轮全部代码差异复核。应用版本已更新为 **1.0.0**，工具链按用户确认统一升级为 **Go 1.27.2**。本轮已识别的代码阻塞问题均已修复，下面列出的门禁通过或已完成明确告警判定。未提交、推送、打标签或发布。
+本节是 2026-10-09 当时的交付结论，不代表后续改动的工具链检查或验收结果。检查包括全仓测试、核心运行/发布/鉴权/数据库/连接池/前端请求生命周期审查，以及本轮全部代码差异复核。应用版本已更新为 **1.0.0**，工具链按用户确认统一升级为 **Go 1.27.2**。本轮已识别的代码阻塞问题均已修复，下面列出的门禁通过或已完成明确告警判定。未提交、推送、打标签或发布。
 
 测试通过 SSH 在用户指定的 `mirrordock` 主机原生执行，隔离工作区为 `/home/ops/work/mirrordock-release-20261009`。系统为 AlmaLinux 10.2 x86_64、内核 6.12.0-211.22.1.el10_2、XFS、20 个逻辑 CPU、约 3.54 GiB RAM；`lscpu` 明确报告 **KVM**，不是裸机验收。SELinux 为 **Permissive**。原生工具链为 Go 1.27.2、Node 24.21.0、系统 rsync 3.4.4、DNF 4.20.0。Go/Node 官方压缩包均核对官方 SHA-256。只使用临时数据、隔离端口、受控 rsync/RPM 上游和小型公开 GitHub 附件，不修改用户镜像或应用凭据。
 
@@ -180,7 +289,7 @@ macOS arm64 / Apple M2 Max / Go 1.27.1，临时 SQLite、热缓存、每源一�
 
 ## 审查修复与最终回归（2026-10-03）
 
-本次按用户授权修复全部七项已确认问题，保留工作区已有改动，未提交、推送、部署、启动真实发行版同步、发送外部消息或使用子代理。配置字段没有新增或恢复；明确收紧来源/GPG URL 的凭据边界，完整代理管理端回填例外继续保留。实现方案见 [修复计划](plans/2026-10-03-review-fixes.md)。
+本次按用户授权修复全部七项已确认问题，保留工作区已有改动，未提交、推送、部署、启动真实发行版同步、发送外部消息或使用子代理。配置字段没有新增或恢复；明确收紧来源/GPG URL 的凭据边界，完整代理管理端回填例外继续保留。实现方案见 [修复计划](archive/plans/2026-10-03-review-fixes.md)。
 
 | 问题 | 最终行为 / 永久回归 |
 | --- | --- |

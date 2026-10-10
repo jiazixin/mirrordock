@@ -5,6 +5,7 @@ import (
 	"compress/bzip2"
 	"compress/gzip"
 	"context"
+	"crypto/sha1"
 	"crypto/sha256"
 	"crypto/sha512"
 	"encoding/hex"
@@ -16,6 +17,7 @@ import (
 	"hash"
 	"io"
 	"io/fs"
+	"mirrordock/internal/config"
 	"os"
 	"path"
 	"path/filepath"
@@ -26,6 +28,21 @@ import (
 // Validate checks repository indexes and referenced file sizes without hashing
 // each package during every download. The upstream package signatures remain
 // the responsibility of reposync/client signature verification.
+// ValidationError describes inconsistent upstream repository data. Local I/O
+// and cancellation errors remain distinguishable to the execution engine.
+type ValidationError struct{ Err error }
+
+func (e *ValidationError) Error() string { return e.Err.Error() }
+func (e *ValidationError) Unwrap() error { return e.Err }
+
+func ValidateSource(ctx context.Context, dir string, source config.Source) error {
+	kind := source.Type
+	if kind == "reposync" && !config.DefaultBool(source.RepoSync.DownloadMetadata) {
+		kind = "packages"
+	}
+	return Validate(ctx, dir, kind)
+}
+
 func Validate(ctx context.Context, dir, kind string) error {
 	root, err := os.OpenRoot(dir)
 	if err != nil {
@@ -55,13 +72,23 @@ func Validate(ctx context.Context, dir, kind string) error {
 			return nil
 		}
 		files++
+		if kind == "packages" {
+			return nil
+		}
 		if d.Name() == "repomd.xml" && filepath.Base(filepath.Dir(p)) == "repodata" {
 			repos++
-			return validateRPM(ctx, root, filepath.ToSlash(rel))
+			return repositoryError(validateRPM(ctx, root, filepath.ToSlash(rel)))
 		}
-		if d.Name() == "Release" || d.Name() == "InRelease" {
+		if (d.Name() == "Release" || d.Name() == "InRelease") && aptReleasePath(filepath.ToSlash(rel)) {
+			if d.Name() == "Release" {
+				if _, e := root.Stat(path.Join(path.Dir(filepath.ToSlash(rel)), "InRelease")); e == nil {
+					return nil
+				} else if !errors.Is(e, os.ErrNotExist) {
+					return e
+				}
+			}
 			repos++
-			return validateAPT(ctx, root, filepath.ToSlash(rel))
+			return repositoryError(validateAPT(ctx, root, filepath.ToSlash(rel)))
 		}
 		return nil
 	})
@@ -69,12 +96,25 @@ func Validate(ctx context.Context, dir, kind string) error {
 		return err
 	}
 	if files == 0 {
-		return errors.New("同步目录为空，无法发布")
+		return &ValidationError{errors.New("同步目录为空，无法发布")}
 	}
 	if kind == "reposync" && repos == 0 {
-		return errors.New("仓库缺少 repodata 元数据")
+		return &ValidationError{errors.New("仓库缺少 repodata 元数据")}
 	}
 	return nil
+}
+func aptReleasePath(name string) bool {
+	parts := strings.Split(name, "/")
+	return len(parts) == 1 || (len(parts) >= 3 && parts[len(parts)-3] == "dists")
+}
+func repositoryError(err error) error {
+	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
+	if _, ok := errors.AsType[*os.PathError](err); ok && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return &ValidationError{err}
 }
 func checkFile(root *os.Root, p string, size int64) error {
 	if hidden(p) {
@@ -147,6 +187,9 @@ func validateRPM(ctx context.Context, root *os.Root, p string) error {
 func checkHash(ctx context.Context, root *os.Root, name, kind, want string) error {
 	var h hash.Hash
 	switch kind {
+	case "sha", "sha1":
+		// Legacy metadata consistency only; this is not signature authentication.
+		h = sha1.New()
 	case "sha256":
 		h = sha256.New()
 	case "sha512":
@@ -271,6 +314,7 @@ func validateAPT(ctx context.Context, root *os.Root, p string) error {
 		return errors.New("APT Release 超过 8 MiB 校验上限")
 	}
 	inHashes := false
+	declared, checked := 0, 0
 	for line := range strings.SplitSeq(string(b), "\n") {
 		if err = ctx.Err(); err != nil {
 			return err
@@ -294,18 +338,32 @@ func validateAPT(ctx context.Context, root *os.Root, p string) error {
 		if err != nil {
 			return err
 		}
+		if size < 0 || !fs.ValidPath(fields[2]) || strings.Contains(fields[2], "\\") || hidden(fields[2]) {
+			return errors.New("APT 索引路径或大小无效")
+		}
+		declared++
 		name := path.Join(path.Dir(p), fields[2])
+		// Release also lists absent uncompressed forms and excluded architectures.
+		if _, err := root.Stat(name); errors.Is(err, os.ErrNotExist) {
+			continue
+		} else if err != nil {
+			return err
+		}
+		checked++
 		if err = checkFile(root, name, size); err != nil {
 			return err
 		}
 		if err = checkHash(ctx, root, name, "sha256", fields[0]); err != nil {
 			return err
 		}
-		if strings.Contains(path.Base(name), "Packages") && !strings.HasSuffix(name, ".diff/Index") {
+		if base := strings.TrimSuffix(path.Base(name), path.Ext(name)); path.Base(name) == "Packages" || base == "Packages" {
 			if err = validatePackages(ctx, root, name); err != nil {
 				return err
 			}
 		}
+	}
+	if declared > 0 && checked == 0 {
+		return fmt.Errorf("Release 中所有索引均缺失: %s", p)
 	}
 	return nil
 }

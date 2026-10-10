@@ -64,3 +64,25 @@ func TestConfiguredAccountRequiresRestart(t *testing.T) {
 		t.Fatal("new password was persisted to SQLite", err)
 	}
 }
+
+func TestLoginLimitsSeparateClientsAndReset(t *testing.T) {
+	a := &auth{attempts: map[string]loginWindow{}}
+	for range 10 {
+		if a.limited("192.0.2.1") {
+			t.Fatal("early limit")
+		}
+	}
+	if !a.limited("192.0.2.1") || a.limited("192.0.2.2") {
+		t.Fatal("limits shared across clients")
+	}
+	a.resetLimit("192.0.2.1")
+	if a.limited("192.0.2.1") {
+		t.Fatal("successful login did not reset")
+	}
+	req := httptest.NewRequest("POST", "/api/auth/login", nil)
+	req.RemoteAddr = "[2001:db8::1]:1234"
+	req.Header.Set("X-Forwarded-For", "192.0.2.2")
+	if clientIP(req) != "2001:db8::1" {
+		t.Fatal("untrusted header affected peer identity")
+	}
+}

@@ -1,5 +1,3 @@
-//go:build linux || darwin
-
 package mirrors
 
 import "golang.org/x/sys/unix"
