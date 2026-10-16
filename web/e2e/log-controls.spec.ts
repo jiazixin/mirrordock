@@ -82,7 +82,7 @@ test('log refresh releases its state and follow defaults on, toggles and survive
         await route.fulfill({ json: { text, next_offset: offset + Buffer.byteLength(text) } })
       }
     })
-    await page.goto(`${base}/admin/`)
+    await page.goto(`${base}/admin/sources`)
     await page.getByLabel('用户名', { exact: true }).fill('admin')
     await page.getByLabel('管理员密码').fill('log-controls-fixture-password')
     await page.getByRole('button', { name: '登录管理台' }).click()

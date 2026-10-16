@@ -101,8 +101,7 @@ async function reload() {
   >
     <div class="page-heading">
       <div>
-        <span class="eyebrow">SYSTEM PREFERENCES</span>
-        <h1>系统设置<span>.</span></h1>
+        <h1>系统设置</h1>
       </div>
       <div class="heading-actions">
         <button
@@ -382,56 +381,66 @@ async function reload() {
 
 <style scoped>
 .settings-tabs {
-  gap: 24px;
   overflow-x: auto;
 }
 .active-config {
-  padding: 26px 28px;
+  padding: 8px 0 24px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
 }
 .active-config h2 {
-  font-size: 17px;
+  font-size: 15px;
 }
 .active-config code {
   display: block;
-  margin-top: 14px;
+  margin-top: 12px;
   overflow-wrap: anywhere;
-  color: var(--dark);
+  color: var(--t1);
   font-size: 13px;
 }
-.settings-tabs button {
-  white-space: nowrap;
+.active-config p {
+  margin-top: 8px;
+  font-size: 13px;
+  color: var(--t2);
 }
 .settings-sections {
   display: flex;
   flex-direction: column;
-  gap: 20px;
 }
 .setting-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: 36px;
-  padding: 26px;
+  gap: 40px;
+  padding: 28px 0;
+  border: 0;
+  border-top: 1px solid var(--line);
+  border-radius: 0;
+  background: transparent;
+  overflow: visible;
+}
+.setting-row:first-child {
+  border-top: 0;
+  padding-top: 8px;
 }
 .setting-description {
-  max-width: 530px;
+  max-width: 520px;
 }
 .setting-index {
   display: block;
-  font-size: 11px;
-  font-weight: 500;
-  letter-spacing: 0.6px;
-  color: var(--muted);
+  font-size: 12px;
+  color: var(--t3);
   margin-bottom: 10px;
 }
 .setting-description h3 {
   font-size: 16px;
-  margin-bottom: 10px;
+  margin-bottom: 8px;
 }
 .setting-description p {
-  color: var(--muted);
-  font-size: 12px;
-  line-height: 1.8;
-  margin-bottom: 12px;
+  color: var(--t2);
+  font-size: 13px;
+  line-height: 1.7;
+  margin-bottom: 10px;
 }
 .setting-description small {
   display: block;
@@ -446,42 +455,20 @@ async function reload() {
   display: grid;
   align-content: start;
 }
-.setting-controls label {
-  font-size: 13px;
-}
-.setting-controls input:not([type='checkbox']) {
-  max-width: none;
-}
 .setting-option-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
-}
-@media (max-width: 1150px) {
-  .setting-row {
-    gap: 28px;
-    padding: 24px;
-  }
+  gap: 10px;
 }
 @media (max-width: 900px) {
   .setting-row {
     grid-template-columns: 1fr;
-    gap: 24px;
-  }
-  .setting-controls input:not([type='checkbox']) {
-    max-width: none;
+    gap: 22px;
   }
 }
 @media (max-width: 480px) {
   .settings-tabs {
-    gap: 16px;
-  }
-  .settings-tabs button {
-    font-size: 12px;
-    gap: 5px;
-  }
-  .setting-row {
-    padding: 22px 18px;
+    gap: 18px;
   }
   .setting-option-grid {
     grid-template-columns: minmax(0, 1fr);

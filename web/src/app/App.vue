@@ -97,7 +97,7 @@ onBeforeUnmount(() => {
       :src="logo"
       alt="MirrorDock"
     />
-    <p>连接源仓…</p>
+    <p>正在连接…</p>
   </div>
   <Shell
     v-else-if="authenticated"
@@ -108,24 +108,28 @@ onBeforeUnmount(() => {
     class="login-screen"
   >
     <div class="login-art">
-      <span class="eyebrow">KEEP YOUR SOURCES CLOSE</span>
-      <h1>每一份软件，<br />都在你的掌控中<span>。</span></h1>
-      <p>同步、记录、分发。<br />一个源仓，连接你的软件世界。</p>
-      <div class="login-grid">
-        <span>RSYNC</span><span>RELEASE</span><span>REPOSYNC</span><span>HTTP / TLS</span>
+      <div class="brand">
+        <img
+          :src="logo"
+          alt=""
+        /><strong>MirrorDock</strong>
       </div>
-      <small>MirrorDock · 自托管软件源</small>
+      <h1>软件源同步<br />与镜像分发</h1>
+      <p>按计划从上游同步，校验后发布不可变的镜像代；失败时保留上一代，公开下载不受影响。</p>
+      <div class="login-grid">
+        <span>rsync</span><span>reposync</span><span>GitHub Release</span><span>HTTP / TLS</span>
+      </div>
+      <small>源仓 · 自托管软件源</small>
     </div>
     <section class="login-form">
       <div class="brand">
         <img
           :src="logo"
           alt=""
-        />
-        <div><strong>MirrorDock</strong><small>源仓</small></div>
+        /><strong>MirrorDock</strong>
       </div>
-      <h2>欢迎回来</h2>
-      <p>登录以管理同步源与运行计划。</p>
+      <h2>登录管理台</h2>
+      <p>管理同步源、运行计划与通知。</p>
       <form @submit.prevent="submit">
         <label
           >用户名<input
@@ -153,10 +157,10 @@ onBeforeUnmount(() => {
           class="button primary"
           :disabled="busy"
         >
-          {{ busy ? '正在连接…' : '登录管理台' }}<ArrowRight :size="17" />
+          {{ busy ? '正在连接…' : '登录管理台' }}<ArrowRight :size="16" />
         </button>
       </form>
-      <small><ShieldCheck :size="15" />镜像目录公开读取 · 管理操作需要登录</small>
+      <small><ShieldCheck :size="14" />镜像目录公开读取 · 管理操作需要登录</small>
     </section>
   </main>
 </template>

@@ -54,7 +54,7 @@ async function fixture(page: Page, request: APIRequestContext) {
     throw error
   }
   const login = async () => {
-    await page.goto(`${base}/admin/`)
+    await page.goto(`${base}/admin/sources`)
     await page.getByLabel('管理员密码').fill('preflight-fixture-password')
     await page.getByRole('button', { name: '登录管理台' }).click()
     await expect(page.locator('.page-heading')).toBeVisible()

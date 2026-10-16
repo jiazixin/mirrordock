@@ -496,67 +496,67 @@ onBeforeUnmount(() => {
 .notification-settings {
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 16px;
 }
 .notification-settings > .alert {
-  background: var(--blue-light);
-  border-color: #dce4fc;
-  color: #53637c;
   margin-bottom: 0;
 }
 .notification-intro h2,
 .records-heading h2 {
-  font-size: 17px;
+  font-size: 18px;
 }
 .notification-intro p,
 .timezone-note,
 .channel-description p {
-  color: var(--muted);
-  font-size: 12px;
-  line-height: 1.8;
+  color: var(--t2);
+  font-size: 13px;
+  line-height: 1.7;
 }
 .notification-intro p {
-  margin-top: 10px;
+  margin-top: 8px;
+}
+.timezone-note {
+  color: var(--t3);
+  font-size: 12px;
 }
 .notification-card {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  padding: 26px;
-  gap: 36px;
+  gap: 40px;
+  padding: 28px 0;
+  border: 0;
+  border-top: 1px solid var(--line);
+  border-radius: 0;
+  background: transparent;
   overflow: visible;
 }
 .channel-title {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 6px;
 }
 .channel-title h3 {
   font-size: 16px;
 }
 .channel-description p {
-  margin-top: 12px;
+  margin-top: 8px;
 }
 .channel-controls {
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: 16px;
   min-width: 0;
-}
-.channel-controls label {
-  font-size: 13px;
 }
 .channel-option-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
+  gap: 10px;
 }
 .channel-actions {
   display: flex;
-  gap: 10px;
+  gap: 8px;
   flex-wrap: wrap;
-  border-top: 1px solid var(--line);
-  padding-top: 18px;
-  margin-top: 8px;
+  padding-top: 4px;
 }
 .help-wrapper {
   position: relative;
@@ -565,13 +565,16 @@ onBeforeUnmount(() => {
 .help-button {
   display: inline-flex;
   padding: 5px;
-  color: var(--muted);
+  color: var(--t3);
   border: 0;
   background: transparent;
   cursor: pointer;
 }
+.help-button:hover {
+  color: var(--t1);
+}
 .help-button:focus-visible {
-  outline: 2px solid var(--blue);
+  outline: 2px solid var(--focus);
   outline-offset: 2px;
   border-radius: 4px;
 }
@@ -581,12 +584,12 @@ onBeforeUnmount(() => {
   top: 100%;
   left: -80px;
   width: min(340px, calc(100vw - 100px));
-  padding: 15px;
-  background: var(--paper, white);
-  color: var(--dark);
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  box-shadow: 0 8px 24px #0002;
+  padding: 14px 16px;
+  background: var(--raised);
+  color: var(--t1);
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  box-shadow: var(--shadow);
   font-size: 12px;
   line-height: 1.8;
   overflow-wrap: anywhere;
@@ -595,54 +598,60 @@ onBeforeUnmount(() => {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin: 12px 0 18px;
+  margin: 28px 0 16px;
 }
 .notification-records > small {
   display: block;
-  margin-top: 14px;
+  margin-top: 12px;
 }
 .notification-records td,
 .notification-records th {
-  text-align: center;
   white-space: nowrap;
 }
 .notification-records .explanation {
-  text-align: left;
   white-space: normal;
   min-width: 180px;
   max-width: 360px;
+  color: var(--t2);
 }
 .notification-records .notification-empty {
   white-space: normal;
   padding: 36px 20px;
-  color: var(--muted);
+  color: var(--t3);
+  text-align: center;
 }
 .delivery-state {
-  display: inline-block;
-  padding: 4px 7px;
-  border-radius: 4px;
-  background: #f7f9fc;
-  font-size: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+  color: var(--t2);
 }
-.delivery-state.sent {
-  color: #16805c;
-  background: #edf8f2;
+.delivery-state::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--t3);
+}
+.delivery-state.sending::before,
+.delivery-state.waiting::before {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--t3);
 }
 .delivery-state.failed {
-  color: #b44242;
-  background: #fdf0f0;
+  color: var(--red);
+}
+.delivery-state.failed::before {
+  background: var(--red);
 }
 @media (max-width: 900px) {
   .notification-card {
     grid-template-columns: 1fr;
-    gap: 24px;
-    padding: 24px;
+    gap: 22px;
   }
 }
 @media (max-width: 480px) {
-  .notification-card {
-    padding: 22px 18px;
-  }
   .channel-option-grid {
     grid-template-columns: minmax(0, 1fr);
   }

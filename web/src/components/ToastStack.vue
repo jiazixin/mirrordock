@@ -56,7 +56,7 @@ onBeforeUnmount(() => {
           aria-hidden="true"
           ><component
             :is="item.tone === 'error' ? CircleAlert : item.tone === 'info' ? Info : CircleCheck"
-            :size="20"
+            :size="18"
         /></span>
         <p
           class="toast-message"
@@ -88,89 +88,82 @@ onBeforeUnmount(() => {
 .toast-stack {
   position: fixed;
   z-index: 200;
-  top: max(112px, env(safe-area-inset-top));
+  top: calc(var(--header-height) + 16px);
   right: max(24px, env(safe-area-inset-right));
   width: min(380px, calc(100vw - 32px));
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
   pointer-events: none;
 }
 .toast-card {
-  --toast-color: #238569;
-  --toast-tint: #edf8f3;
+  --toast-color: var(--acc);
   position: relative;
   display: flex;
   align-items: flex-start;
   gap: 12px;
-  padding: 18px 16px 21px;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: var(--paper, white);
-  box-shadow:
-    0 8px 28px #1d263b14,
-    0 2px 6px #1d263b06;
+  padding: 14px 12px 16px 16px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: var(--raised);
+  box-shadow: var(--shadow);
   overflow: hidden;
   pointer-events: none;
 }
 .toast-card.error {
-  --toast-color: #bd5366;
-  --toast-tint: #fff0f2;
+  --toast-color: var(--red);
 }
 .toast-card.info {
-  --toast-color: var(--blue);
-  --toast-tint: var(--blue-light);
+  --toast-color: var(--t2);
 }
 .toast-icon {
   display: grid;
   place-items: center;
-  flex: 0 0 30px;
-  height: 30px;
-  border-radius: 8px;
-  background: var(--toast-tint);
+  flex: 0 0 20px;
+  height: 22px;
   color: var(--toast-color);
 }
 .toast-message {
   flex: 1;
   min-width: 0;
-  margin: 4px 0 0;
-  color: var(--dark);
+  margin: 1px 0 0;
+  color: var(--t1);
   font-size: 13px;
-  font-weight: 500;
-  line-height: 1.7;
+  line-height: 1.6;
   overflow-wrap: anywhere;
 }
 .toast-close {
   pointer-events: auto;
   display: grid;
   place-items: center;
-  flex: 0 0 26px;
-  height: 26px;
+  flex: 0 0 24px;
+  height: 24px;
   border: 0;
-  border-radius: 5px;
+  border-radius: 4px;
   padding: 0;
   background: transparent;
-  color: var(--muted);
+  color: var(--t3);
   cursor: pointer;
 }
 .toast-close:hover {
-  background: var(--bg, #f9fbfd);
-  color: var(--dark);
+  background: var(--hover);
+  color: var(--t1);
 }
 .toast-close:focus-visible {
-  outline: 2px solid var(--blue);
+  outline: 2px solid var(--focus);
   outline-offset: 2px;
 }
 .toast-track {
   position: absolute;
   inset: auto 0 0;
-  height: 3px;
-  background: var(--toast-tint);
+  height: 2px;
+  background: transparent;
 }
 .toast-countdown {
   display: block;
   height: 100%;
   background: var(--toast-color);
+  opacity: 0.7;
   transform-origin: left;
   animation: toast-countdown var(--toast-duration) linear forwards;
 }
@@ -191,7 +184,7 @@ onBeforeUnmount(() => {
 }
 .toast-enter-from,
 .toast-leave-to {
-  transform: translateX(32px);
+  transform: translateX(24px);
   opacity: 0;
 }
 .toast-leave-active {
@@ -200,9 +193,8 @@ onBeforeUnmount(() => {
 }
 @media (max-width: 600px) {
   .toast-stack {
-    top: max(16px, env(safe-area-inset-top));
+    top: calc(var(--header-height) + 12px);
     right: max(16px, env(safe-area-inset-right));
-    gap: 10px;
   }
 }
 @media (prefers-reduced-motion: reduce) {

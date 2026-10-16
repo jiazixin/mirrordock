@@ -29,8 +29,7 @@ async function cron(source: Source, event: Event) {
   <section>
     <div class="page-heading">
       <div>
-        <span class="eyebrow">AUTOMATION</span>
-        <h1>计划管理<span>.</span></h1>
+        <h1>计划管理</h1>
       </div>
       <button
         class="button"

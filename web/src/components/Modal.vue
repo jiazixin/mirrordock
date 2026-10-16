@@ -58,7 +58,6 @@ onBeforeUnmount(() => {
       >
         <header>
           <div>
-            <span class="eyebrow">MIRRORDOCK</span>
             <h2>{{ title }}</h2>
           </div>
           <button

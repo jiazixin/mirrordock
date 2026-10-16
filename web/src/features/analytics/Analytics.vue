@@ -1,9 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import {
-  Activity,
   CheckCircle2,
-  Clock3,
   RefreshCw,
   ArrowDownToLine,
   ChartColumn,
@@ -66,10 +64,10 @@ const average = (s: AnalyticsStats) =>
 const resultParts = computed(() =>
   data.value
     ? [
-        { label: '成功', count: data.value.summary.succeeded, color: '#315bea' },
-        { label: '失败 / 超时', count: data.value.summary.failed, color: '#d66772' },
-        { label: '已取消', count: data.value.summary.cancelled, color: '#a8b0bd' },
-        { label: '未结束', count: data.value.summary.active, color: '#e8b15b' },
+        { label: '成功', count: data.value.summary.succeeded, color: 'var(--t2)' },
+        { label: '失败 / 超时', count: data.value.summary.failed, color: 'var(--red)' },
+        { label: '已取消', count: data.value.summary.cancelled, color: 'var(--line-strong)' },
+        { label: '未结束', count: data.value.summary.active, color: 'var(--amb)' },
       ]
     : [],
 )
@@ -130,7 +128,7 @@ onBeforeUnmount(() => {
 <template>
   <section class="analytics-page">
     <header class="page-heading">
-      <h1>{{ kindInfo.title }}<span>.</span></h1>
+      <h1>{{ kindInfo.title }}</h1>
       <button
         class="button"
         :disabled="loading"
@@ -142,6 +140,14 @@ onBeforeUnmount(() => {
         />刷新
       </button>
     </header>
+    <nav
+      class="tabs analytics-tabs"
+      aria-label="分析类型"
+    >
+      <RouterLink to="/analytics/rsync">Rsync 分析</RouterLink
+      ><RouterLink to="/analytics/reposync">Reposync分析</RouterLink
+      ><RouterLink to="/analytics/github">Release分析</RouterLink>
+    </nav>
     <div class="analytics-filters">
       <SelectField
         v-model="days"
@@ -186,31 +192,26 @@ onBeforeUnmount(() => {
     <template v-if="data && !error">
       <div class="stat-grid analytics-stats">
         <article>
-          <span>运行次数</span><Activity :size="18" /><strong>{{
-            data.summary.runs.toLocaleString()
-          }}</strong
+          <span>运行次数</span><strong>{{ data.summary.runs.toLocaleString() }}</strong
           ><small>{{ data.summary.active }} 次未结束 · {{ data.summary.cancelled }} 次取消</small>
         </article>
         <article>
-          <span>运行成功率</span><CheckCircle2 :size="18" /><strong>{{ rate(data.summary) }}</strong
+          <span>运行成功率</span><strong>{{ rate(data.summary) }}</strong
           ><small
             >{{ data.summary.succeeded }} 成功 / {{ evaluated(data.summary) }} 次有效结果</small
           >
         </article>
         <article>
-          <span>平均执行耗时</span><Clock3 :size="18" /><strong>{{ average(data.summary) }}</strong
+          <span>平均执行耗时</span><strong>{{ average(data.summary) }}</strong
           ><small>{{ data.summary.duration_samples }} 个样本 · 不含排队与暂停</small>
         </article>
         <article v-if="reposync">
-          <span>自动重试任务</span><RefreshCw :size="18" /><strong>{{
-            data.summary.retried_runs.toLocaleString()
-          }}</strong
+          <span>自动重试任务</span><strong>{{ data.summary.retried_runs.toLocaleString() }}</strong
           ><small>期间发生过自动重试的任务数</small>
         </article>
         <article v-else>
-          <span>成功任务处理量</span><ArrowDownToLine :size="18" /><strong class="bytes-stat">{{
-            bytes(data.summary.bytes)
-          }}</strong
+          <span>成功任务处理量</span
+          ><strong class="bytes-stat">{{ bytes(data.summary.bytes) }}</strong
           ><small>{{ github ? '包含复用资产的有效字节' : 'rsync 报告的处理字节' }}</small>
         </article>
       </div>
@@ -494,105 +495,99 @@ onBeforeUnmount(() => {
   </section>
 </template>
 <style scoped>
+.analytics-tabs {
+  margin-top: -8px;
+}
 .analytics-filters {
   display: flex;
   align-items: center;
-  gap: 12px;
-  margin-bottom: 20px;
+  gap: 10px;
+  margin-bottom: 32px;
 }
 .analytics-filters > .select-field:first-child {
   width: 150px;
 }
 .analytics-filters > .select-field:nth-child(2) {
-  width: 210px;
+  width: 220px;
 }
 .analytics-updated {
   margin-left: auto;
-  font-size: 11px;
-  color: var(--muted);
-}
-.analytics-stats article > small {
-  display: block;
-  margin-top: 10px;
-  font-size: 11px;
-}
-.analytics-stats article > strong {
-  font-size: 28px;
-}
-.analytics-stats article > strong.bytes-stat {
-  font-size: 25px;
+  font-size: 12px;
+  color: var(--t3);
 }
 .analytics-grid {
   display: grid;
   grid-template-columns: minmax(0, 1.65fr) minmax(0, 1fr);
-  gap: 18px;
+  gap: 20px;
   margin-bottom: 20px;
 }
 .analytics-grid > .panel {
   min-width: 0;
-  padding: 20px;
+  padding: 22px 24px;
 }
 .analytics-panel-heading {
   display: flex;
   justify-content: space-between;
-  align-items: center;
+  align-items: baseline;
   gap: 12px;
   margin-bottom: 18px;
 }
-.analytics-panel-heading h3 {
-  font-size: 14px;
+.analytics-panel-heading > div {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
 }
-.analytics-panel-heading small {
-  font-size: 11px;
+.analytics-panel-heading h3 {
+  font-size: 15px;
 }
 .analytics-panel-heading > svg {
-  color: #8995a7;
+  color: var(--t3);
 }
 .chart-tabs {
   display: flex;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 3px;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  padding: 2px;
   gap: 2px;
 }
 .chart-tabs button {
   background: none;
   border: 0;
-  padding: 4px 10px;
-  color: var(--muted);
-  font-size: 11px;
-  border-radius: 4px;
+  padding: 3px 10px;
+  color: var(--t2);
+  font-size: 12px;
+  border-radius: 3px;
   white-space: nowrap;
 }
 .chart-tabs button[aria-pressed='true'] {
-  background: var(--blue-light);
-  color: var(--blue);
-  font-weight: 500;
+  background: var(--hover);
+  color: var(--t1);
 }
 .chart-legend {
   display: flex;
   flex-wrap: wrap;
-  gap: 14px;
-  justify-content: center;
-  margin-top: 4px;
-  font-size: 11px;
-  color: #707b8e;
+  gap: 16px;
+  justify-content: flex-start;
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--t3);
 }
 .chart-legend span {
   display: flex;
-  gap: 6px;
+  gap: 7px;
   align-items: center;
 }
 i {
   display: inline-block;
-  width: 7px;
-  height: 7px;
-  border-radius: 2px;
+  width: 8px;
+  height: 8px;
+  border-radius: 1px;
   flex-shrink: 0;
 }
 .chart-footnote {
-  font-size: 11px;
-  color: var(--muted);
+  font-size: 12px;
+  color: var(--t3);
   line-height: 1.8;
   margin-top: 18px;
 }
@@ -600,7 +595,7 @@ i {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 24px;
+  gap: 28px;
   min-height: 210px;
 }
 .result-ring {
@@ -608,48 +603,47 @@ i {
   height: 148px;
   flex-shrink: 0;
   border-radius: 50%;
-  padding: 15px;
+  padding: 10px;
 }
 .result-ring.empty {
-  background: #edf0f5;
+  background: var(--line);
 }
 .result-ring > div {
   height: 100%;
   width: 100%;
   border-radius: 50%;
-  background: white;
+  background: var(--panel);
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
 }
 .result-ring strong {
-  font-size: 25px;
-  font-weight: 500;
-  letter-spacing: -0.6px;
+  font-size: 26px;
+  font-weight: 300;
+  letter-spacing: -0.03em;
 }
 .result-ring small {
-  font-size: 11px;
-  margin-top: 4px;
+  margin-top: 2px;
 }
 .result-legend {
   display: grid;
-  gap: 15px;
+  gap: 14px;
   min-width: 0;
-  font-size: 11px;
+  font-size: 12px;
 }
 .result-legend > div {
   display: flex;
   align-items: center;
-  gap: 7px;
-  color: #757f8e;
+  gap: 8px;
+  color: var(--t2);
 }
 .result-legend strong {
   margin-left: auto;
-  color: #394255;
-  font-size: 12px;
-  font-weight: 500;
-  font-variant-numeric: tabular-nums;
+  padding-left: 16px;
+  color: var(--t1);
+  font-size: 13px;
+  font-weight: 400;
 }
 .insight-total {
   display: flex;
@@ -658,25 +652,25 @@ i {
   margin: 24px 0;
 }
 .insight-total strong {
-  font-size: 30px;
-  font-weight: 500;
+  font-size: 36px;
+  font-weight: 300;
+  letter-spacing: -0.03em;
 }
 .insight-total span {
   font-size: 12px;
-  color: var(--muted);
+  color: var(--t3);
 }
 .asset-track {
   display: flex;
-  height: 16px;
-  border-radius: 4px;
+  height: 8px;
   overflow: hidden;
-  background: #f1f3f7;
+  background: var(--line);
 }
 .asset-track > span:first-child {
-  background: var(--blue);
+  background: var(--t2);
 }
 .asset-track > span:last-child {
-  background: #afa1d8;
+  background: var(--bar);
 }
 .asset-labels {
   display: flex;
@@ -684,92 +678,91 @@ i {
   gap: 15px;
   flex-wrap: wrap;
   font-size: 12px;
-  color: #707a8d;
-  margin-top: 13px;
+  color: var(--t2);
+  margin-top: 12px;
 }
 .asset-labels span {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 7px;
 }
 .asset-labels strong {
-  font-weight: 500;
-  color: #353f51;
-  margin-left: 8px;
+  font-weight: 400;
+  color: var(--t1);
+  margin-left: 6px;
 }
 .asset-labels i {
-  background: var(--blue);
+  background: var(--t2);
 }
 .asset-labels span:last-child i {
-  background: #afa1d8;
+  background: var(--bar);
 }
 .reliability-stats {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 15px;
+  gap: 16px;
   margin: 22px 0;
 }
 .reliability-stats > div {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
 }
 .reliability-stats strong {
-  font-size: 28px;
-  font-weight: 500;
-  font-variant-numeric: tabular-nums;
+  font-size: 32px;
+  font-weight: 300;
+  letter-spacing: -0.03em;
 }
 .reliability-stats span {
-  font-size: 11px;
-  color: var(--muted);
+  font-size: 12px;
+  color: var(--t3);
 }
 .insight-divider {
   display: flex;
   justify-content: space-between;
   border-top: 1px solid var(--line);
-  padding-top: 16px;
-  font-size: 12px;
-  color: #707b8c;
+  padding-top: 14px;
+  font-size: 13px;
+  color: var(--t2);
 }
 .asset-retries {
   margin-top: 20px;
 }
 .insight-divider strong {
-  font-weight: 500;
-  color: #394255;
+  font-weight: 400;
+  color: var(--t1);
 }
 .error-bars {
   display: grid;
-  gap: 15px;
+  gap: 16px;
 }
 .error-bars > div > div:first-child {
   display: flex;
   justify-content: space-between;
   gap: 12px;
   margin-bottom: 7px;
-  color: #7e8592;
-  font-size: 11px;
+  color: var(--t2);
+  font-size: 12px;
 }
 .error-bars code {
-  font-size: 11px;
+  font-size: 12px;
   overflow-wrap: anywhere;
   min-width: 0;
+  color: var(--t1);
 }
 .error-bars strong {
-  font-weight: 500;
+  font-weight: 400;
   white-space: nowrap;
 }
 .error-track {
-  height: 5px;
-  background: #f6eff1;
-  border-radius: 3px;
+  height: 2px;
+  background: var(--line);
   overflow: hidden;
 }
 .error-track span {
   display: block;
   height: 100%;
-  background: #d66772;
-  border-radius: 3px;
+  background: var(--red);
 }
 .chart-empty {
   display: flex;
@@ -778,14 +771,14 @@ i {
   justify-content: center;
   min-height: 135px;
   gap: 12px;
-  font-size: 12px;
-  color: #929aaa;
+  font-size: 13px;
+  color: var(--t3);
 }
 .chart-empty svg {
-  color: #68a487;
+  color: var(--t3);
 }
 .source-ranking .analytics-panel-heading {
-  padding: 20px 20px 0;
+  padding: 22px 24px 0;
 }
 .source-ranking table {
   min-width: 740px;
@@ -793,9 +786,7 @@ i {
 .source-ranking th:first-child {
   width: 25%;
 }
-.source-ranking td:first-child strong {
-  overflow-wrap: anywhere;
-}
+.source-ranking td:first-child strong,
 .source-ranking td:first-child small {
   overflow-wrap: anywhere;
 }
@@ -803,68 +794,62 @@ i {
   display: flex;
   align-items: center;
   gap: 10px;
-  max-width: 125px;
-  margin: auto;
+  max-width: 140px;
 }
 .ranking-count strong {
-  min-width: 20px;
+  min-width: 24px;
   text-align: right;
 }
 .ranking-count > div {
-  height: 5px;
-  background: #eef1f7;
+  height: 2px;
+  background: var(--line);
   flex: 1;
-  border-radius: 3px;
   min-width: 40px;
   overflow: hidden;
 }
 .ranking-count span {
   display: block;
-  background: #6f8bea;
+  background: var(--t2);
   height: 100%;
-  border-radius: 3px;
 }
 .ranking-empty {
   padding: 32px;
-  color: var(--muted);
+  color: var(--t3);
 }
 .analytics-note {
-  font-size: 11px;
+  font-size: 12px;
   line-height: 1.9;
-  color: #8b929d;
+  color: var(--t3);
   margin-top: 16px;
 }
 .analytics-message {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 32px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  color: var(--muted);
+  padding: 32px 0;
+  border-top: 1px solid var(--line-strong);
+  color: var(--t3);
 }
 .analytics-message.error {
-  color: #bf5363;
-  background: #fff9fa;
+  color: var(--red);
 }
 .analytics-empty {
   display: flex;
   align-items: center;
   gap: 16px;
-  padding: 20px;
-  background: #f9fbff;
-  border: 1px solid #e2e9f8;
-  border-radius: var(--radius);
-  margin-bottom: 18px;
-  color: #8491ad;
+  padding: 20px 0;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 24px;
+  color: var(--t3);
 }
 .analytics-empty h3 {
-  font-size: 13px;
+  font-size: 14px;
+  font-weight: 400;
 }
 .analytics-empty p {
-  font-size: 12px;
-  color: var(--muted);
-  margin-top: 5px;
+  font-size: 13px;
+  color: var(--t3);
+  margin-top: 4px;
 }
 .analytics-empty .button {
   margin-left: auto;
@@ -881,14 +866,12 @@ i {
   .result-content {
     flex-direction: column;
     gap: 18px;
+    min-height: 240px;
   }
   .result-legend {
     width: 100%;
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 12px;
-  }
-  .result-content {
-    min-height: 240px;
   }
 }
 @media (max-width: 900px) {
@@ -902,13 +885,17 @@ i {
   .result-legend {
     width: auto;
     grid-template-columns: 1fr;
-    gap: 15px;
+    gap: 14px;
   }
   .analytics-updated {
     display: none;
   }
 }
 @media (max-width: 600px) {
+  .analytics-tabs {
+    gap: 20px;
+    overflow-x: auto;
+  }
   .analytics-filters {
     flex-wrap: wrap;
   }
@@ -918,23 +905,11 @@ i {
     min-width: 120px;
     width: auto;
   }
-  .analytics-stats {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-  .analytics-stats article {
-    padding: 16px;
-  }
-  .analytics-stats article > svg {
-    display: none;
-  }
-  .analytics-stats article > strong {
-    font-size: 24px;
-  }
-  .analytics-stats article > strong.bytes-stat {
-    font-size: 21px;
-  }
   .analytics-grid > .panel {
-    padding: 16px;
+    padding: 18px 16px;
+  }
+  .source-ranking .analytics-panel-heading {
+    padding: 18px 16px 0;
   }
   .trend-panel .analytics-panel-heading {
     align-items: flex-start;
@@ -953,12 +928,6 @@ i {
   }
   .analytics-empty .button {
     margin-left: 0;
-  }
-  .analytics-page .page-heading h1 {
-    font-size: 24px;
-  }
-  .analytics-page .page-heading {
-    gap: 10px;
   }
   .analytics-page .page-heading .button {
     flex-shrink: 0;

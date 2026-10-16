@@ -1,20 +1,10 @@
 <script setup lang="ts">
 import { useRoute } from 'vue-router'
-import {
-  FolderSync,
-  Layers3,
-  ScrollText,
-  Clock3,
-  Settings2,
-  LogOut,
-  Menu,
-  ExternalLink,
-  ChartNoAxesCombined,
-} from '@lucide/vue'
-import { ref, onBeforeUnmount } from 'vue'
-import AnalysisIcon from '../components/AnalysisIcon.vue'
+import { LogOut, Menu, X, ArrowUpRight, Monitor, Moon, Sun } from '@lucide/vue'
+import { computed, ref, watch, onBeforeUnmount } from 'vue'
 import ToastStack from '../components/ToastStack.vue'
 import { state, dismissToast } from '../app/state'
+import { theme, themeLabel, cycleTheme } from '../app/theme'
 import logo from '../assets/logo.svg'
 const emit = defineEmits<{ logout: [] }>()
 const route = useRoute()
@@ -22,22 +12,24 @@ const mobile = ref(false)
 onBeforeUnmount(() => {
   state.toasts = []
 })
-const links = [
-  { path: '/sources', label: '同步源', icon: FolderSync, group: '工作台' },
-  { path: '/batches', label: '批次记录', icon: Layers3, group: '任务记录' },
-  { path: '/records', label: '运行记录', icon: ScrollText },
-  { path: '/schedules', label: '计划管理', icon: Clock3, group: '运行管理' },
-  {
-    path: '/analytics/rsync',
-    label: 'Rsync 分析',
-    icon: AnalysisIcon,
-    kind: 'rsync',
-    group: '分析',
+watch(
+  () => route.fullPath,
+  () => {
+    mobile.value = false
   },
-  { path: '/analytics/reposync', label: 'Reposync分析', icon: AnalysisIcon, kind: 'reposync' },
-  { path: '/analytics/github', label: 'Release分析', icon: ChartNoAxesCombined },
-  { path: '/settings', label: '系统设置', icon: Settings2, group: '系统' },
+)
+const links = [
+  { path: '/overview', label: '概览' },
+  { path: '/sources', label: '同步源' },
+  { path: '/batches', label: '批次记录' },
+  { path: '/records', label: '运行记录' },
+  { path: '/schedules', label: '计划管理' },
+  { path: '/analytics/rsync', label: '数据分析', section: '/analytics/' },
+  { path: '/settings', label: '系统设置' },
 ]
+const themeIcon = computed(() =>
+  theme.value === 'dark' ? Moon : theme.value === 'light' ? Sun : Monitor,
+)
 </script>
 
 <template>
@@ -46,80 +38,92 @@ const links = [
     @dismiss="dismissToast"
   />
   <div class="app-shell">
-    <aside
-      id="sidebar-navigation"
-      class="sidebar"
-      :class="{ open: mobile }"
-    >
+    <header class="app-header">
       <RouterLink
         class="brand"
-        to="/sources"
+        to="/overview"
         ><img
           :src="logo"
           alt=""
-        />
-        <div><strong>MirrorDock</strong></div></RouterLink
+        /><strong>MirrorDock</strong></RouterLink
       >
-      <nav>
-        <template
+      <nav
+        id="primary-navigation"
+        class="primary-nav"
+        :class="{ open: mobile }"
+        aria-label="主导航"
+      >
+        <RouterLink
           v-for="link in links"
           :key="link.path"
+          :to="link.path"
+          :class="{ active: link.section && route.path.startsWith(link.section) }"
+          :aria-current="
+            (link.section ? route.path.startsWith(link.section) : route.path === link.path)
+              ? 'page'
+              : undefined
+          "
+          @click="mobile = false"
+          >{{ link.label }}</RouterLink
         >
-          <span
-            v-if="link.group"
-            class="nav-group"
-            >{{ link.group }}</span
-          >
-          <RouterLink
-            :to="link.path"
-            @click="mobile = false"
-            ><component
-              :is="link.icon"
-              :size="19"
-              :kind="link.kind" /><span>{{ link.label }}</span
-            ><span
-              v-if="route.path === link.path"
-              class="nav-arrow"
-              aria-hidden="true"
-            ></span
-          ></RouterLink>
-        </template>
       </nav>
-      <div class="sidebar-bottom">
+      <div class="header-tools">
+        <span
+          class="live-status"
+          :class="{ on: state.connected }"
+          :title="state.connected ? '状态实时推送中' : '实时连接已断开，正在重连'"
+          >{{ state.connected ? '实时' : '未连接' }}</span
+        >
         <a
+          class="header-link"
           href="/"
           target="_blank"
           rel="noopener"
-          ><ExternalLink :size="16" />浏览镜像目录</a
+          >镜像目录<ArrowUpRight :size="14"
+        /></a>
+        <button
+          class="icon-button"
+          type="button"
+          :aria-label="`界面主题：${themeLabel}，点击切换`"
+          :title="`界面主题：${themeLabel}`"
+          @click="cycleTheme"
         >
+          <component
+            :is="themeIcon"
+            :size="17"
+          />
+        </button>
         <button
           class="account"
+          type="button"
           aria-label="退出登录"
+          :title="`${state.username} · 退出登录`"
           @click="emit('logout')"
         >
-          <span class="avatar">{{ Array.from(state.username)[0]?.toUpperCase() }}</span
-          ><span
-            ><strong>{{ state.username }}</strong
-            ><small>管理员</small></span
-          ><LogOut :size="17" />
+          <strong>{{ state.username }}</strong
+          ><LogOut :size="15" />
+        </button>
+        <button
+          class="icon-button mobile-menu"
+          type="button"
+          :aria-label="mobile ? '关闭导航' : '打开导航'"
+          aria-controls="primary-navigation"
+          :aria-expanded="mobile"
+          @click="mobile = !mobile"
+        >
+          <component
+            :is="mobile ? X : Menu"
+            :size="19"
+          />
         </button>
       </div>
-    </aside>
+    </header>
     <div
       v-if="mobile"
-      class="sidebar-scrim"
+      class="nav-scrim"
       @click="mobile = false"
     ></div>
     <main class="main-shell">
-      <button
-        class="icon-button mobile-menu"
-        aria-label="打开导航"
-        aria-controls="sidebar-navigation"
-        :aria-expanded="mobile"
-        @click="mobile = !mobile"
-      >
-        <Menu :size="20" />
-      </button>
       <div class="page-content">
         <RouterView />
       </div>

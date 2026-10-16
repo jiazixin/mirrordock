@@ -115,7 +115,7 @@ test('management pagination covers complete history, filtering, page sizes, jump
         json: { items: deliveries.slice(offset, offset + limit), total: deliveries.length },
       })
     })
-    await page.goto(`${base}/admin/`)
+    await page.goto(`${base}/admin/sources`)
     await page.getByLabel('用户名', { exact: true }).fill('admin')
     await page.getByLabel('管理员密码').fill('pagination-fixture-password')
     await page.getByRole('button', { name: '登录管理台' }).click()
@@ -133,15 +133,6 @@ test('management pagination covers complete history, filtering, page sizes, jump
     const origin = await locationRow.locator('.source-origin').boundingBox()
     const dest = await locationRow.locator('.dest').boundingBox()
     expect(Math.abs(origin!.y + origin!.height / 2 - dest!.y - dest!.height / 2)).toBeLessThan(2)
-    const rsyncIcon = await page
-      .getByRole('link', { name: 'Rsync 分析', exact: true })
-      .locator('svg')
-      .innerHTML()
-    const repoIcon = await page
-      .getByRole('link', { name: 'Reposync分析', exact: true })
-      .locator('svg')
-      .innerHTML()
-    expect(rsyncIcon).not.toEqual(repoIcon)
     await page.screenshot({ path: testInfo.outputPath('source-alignment.png'), fullPage: false })
     await expect(pager).toContainText('共 125 个同步源')
     await pager.getByRole('button', { name: '末页', exact: true }).click()

@@ -115,42 +115,39 @@ const metricLabel = computed(() =>
             :y="y(day.succeeded)"
             :width="(plotWidth / days.length) * 0.56"
             :height="(plotHeight * day.succeeded) / maximum"
-            fill="#315bea"
-            rx="1"
+            class="bar-ok"
           />
           <rect
             :x="x(i) - (plotWidth / days.length) * 0.28"
             :y="y(day.succeeded + day.failed)"
             :width="(plotWidth / days.length) * 0.56"
             :height="(plotHeight * day.failed) / maximum"
-            fill="#d66772"
+            class="bar-fail"
           />
           <rect
             :x="x(i) - (plotWidth / days.length) * 0.28"
             :y="y(day.succeeded + day.failed + day.cancelled)"
             :width="(plotWidth / days.length) * 0.56"
             :height="(plotHeight * day.cancelled) / maximum"
-            fill="#a8b0bd"
+            class="bar-cancel"
           />
           <rect
             :x="x(i) - (plotWidth / days.length) * 0.28"
             :y="y(day.runs)"
             :width="(plotWidth / days.length) * 0.56"
             :height="(plotHeight * day.active) / maximum"
-            fill="#e8b15b"
+            class="bar-active"
           />
         </g>
       </template>
       <template v-else>
         <path
           :d="`${path} L${x(days.length - 1)},${y(0)} L${x(0)},${y(0)} Z`"
-          fill="var(--blue-light)"
+          class="area"
         />
         <path
           :d="path"
-          fill="none"
-          stroke="var(--blue)"
-          stroke-width="2.5"
+          class="line"
         />
       </template>
       <g
@@ -178,15 +175,14 @@ const metricLabel = computed(() =>
           :x2="x(i)"
           :y1="top"
           :y2="y(0)"
-          stroke="#7586a9"
-          stroke-dasharray="3 4"
+          class="cursor"
         />
         <circle
           v-if="hovered === i && metric !== 'runs'"
           :cx="x(i)"
           :cy="y(value(day))"
-          r="4"
-          fill="var(--blue)"
+          r="3.5"
+          class="dot"
         />
       </g>
       <text
@@ -216,29 +212,54 @@ const metricLabel = computed(() =>
   gap: 12px;
   align-items: center;
   min-height: 32px;
-  padding: 0 4px;
-  color: var(--muted);
-  font-size: 11px;
+  color: var(--t3);
+  font-size: 12px;
 }
 .trend-readout strong {
-  font-weight: 500;
-  color: #525c6d;
-  font-variant-numeric: tabular-nums;
+  font-weight: 400;
+  color: var(--t1);
 }
 .chart-grid {
-  stroke: #edf0f5;
+  stroke: var(--line);
   stroke-width: 1;
 }
 .chart-text {
   font-size: 11px;
-  fill: #858d9a;
+  fill: var(--t3);
   font-family: inherit;
+}
+.bar-ok {
+  fill: var(--t2);
+}
+.bar-fail {
+  fill: var(--red);
+}
+.bar-cancel {
+  fill: var(--line-strong);
+}
+.bar-active {
+  fill: var(--amb);
+}
+.area {
+  fill: var(--acc-soft);
+}
+.line {
+  fill: none;
+  stroke: var(--acc);
+  stroke-width: 1.5;
+}
+.cursor {
+  stroke: var(--t3);
+  stroke-dasharray: 3 4;
+}
+.dot {
+  fill: var(--acc);
 }
 .chart-hit:focus {
   outline: none;
 }
 .chart-hit:focus > rect {
-  stroke: var(--blue);
+  stroke: var(--t1);
   stroke-width: 1;
 }
 @media (max-width: 480px) {

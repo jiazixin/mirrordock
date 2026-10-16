@@ -136,7 +136,7 @@ test('public directory layout, icons, search, sorting, unpaginated and safe file
         }
       })
       .toBe(200)
-    await page.goto(base + '/admin/')
+    await page.goto(base + '/admin/sources')
     await page.getByLabel('用户名', { exact: true }).fill('mirror-admin')
     await page.getByLabel('管理员密码').fill('isolated directory password 123')
     await page.getByRole('button', { name: '登录管理台' }).click()

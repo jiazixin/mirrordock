@@ -35,8 +35,7 @@ async function clear() {
   <section>
     <div class="page-heading">
       <div>
-        <span class="eyebrow">EXECUTION HISTORY</span>
-        <h1>运行记录<span>.</span></h1>
+        <h1>运行记录</h1>
       </div>
       <div class="heading-actions">
         <button

@@ -3,17 +3,7 @@ import Pagination from '../../components/Pagination.vue'
 import { usePagination } from '../../lib/pagination/usePagination'
 import SelectField from '../../components/SelectField.vue'
 import { computed, ref } from 'vue'
-import {
-  Plus,
-  RefreshCw,
-  Search,
-  Play,
-  Pencil,
-  Trash2,
-  FolderSync,
-  ArrowUpRight,
-  Layers3,
-} from '@lucide/vue'
+import { Plus, RefreshCw, Search, Play, Pencil, Trash2, FolderSync } from '@lucide/vue'
 import SourceEditor from './SourceEditor.vue'
 import StatusBadge from '../../components/StatusBadge.vue'
 import { clone, state, perform, refresh, runSource, saveConfiguration } from '../../app/state'
@@ -57,8 +47,7 @@ async function remove(source: Source) {
   <section>
     <div class="page-heading">
       <div>
-        <span class="eyebrow">SOURCE WORKSPACE</span>
-        <h1>同步源<span>.</span></h1>
+        <h1>同步源</h1>
       </div>
       <div class="heading-actions">
         <button
@@ -78,16 +67,21 @@ async function remove(source: Source) {
       <article>
         <span>同步源</span
         ><strong>{{ state.config?.config.sources.length ?? 0 }}<small>个</small></strong
-        ><FolderSync :size="24" />
+        ><small
+          >{{
+            state.config?.config.sources.filter((item) => item.enabled).length ?? 0
+          }}
+          个启用</small
+        >
       </article>
       <article>
         <span>正在运行</span><strong>{{ active }}<small>个任务</small></strong
-        ><Layers3 :size="24" />
+        ><small>含排队与正在暂停</small>
       </article>
       <article>
         <span>已发布镜像</span
         ><strong>{{ state.info?.publications.length ?? 0 }}<small>个</small></strong
-        ><ArrowUpRight :size="24" />
+        ><small>公开路径 /&lt;dest&gt;/</small>
       </article>
       <article>
         <span>本次启动分发</span
@@ -136,11 +130,6 @@ async function remove(source: Source) {
             >
               <td>
                 <div class="source-name">
-                  <span
-                    class="source-mark"
-                    :class="source.type"
-                    ><FolderSync :size="20"
-                  /></span>
                   <div>
                     <strong>{{ source.name }}</strong
                     ><small

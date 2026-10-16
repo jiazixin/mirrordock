@@ -102,7 +102,10 @@ test('real configuration, rsync failover, publication, records and responsive UI
     await expect(page.getByRole('alert')).toContainText('用户名或密码错误')
     await page.getByLabel('用户名', { exact: true }).fill('mirror-admin')
     await page.getByRole('button', { name: '登录管理台' }).click()
-    await expect(page.getByRole('heading', { name: '同步源.' })).toBeVisible()
+    await expect(page).toHaveURL(base + '/admin/overview')
+    await expect(page.getByRole('heading', { name: '同步时间轴' })).toBeVisible()
+    await page.getByRole('link', { name: '同步源', exact: true }).click()
+    await expect(page.getByRole('heading', { name: '同步源', exact: true })).toBeVisible()
     await expect(page.locator('.account strong')).toHaveText('mirror-admin')
     await expect(page.locator('.topbar')).toHaveCount(0)
     await expect(page.getByText('LOCAL MIRROR', { exact: true })).toHaveCount(0)
@@ -180,7 +183,7 @@ test('real configuration, rsync failover, publication, records and responsive UI
     await page.waitForTimeout(1200)
     await expect(page.getByRole('listbox')).toBeVisible()
     await page.screenshot({ path: testInfo.outputPath('custom-dropdown.png'), fullPage: true })
-    await page.getByRole('heading', { name: '批次记录.' }).click()
+    await page.getByRole('heading', { name: '批次记录' }).click()
     await expect(page.getByRole('listbox')).toHaveCount(0)
     const download = await request.get(base + '/docker-ce/package.rpm')
     expect(download.status()).toBe(200)
@@ -481,15 +484,10 @@ test('real configuration, rsync failover, publication, records and responsive UI
       }
     }
     await page.getByRole('button', { name: '打开导航' }).click()
-    await expect(page.locator('.sidebar')).toHaveClass(/open/)
+    await expect(page.locator('.primary-nav')).toHaveClass(/open/)
     await page.getByRole('link', { name: '同步源', exact: true }).click()
-    await expect(page.locator('.sidebar')).not.toHaveClass(/open/)
-    await expect
-      .poll(async () => {
-        const box = await page.locator('.sidebar').boundingBox()
-        return box ? box.x + box.width : Infinity
-      })
-      .toBeLessThanOrEqual(0)
+    await expect(page.locator('.primary-nav')).not.toHaveClass(/open/)
+    await expect(page.locator('.primary-nav')).toBeHidden()
     await expect(page.locator('.page-heading')).toContainText('同步源')
     await page.screenshot({ path: testInfo.outputPath('mobile-sources.png'), fullPage: true })
     await page.goto(base + '/admin/batches')
@@ -518,7 +516,7 @@ test('real configuration, rsync failover, publication, records and responsive UI
       button: getComputedStyle(document.querySelector('.heading-actions .button')!).fontWeight,
     }))
     expect(fonts.family).not.toContain('Avenir')
-    expect(fonts.heading).toBe('600')
+    expect(fonts.heading).toBe('400')
     expect(fonts.button).toBe('500')
     const icon = await request.get(base + '/favicon.ico?v=2')
     const adminIcon = await request.get(base + '/admin/favicon.ico?v=2')
@@ -596,8 +594,13 @@ test('real configuration, rsync failover, publication, records and responsive UI
         background: getComputedStyle(element).backgroundColor,
       })),
     )
-    expect(new Set(typeColors.map((item) => item.color)).size).toBe(3)
-    expect(new Set(typeColors.map((item) => item.background)).size).toBe(3)
+    // Source types are neutral labels; color is reserved for run anomalies.
+    expect(new Set(typeColors.map((item) => item.color)).size).toBe(1)
+    await expect(page.locator('.source-table .type-pill')).toHaveText([
+      'rsync',
+      'reposync',
+      'GitHub Release',
+    ])
     await page.screenshot({ path: testInfo.outputPath('sources-tags.png'), fullPage: true })
     await page.goto(base + '/admin/batches')
     await expect(page.locator('.run-row')).toHaveCount(9)

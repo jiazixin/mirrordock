@@ -98,7 +98,7 @@ function download() {
           :class="{ reached: index < step, current: index === step }"
           :aria-current="index === step ? 'step' : undefined"
         >
-          <span class="run-stage-node">{{ index < step ? '✓' : index + 1 }}</span
+          <span class="run-stage-node">{{ String(index + 1).padStart(2, '0') }}</span
           ><strong>{{ label }}</strong>
         </li>
       </ol>

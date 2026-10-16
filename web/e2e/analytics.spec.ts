@@ -121,7 +121,7 @@ test('analytics charts, filtering, request races, empty/error and mobile states'
     await expect(page.getByText('这段时间暂无运行记录', { exact: true })).toBeVisible()
     await expect(page.locator('.result-ring strong')).toHaveText('—')
     await page.getByRole('link', { name: 'Reposync分析', exact: true }).click()
-    await expect(page.getByRole('heading', { name: 'Reposync分析.' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Reposync分析' })).toBeVisible()
     await expect(page.getByText('这段时间暂无运行记录', { exact: true })).toBeVisible()
     await expect(page.getByRole('alert')).toHaveCount(0)
     await page.getByRole('link', { name: 'Rsync 分析', exact: true }).click()
@@ -191,7 +191,7 @@ test('analytics charts, filtering, request races, empty/error and mobile states'
     await page.waitForTimeout(450)
     await expect(page.locator('.source-ranking tbody')).not.toContainText('较慢的上游')
     await page.getByRole('link', { name: 'Release分析', exact: true }).click()
-    await expect(page.getByRole('heading', { name: 'Release分析.' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Release分析' })).toBeVisible()
     await expect(source).toContainText('全部同步源')
     const gh = fixture('github_release', 90, '').summary
     await expect(page.locator('.asset-labels')).toContainText(String(gh.reused))
@@ -219,7 +219,7 @@ test('analytics charts, filtering, request races, empty/error and mobile states'
     await page.getByRole('button', { name: '处理量', exact: true }).click()
     await page.getByRole('link', { name: 'Reposync分析', exact: true }).click()
     await expect(page).toHaveURL(`${base}/admin/analytics/reposync`)
-    await expect(page.getByRole('heading', { name: 'Reposync分析.' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Reposync分析' })).toBeVisible()
     await expect(page.getByRole('button', { name: '次数', exact: true })).toHaveAttribute(
       'aria-pressed',
       'true',

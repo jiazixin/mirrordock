@@ -57,8 +57,7 @@ const groups = computed(() => {
   <section>
     <div class="page-heading">
       <div>
-        <span class="eyebrow">RUN TIMELINE</span>
-        <h1>批次记录<span>.</span></h1>
+        <h1>批次记录</h1>
       </div>
       <button
         class="button"

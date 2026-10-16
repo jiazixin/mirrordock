@@ -26,25 +26,23 @@ const enabled = defineModel<boolean | null>({ required: true })
 .source-option-card {
   position: relative;
   display: flex;
-  flex-direction: column;
-  gap: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
   min-width: 0;
-  min-height: 94px;
-  padding: 14px 14px 38px;
+  min-height: 64px;
+  padding: 12px 14px;
   border: 1px solid var(--line);
-  border-radius: 8px;
-  background: #fafbfc;
+  border-radius: 4px;
+  background: transparent;
   cursor: pointer;
-  transition:
-    border-color 0.15s,
-    background 0.15s;
+  transition: border-color 0.15s;
 }
 .source-option-card:not(.disabled):hover {
-  border-color: #c4d2fa;
-  background: #f5f7fc;
+  border-color: var(--line-strong);
 }
 .source-option-card.disabled {
-  opacity: 0.6;
+  opacity: 0.5;
   cursor: not-allowed;
 }
 .source-option-card input:disabled {
@@ -53,32 +51,32 @@ const enabled = defineModel<boolean | null>({ required: true })
 .option-copy {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 2px;
+  min-width: 0;
   overflow-wrap: anywhere;
 }
 .option-copy strong {
   font-size: 13px;
-  font-weight: 500;
-  color: #424a56;
+  font-weight: 400;
+  color: var(--t1);
   line-height: 1.5;
 }
 .option-copy small {
   font-size: 12px;
   line-height: 1.6;
-  color: var(--muted);
+  color: var(--t3);
 }
 .source-option-card input {
   appearance: none;
-  position: absolute;
-  right: 14px;
-  bottom: 12px;
-  width: 34px;
-  height: 20px;
+  position: relative;
+  flex-shrink: 0;
+  width: 32px;
+  height: 18px;
   margin: 0;
   padding: 0;
   border: 0;
-  border-radius: 20px;
-  background: #dfe5ef;
+  border-radius: 9px;
+  background: var(--line-strong);
   cursor: pointer;
   transition: background 0.15s;
 }
@@ -87,21 +85,20 @@ const enabled = defineModel<boolean | null>({ required: true })
   position: absolute;
   top: 2px;
   left: 2px;
-  width: 16px;
-  height: 16px;
+  width: 14px;
+  height: 14px;
   border-radius: 50%;
-  background: #fff;
-  box-shadow: 0 1px 3px #20305022;
+  background: var(--bg);
   transition: transform 0.15s;
 }
 .source-option-card input:checked {
-  background: var(--blue);
+  background: var(--acc);
 }
 .source-option-card input:checked:before {
   transform: translateX(14px);
 }
 .source-option-card:has(input:focus-visible) {
-  outline: 3px solid #9bb4ff;
+  outline: 2px solid var(--focus);
   outline-offset: 2px;
 }
 .source-option-card input:focus-visible {
