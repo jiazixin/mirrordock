@@ -99,7 +99,12 @@ function download() {
           :aria-current="index === step ? 'step' : undefined"
         >
           <span class="run-stage-node">{{ String(index + 1).padStart(2, '0') }}</span
-          ><strong>{{ label }}</strong>
+          ><strong>{{ label }}</strong
+          ><span
+            v-if="index < step"
+            class="visually-hidden"
+            >已完成</span
+          >
         </li>
       </ol>
       <div class="run-detail-stats">

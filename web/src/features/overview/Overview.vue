@@ -154,6 +154,11 @@ const labels: Record<string, string> = {
   timed_out: '超时',
   cancelled: '已取消',
 }
+const finishedKind: Record<string, string> = {
+  cancelled: 'cancel',
+  failed: 'fail',
+  timed_out: 'fail',
+}
 interface Segment {
   key: string
   left: number
@@ -179,15 +184,7 @@ function segments(run: Run): Segment[] {
     pieces.push({ from: stop, to: now.value, kind: 'hold-line' })
   } else {
     const end = Number.isNaN(ended) ? elapsedEnd : ended
-    const kind =
-      run.state === 'succeeded'
-        ? 'ok'
-        : run.state === 'cancelled'
-          ? 'cancel'
-          : ['failed', 'timed_out'].includes(run.state)
-            ? 'fail'
-            : 'ok'
-    pieces.push({ from: begin, to: end, kind, run })
+    pieces.push({ from: begin, to: end, kind: finishedKind[run.state] ?? 'ok', run })
   }
   return pieces.flatMap((piece, index) => {
     const left = clamp(position(piece.from))
@@ -432,6 +429,7 @@ const kpis = computed(() => {
                   class="segment"
                   :class="segment.kind"
                   :style="{ left: `${segment.left}%`, width: `${segment.width}%` }"
+                  tabindex="-1"
                   :aria-label="`${lane.source.name} ${segment.label}`"
                   :title="segment.label"
                   @click="open(segment.run)"
@@ -502,8 +500,14 @@ const kpis = computed(() => {
               v-for="(label, index) in steps"
               :key="label"
               :class="{ done: index < step(run), now: index === step(run) }"
+              :aria-current="index === step(run) ? 'step' : undefined"
             >
-              <i /><span>{{ label }}</span>
+              <i /><span>{{ label }}</span
+              ><span
+                v-if="index < step(run)"
+                class="visually-hidden"
+                >已完成</span
+              >
             </li>
           </ol>
           <div class="live-figures">

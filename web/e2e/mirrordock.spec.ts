@@ -607,11 +607,23 @@ test('real configuration, rsync failover, publication, records and responsive UI
     for (const state of states)
       await expect(page.locator(`.run-row .badge.${state}`)).toHaveCount(1)
     await page.screenshot({ path: testInfo.outputPath('batches-tags.png'), fullPage: true })
+    // Overview lanes follow configured sources; attention and live lists use each source's latest run.
+    await page.goto(base + '/admin/overview')
+    await expect(page.locator('.lane:not(.lane-head)')).toHaveCount(3)
+    await expect(page.locator('.track .segment').first()).toBeAttached()
+    await expect(page.locator('.attention-row')).toHaveCount(1)
+    await expect(page.locator('.attention-row')).toContainText('OpenList Releases')
+    await expect(page.locator('.live-run')).toHaveCount(2)
+    await expect(page.locator('.queued-row')).toHaveCount(1)
+    await expect(page.locator('.lane-next').filter({ hasText: '已停用' })).toHaveCount(3)
+    await page.screenshot({ path: testInfo.outputPath('overview.png'), fullPage: true })
     for (const width of [1024, 736, 375, 320]) {
       await page.setViewportSize({ width, height: 1000 })
-      for (const name of ['sources', 'batches']) {
+      for (const name of ['sources', 'batches', 'overview']) {
         await page.goto(base + '/admin/' + name)
-        await expect(page.locator('.page-heading')).toBeVisible()
+        await expect(
+          page.locator(name === 'overview' ? '.overview-hero' : '.page-heading'),
+        ).toBeVisible()
         expect(
           await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
         ).toBeTruthy()

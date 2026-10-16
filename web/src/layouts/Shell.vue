@@ -9,8 +9,16 @@ import logo from '../assets/logo.svg'
 const emit = defineEmits<{ logout: [] }>()
 const route = useRoute()
 const mobile = ref(false)
+const menuButton = ref<HTMLButtonElement>()
+function closeOnEscape(event: KeyboardEvent) {
+  if (event.key !== 'Escape' || !mobile.value) return
+  mobile.value = false
+  menuButton.value?.focus()
+}
+document.addEventListener('keydown', closeOnEscape)
 onBeforeUnmount(() => {
   state.toasts = []
+  document.removeEventListener('keydown', closeOnEscape)
 })
 watch(
   () => route.fullPath,
@@ -104,6 +112,7 @@ const themeIcon = computed(() =>
           ><LogOut :size="15" />
         </button>
         <button
+          ref="menuButton"
           class="icon-button mobile-menu"
           type="button"
           :aria-label="mobile ? '关闭导航' : '打开导航'"
