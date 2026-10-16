@@ -27,6 +27,11 @@ function toolVersion(tool: SystemChecks['rsync'] | undefined, name: 'rsync' | 'd
   const version = tool.version.match(patterns[name])?.[1]
   return version ? `版本 ${version}` : '可执行，版本未识别'
 }
+function publicationStatus(result: SystemChecks | undefined) {
+  if (!result) return '未知'
+  const count = result.publication_issues?.length ?? 0
+  return count ? `${count} 个源异常` : '正常'
+}
 const checkRows = computed(() => {
   const result = checks.value
   return [
@@ -86,6 +91,15 @@ const checkRows = computed(() => {
       detail:
         result?.storage?.error ??
         `可用 ${diskSize(result?.storage?.available)} / 总量 ${diskSize(result?.storage?.total)}；安全余量 ${diskSize(result?.storage?.reserve)}，任务启动需余量 ${diskSize(result?.storage?.required)}；旧代 ${result?.storage?.previous ?? 0}，任务目录 ${result?.storage?.work_directories ?? 0}。共享数据块不按目录重复计量。`,
+    },
+    {
+      label: '发布目录接入',
+      status: publicationStatus(result),
+      ok: !!result && !result.publication_issues?.length,
+      detail: result?.publication_issues?.length
+        ? result.publication_issues.map((item) => `${item.source_id}：${item.error}`).join('；') +
+          '。修复后重新载入配置；其他源不受影响'
+        : '启动和配置变更时恢复发布路由、导入已有 dest 目录',
     },
     {
       label: 'GitHub Token',

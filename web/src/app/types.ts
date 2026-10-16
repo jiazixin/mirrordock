@@ -60,6 +60,7 @@ export interface ConfigView {
   proxy_configured: boolean
   restart_required: boolean
   file: string
+  warning?: string
 }
 export interface Attempt {
   number: number
@@ -152,6 +153,7 @@ export interface SystemChecks {
   mirror_writable: boolean
   github_token_configured: boolean
   github_proxy_configured: boolean
+  publication_issues?: { source_id: string; error: string }[]
 }
 export interface AnalyticsStats {
   runs: number

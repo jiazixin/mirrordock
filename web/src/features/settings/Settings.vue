@@ -1,9 +1,8 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
 import { Save, RotateCcw, ShieldCheck, Settings2, ArrowDownUp, FileText, Bell } from '@lucide/vue'
-import { clone, state, saveConfiguration, perform, refresh, notify } from '../../app/state'
+import { clone, state, saveConfiguration, reloadConfiguration, perform } from '../../app/state'
 import type { Configuration } from '../../app/types'
-import { api } from '../../app/api'
 import EnvironmentChecks from './EnvironmentChecks.vue'
 import Notifications from './Notifications.vue'
 import OptionCard from '../../components/OptionCard.vue'
@@ -87,11 +86,6 @@ async function save() {
     busy.value = false
   }
 }
-async function reload() {
-  await api('/config/reload', 'POST')
-  await refresh()
-  notify('已重新载入磁盘配置')
-}
 </script>
 
 <template>
@@ -107,7 +101,7 @@ async function reload() {
         <button
           class="button"
           :disabled="busy"
-          @click="perform(reload)"
+          @click="perform(reloadConfiguration)"
         >
           <RotateCcw :size="16" />重新载入配置
         </button>

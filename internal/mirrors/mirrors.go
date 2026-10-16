@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log/slog"
 	"mirrordock/internal/config"
 	"mirrordock/internal/database"
 	"os"
@@ -63,6 +64,8 @@ type Manager struct {
 	cache         *metadataCache
 	roots         *rootCache
 	ListingInfo   func(context.Context) map[string]SourceListingInfo
+	issueMu       sync.Mutex
+	issues        []SourceIssue
 }
 
 func New(root string, store *database.Store, sources []config.Source) (*Manager, error) {
@@ -95,16 +98,58 @@ func New(root string, store *database.Store, sources []config.Source) (*Manager,
 			_ = m.Close()
 		}
 	}()
-	if err := m.Reconcile(context.Background(), sources); err != nil {
+	// One unusable destination must not keep every other mirror offline.
+	// Per-source failures stay visible through Issues and the program log.
+	if err := m.Reconcile(context.Background(), sources); err != nil && !onlySourceErrors(err) {
 		return nil, err
+	} else if err != nil {
+		slog.Error("reconcile publications", "error", err)
 	}
 
 	ready = true
 	return m, nil
 }
 
+// SourceError reports a publication that could not be restored or imported.
+// Other configured sources are still reconciled.
+type SourceError struct {
+	SourceID string
+	Err      error
+}
+
+func (e *SourceError) Error() string { return e.SourceID + ": " + e.Err.Error() }
+func (e *SourceError) Unwrap() error { return e.Err }
+
+// SourceIssue is the latest reconciliation failure of one configured source.
+type SourceIssue struct {
+	SourceID string `json:"source_id"`
+	Error    string `json:"error"`
+}
+
+func onlySourceErrors(err error) bool {
+	joined, ok := err.(interface{ Unwrap() []error })
+	if !ok {
+		_, ok := errors.AsType[*SourceError](err)
+		return ok
+	}
+	for _, e := range joined.Unwrap() {
+		if _, ok := e.(*SourceError); !ok {
+			return false
+		}
+	}
+	return true
+}
+
+// Issues returns the per-source failures left by the latest reconciliation.
+func (m *Manager) Issues() []SourceIssue {
+	m.issueMu.Lock()
+	defer m.issueMu.Unlock()
+	return slices.Clone(m.issues)
+}
+
 // Reconcile restores retained publications and imports existing directories for
 // both startup and configuration changes. It serializes with publication/GC.
+// A failing source is reported as a SourceError and does not stop the others.
 func (m *Manager) Reconcile(ctx context.Context, sources []config.Source) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -125,113 +170,141 @@ func (m *Manager) Reconcile(ctx context.Context, sources []config.Source) error 
 		}
 		byID[p.SourceID] = p
 	}
+	var failures []error
+	issues := []SourceIssue{}
 	for _, s := range sources {
-		p, ok := byID[s.ID]
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		oldDest := ""
-		if ok && p.Dest != s.Dest {
-			oldDest = p.Dest
-			p.Dest = s.Dest
-		}
-		if !ok {
-			// A removed source may leave a valid publication under the same dest.
-			// Reuse its immutable generation only if it has no other configured owner.
-			aliasTarget, _ := filepath.EvalSymlinks(filepath.Join(m.Root, filepath.FromSlash(s.Dest)))
-			for _, previous := range byID {
-				if previous.Dest != s.Dest || configured[previous.SourceID] || (previous.Type != "" && previous.Type != s.Type) {
-					continue
-				}
-				// Several removed IDs may retain this destination. Prefer the
-				// existing alias, otherwise the newest committed generation.
-				matches, selectedMatches := previous.Current.Directory == aliasTarget, p.Current.Directory == aliasTarget
-				newer := previous.Current.PublishedAt.After(p.Current.PublishedAt) || (previous.Current.PublishedAt.Equal(p.Current.PublishedAt) && previous.SourceID < p.SourceID)
-				if !ok || (matches && !selectedMatches) || (matches == selectedMatches && newer) {
-					p, ok = previous, true
-				}
+		if err := m.reconcileSource(ctx, s, byID, configured); err != nil {
+			if ctx.Err() != nil {
+				return errors.Join(ctx.Err(), err)
 			}
-			if ok {
-				p.SourceID = s.ID
-			}
+			failures = append(failures, &SourceError{SourceID: s.ID, Err: err})
+			issues = append(issues, SourceIssue{SourceID: s.ID, Error: err.Error()})
 		}
-		if live := m.table.Load().entries[s.Dest]; live != nil && live.Publication.SourceID == s.ID && live.Publication.Type == s.Type {
-			continue
-		}
-		if !ok {
-			local := filepath.Join(m.Root, filepath.FromSlash(s.Dest))
-			if st, e := os.Stat(local); e == nil && st.IsDir() {
-				real, e := filepath.EvalSymlinks(local)
-				if e != nil || !config.Within(m.Root, real) {
-					return fmt.Errorf("unsafe import %s", s.ID)
-				}
-				if config.Within(filepath.Join(m.Root, ".mirrordock"), real) {
-					return fmt.Errorf("%s 指向内部发布代但没有对应数据库记录，请恢复数据库备份", s.ID)
-				}
-				if e = ValidateSource(ctx, real, s); e != nil {
-					return fmt.Errorf("import %s: %w", s.ID, e)
-				}
-				g := Generation{ID: uuid.New().String(), PublishedAt: time.Now().UTC()}
-				g.Directory = filepath.Join(m.Root, ".mirrordock", "published", g.ID)
-				// Normalize an imported directory into an immutable generation before
-				// creating its public alias. Never subsequently copy into the live tree.
-				if e = os.Rename(real, g.Directory); e != nil {
-					return e
-				}
-				p = Publication{SourceID: s.ID, Dest: s.Dest, Current: g}
-				if e = m.store.SavePublication(s.ID, p); e != nil {
-					// A failed import must leave the original directory available for
-					// the next startup rather than orphaning it in a private generation.
-					return errors.Join(e, os.Rename(g.Directory, real))
-				}
-			} else if e != nil && !errors.Is(e, os.ErrNotExist) {
-				return e
-			} else if e == nil {
-				return fmt.Errorf("%s 的 dest 被非目录占用", s.ID)
-			} else {
+	}
+	m.issueMu.Lock()
+	m.issues = issues
+	m.issueMu.Unlock()
+	return errors.Join(failures...)
+}
+
+func (m *Manager) reconcileSource(ctx context.Context, s config.Source, byID map[string]Publication, configured map[string]bool) error {
+	p, ok := byID[s.ID]
+	oldDest := ""
+	if ok && p.Dest != s.Dest {
+		oldDest = p.Dest
+		p.Dest = s.Dest
+	}
+	if !ok {
+		// A removed source may leave a valid publication under the same dest.
+		// Reuse its immutable generation only if it has no other configured owner.
+		aliasTarget, _ := filepath.EvalSymlinks(filepath.Join(m.Root, filepath.FromSlash(s.Dest)))
+		for _, previous := range byID {
+			if previous.Dest != s.Dest || configured[previous.SourceID] || (previous.Type != "" && previous.Type != s.Type) {
 				continue
 			}
+			// Several removed IDs may retain this destination. Prefer the
+			// existing alias, otherwise the newest committed generation.
+			matches, selectedMatches := previous.Current.Directory == aliasTarget, p.Current.Directory == aliasTarget
+			newer := previous.Current.PublishedAt.After(p.Current.PublishedAt) || (previous.Current.PublishedAt.Equal(p.Current.PublishedAt) && previous.SourceID < p.SourceID)
+			if !ok || (matches && !selectedMatches) || (matches == selectedMatches && newer) {
+				p, ok = previous, true
+			}
 		}
+		if ok {
+			p.SourceID = s.ID
+		}
+	}
+	// A changed source type keeps serving its retained content; Prepare starts
+	// the new type from an empty tree instead of cloning the other layout.
+	if live := m.table.Load().entries[s.Dest]; live != nil && live.Publication.SourceID == s.ID {
+		return nil
+	}
+	if !ok {
+		local := filepath.Join(m.Root, filepath.FromSlash(s.Dest))
+		st, e := os.Stat(local)
+		switch {
+		case e != nil && errors.Is(e, os.ErrNotExist):
+			return nil
+		case e != nil:
+			return e
+		case !st.IsDir():
+			return errors.New("dest 被非目录占用")
+		}
+		real, e := filepath.EvalSymlinks(local)
+		if e != nil || !config.Within(m.Root, real) {
+			return errors.New("dest 解析后越出镜像根，拒绝导入")
+		}
+		if config.Within(filepath.Join(m.Root, ".mirrordock"), real) {
+			return errors.New("dest 指向内部发布代但没有对应数据库记录，请恢复数据库备份")
+		}
+		// A pre-created empty destination is a placeholder, not a mirror.
+		// The first successful publication replaces it with the alias.
+		if entries, e := os.ReadDir(real); e != nil {
+			return e
+		} else if len(entries) == 0 {
+			return nil
+		}
+		if e = ValidateSource(ctx, real, s); e != nil {
+			return fmt.Errorf("导入已有目录: %w", e)
+		}
+		g := Generation{ID: uuid.New().String(), PublishedAt: time.Now().UTC()}
+		g.Directory = filepath.Join(m.Root, ".mirrordock", "published", g.ID)
+		// Normalize an imported directory into an immutable generation before
+		// creating its public alias. Never subsequently copy into the live tree.
+		if e = os.Rename(real, g.Directory); e != nil {
+			return e
+		}
+		p = Publication{SourceID: s.ID, Type: s.Type, Dest: s.Dest, Current: g}
+		if e = m.store.SavePublication(s.ID, p); e != nil {
+			// A failed import must leave the original directory available for
+			// the next startup rather than orphaning it in a private generation.
+			return errors.Join(e, os.Rename(g.Directory, real))
+		}
+	}
+	if p.Type == "" {
 		p.Type = s.Type
-		if p.Current.Summary == nil {
-			real, e := filepath.EvalSymlinks(p.Current.Directory)
-			if e != nil || !config.Within(m.Root, real) {
-				return errors.New("publication escaped mirror root")
-			}
-			p.Current.Summary, err = summarizeDirectory(ctx, p.Current.Directory, s.Type)
-			if err != nil {
-				return err
-			}
-			if err = m.store.SavePublication(s.ID, p); err != nil {
-				return err
-			}
+	}
+	if p.Current.Summary == nil {
+		real, e := filepath.EvalSymlinks(p.Current.Directory)
+		if e != nil || !config.Within(m.Root, real) {
+			return errors.New("publication escaped mirror root")
 		}
-		opened, err := m.openPublication(p)
+		summary, err := summarizeDirectory(ctx, p.Current.Directory, p.Type)
 		if err != nil {
 			return err
 		}
-		if err = m.alias(p); err != nil {
+		p.Current.Summary = summary
+		if err = m.store.SavePublication(s.ID, p); err != nil {
 			return err
 		}
-		if err = m.store.SavePublicationContext(ctx, s.ID, p); err != nil {
-			return err
-		}
-		m.installOpened(opened)
-		if oldDest != "" { // Remove only our own stale alias, never user content.
-			oldPath := filepath.Join(m.Root, filepath.FromSlash(oldDest))
-			if target, err := filepath.EvalSymlinks(oldPath); err == nil && target == p.Current.Directory {
-				if st, err := os.Lstat(oldPath); err == nil && st.Mode()&os.ModeSymlink != 0 {
-					if err := os.Remove(oldPath); err != nil {
-						return err
-					}
-					if err := syncDir(filepath.Dir(oldPath)); err != nil {
-						return err
-					}
+	}
+	opened, err := m.openPublication(p)
+	if err != nil {
+		return err
+	}
+	if err = m.alias(p); err != nil {
+		return err
+	}
+	if err = m.store.SavePublicationContext(ctx, s.ID, p); err != nil {
+		return err
+	}
+	m.installOpened(opened)
+	if oldDest != "" { // Remove only our own stale alias, never user content.
+		oldPath := filepath.Join(m.Root, filepath.FromSlash(oldDest))
+		if target, err := filepath.EvalSymlinks(oldPath); err == nil && target == p.Current.Directory {
+			if st, err := os.Lstat(oldPath); err == nil && st.Mode()&os.ModeSymlink != 0 {
+				if err := os.Remove(oldPath); err != nil {
+					return err
+				}
+				if err := syncDir(filepath.Dir(oldPath)); err != nil {
+					return err
 				}
 			}
 		}
 	}
-
 	return nil
 }
 func (m *Manager) openPublication(p Publication) (*opened, error) {
@@ -322,7 +395,11 @@ func (m *Manager) alias(p Publication) error {
 		return err
 	}
 	if st, err := os.Lstat(dest); err == nil && st.Mode()&os.ModeSymlink == 0 {
-		return fmt.Errorf("发布链接被非链接文件/目录占用: %s", dest)
+		// Only an empty placeholder directory may be replaced; os.Remove never
+		// deletes a non-empty directory, so user content stays untouched.
+		if !st.IsDir() || os.Remove(dest) != nil {
+			return fmt.Errorf("发布链接被非链接文件/目录占用: %s", dest)
+		}
 	}
 	rel, err := filepath.Rel(filepath.Dir(dest), p.Current.Directory)
 	if err != nil {
@@ -365,7 +442,7 @@ func (m *Manager) Prepare(ctx context.Context, s config.Source, id int64) (strin
 		return "", err
 	}
 	baseGeneration := ""
-	if p := m.table.Load().entries[s.Dest]; p != nil {
+	if p := m.table.Load().entries[s.Dest]; p != nil && p.Publication.Type == s.Type {
 		baseGeneration = p.Publication.Current.ID
 		if err := m.copyTree(ctx, p.Publication.Current.Directory, work); err != nil {
 			return "", err
@@ -510,9 +587,8 @@ func (m *Manager) Publish(ctx context.Context, s config.Source, id int64) (Publi
 			}
 		}
 	}
-	if err := m.CheckSpace(); err != nil {
-		return Publication{}, err
-	}
+	// Publication renames the completed work tree within the same filesystem
+	// and needs no new space, so a low-space condition must not discard it.
 	summary, err := summarizeDirectory(ctx, work, s.Type)
 	if err != nil {
 		return Publication{}, err

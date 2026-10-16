@@ -2,12 +2,14 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestConfiguredAccountRequiresRestart(t *testing.T) {
@@ -82,7 +84,32 @@ func TestLoginLimitsSeparateClientsAndReset(t *testing.T) {
 	req := httptest.NewRequest("POST", "/api/auth/login", nil)
 	req.RemoteAddr = "[2001:db8::1]:1234"
 	req.Header.Set("X-Forwarded-For", "192.0.2.2")
-	if clientIP(req) != "2001:db8::1" {
-		t.Fatal("untrusted header affected peer identity")
+	if clientIP(req) != "2001:db8::/64" {
+		t.Fatal("untrusted header affected peer identity", clientIP(req))
+	}
+}
+
+func TestLoginLimitBucketsIPv6PrefixAndEvictsOldest(t *testing.T) {
+	ip := func(address string) string {
+		req := httptest.NewRequest("POST", "/api/auth/login", nil)
+		req.RemoteAddr = address
+		return clientIP(req)
+	}
+	if ip("[2001:db8::1]:1") != ip("[2001:db8::ffff:2]:2") || ip("[2001:db8:0:1::1]:1") == ip("[2001:db8::1]:1") {
+		t.Fatal("IPv6 clients must share one /64 bucket")
+	}
+	if ip("[::ffff:192.0.2.9]:1") != "192.0.2.9" {
+		t.Fatal("IPv4-mapped peer was not normalized")
+	}
+	a := &auth{attempts: map[string]loginWindow{}}
+	a.attempts["oldest"] = loginWindow{attempts: 11, start: time.Now().Add(-30 * time.Second)}
+	for i := range 4095 {
+		a.attempts[fmt.Sprint("client-", i)] = loginWindow{attempts: 1, start: time.Now()}
+	}
+	if a.limited("198.51.100.1") {
+		t.Fatal("full limiter table refused a new client")
+	}
+	if _, ok := a.attempts["oldest"]; ok || len(a.attempts) != 4096 {
+		t.Fatal("full limiter table did not evict the oldest window", len(a.attempts))
 	}
 }

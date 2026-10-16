@@ -1,5 +1,50 @@
 # 验收记录
 
+## 全项目逻辑审查问题 1–8 修复（2026-10-16）
+
+范围：工作区未提交改动——`internal/runs/runs.go`、`internal/mirrors/mirrors.go`、`internal/app/{app,auth}.go`、`web/src/app/{state,types}.ts`、`web/src/features/settings/{Settings,EnvironmentChecks}.vue`，以及对应测试、README 与 DESIGN。下载热路径（`http.go`、`roots.go`）未改动。
+
+| 编号 | 问题 | 处理 |
+| --- | --- | --- |
+| 1 | 启动恢复与 worker 出队不核对源配置：重启后已删除源的排队任务仍会执行并发布路由（已用临时测试复现） | 恢复、出队、“继续”统一核对当前 YAML：源删除或类型/dest 变化的任务自动 cancelled（`SOURCE_REMOVED`/`SOURCE_CHANGED`），禁用源的排队任务转 interrupted（`SOURCE_DISABLED`），启用后可继续；源被占用时配置保存同时拒绝改类型 |
+| 2 | Reconcile 全有或全无：预先创建的空 dest 目录导致整个服务无法启动（已复现） | 逐源执行，单源失败记为 `SourceError` 并继续，启动不再因单源失败中止；失败列表进入程序日志与 `/api/system/checks` 的 `publication_issues`，环境检查新增“发布目录接入”行；空占位目录在首次发布时替换为链接，非空目录仍拒绝 |
+| 3 | Rsync 多来源只看最后一个来源的错误决定是否重试 | 一轮内任一来源可重试即重试整轮；全部为永久来源错误仍直接失败 |
+| 4 | 同步完成后发布阶段因低空间失败，终态清理丢弃整轮 work | Publish 不再检查余量；5 秒容量检查不取消已进入 publish 阶段的任务 |
+| 5 | 同 ID 改类型时旧发布代被直接改标为新类型 | 保留旧发布的类型与路由，Prepare 不克隆不同类型的发布代，下次同步从空工作树开始 |
+| 6 | 容量探测失败把排队任务直接变成 failed | 保持 queued/waiting_space，记录错误事件，恢复后自动执行 |
+| 7 | 登录限流桶满 4096 后拒绝全部新 IP | IPv6 按 /64 分桶；满额淘汰最早窗口 |
+| 8 | YAML 已保存但接入失败时返回 400，前端保留旧 revision 导致下次 409 | 返回 200、新 revision 与 `warning`；保存/重载均提示警告并采用新配置 |
+
+### 已执行检查
+
+| 命令 | 结果 |
+| --- | --- |
+| `go vet ./...`、`gofmt -l` | 通过，无输出 |
+| `go test -race -count=1 ./...`（`MIRRORDOCK_TEST_RSYNC` 指向 `.cache/rsync/rsync-3.5.1`） | 全部包通过 |
+| `npm --prefix web run format:check` | 通过 |
+| `npm --prefix web run build`（含 `vue-tsc`） | 通过 |
+| `npm --prefix web run test:e2e`（本轮构建的临时二进制，真实 rsync 3.5.1） | 首轮 13/14（原因见下文），修正后完整重跑 **14/14 通过**，约 1.8 分钟 |
+
+新增测试：`internal/runs/conflict_test.go`（恢复取消/禁用中断/重新启用后继续、出队拦截禁用源与拒绝改类型、整轮重试与永久失败、容量探测失败保持排队）、`internal/mirrors/issues_test.go`（单源失败隔离与空占位替换、改类型不克隆旧布局、低空间仍可发布）、`internal/app/apply_test.go`（部分应用返回新 revision、警告与 `publication_issues`）、`internal/app/auth_test.go`（/64 分桶与满额淘汰）。
+
+调整的既有测试：`TestImportDatabaseFailureRestoresOriginalDirectory` 改为断言启动成功、问题上报、原目录保留，并在之后的 Reconcile 中导入成功；`TestAliasFailureCannotPublish` 的占用目录改为含用户文件（空目录现在按设计会被替换），并断言用户文件不变；`TestRecoveryPagesAndPreservesPauseBudgetAndFailure` 的 105 条分页夹具改为指向已配置的源，类型被改的中断任务期望改为 cancelled。E2E 首轮 13/14：`pagination.spec.ts` 断言环境检查共 9 行，新增行后改为 10 行，并断言“发布目录接入”显示正常。
+
+### OCR 与覆盖
+
+`ocr review` 外部模型调用 11 个请求全部返回 HTTP 401，未产生审查结果，不计为通过。按 AGENTS 改用代理审查模式：`ocr delegate preview` 确定 8 个可审查文件，`ocr delegate rule` 给出 Go 与 TS/Vue 规则组，由当前会话逐文件审查。覆盖：8/8 已审查，0 跳过。排除项：README、DESIGN（不支持的扩展名），`*_test.go` 与 E2E（默认排除路径，仍随测试运行）。
+
+审查发现并已修复：
+
+- 低（正确性）：`clientIP` 忽略 `Prefix` 的错误时，异常地址会全部落入同一个 `invalid Prefix` 桶——改为出错时退回完整地址。
+- 低（规范）：环境检查新增行使用嵌套三元表达式——提取为 `publicationStatus`。
+- 低（死代码）：设置页 `reload` 仅转发调用——直接使用 `reloadConfiguration`，移除未用的导入。
+
+### 未验证项
+
+- Linux 目标环境、真实发行版与 XFS reflink 未参与本轮验证；全部检查在 macOS（APFS）本机执行。
+- 自动取消依据的是重启时的 YAML：停机期间改动源的运行中任务会丢弃其 work 目录，这是有意的取舍，未在生产数据上演练。
+- 只在 Chromium 上运行过 E2E。
+
 ## 管理台“控制室”界面改版（2026-10-16）
 
 范围：分支 `ui-v2-console` 的工作区改动——`web/src` 全部页面与组件样式、新增概览页 `/overview`（登录后默认首页）与主题切换、顶部导航替代侧栏、Logo 与 favicon、`web/index.html`，以及公开目录 `internal/mirrors/listing.{html,css}` 的样式。API、配置协议、下载热路径与 Go 业务逻辑未改动。字体使用各平台系统字体（苹果为苹方），不加载远程字体。

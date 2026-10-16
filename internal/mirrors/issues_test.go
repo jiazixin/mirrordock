@@ -185,3 +185,108 @@ func TestStartupCleansOnlyReservedTemporaryDirectories(t *testing.T) {
 		}
 	}
 }
+
+func TestReconcileIsolatesBrokenDestinations(t *testing.T) {
+	m, source := testManager(t)
+	for _, name := range []string{"placeholder", "existing"} {
+		if err := os.Mkdir(filepath.Join(m.Root, name), 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(m.Root, "existing", "asset"), []byte("first"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(m.Root, "occupied"), []byte("user file"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	placeholder := config.Source{ID: "placeholder", Type: "rsync", Dest: "placeholder"}
+	occupied := config.Source{ID: "occupied", Type: "rsync", Dest: "occupied"}
+	existing := config.Source{ID: "existing", Type: "rsync", Dest: "existing"}
+	sources := []config.Source{source, occupied, placeholder, existing}
+	err := m.Reconcile(t.Context(), sources)
+	if err == nil || !onlySourceErrors(err) {
+		t.Fatal("broken destination was not reported per source", err)
+	}
+	if issues := m.Issues(); len(issues) != 1 || issues[0].SourceID != "occupied" {
+		t.Fatal(issues)
+	}
+	// Sources after the broken one are still imported.
+	w := httptest.NewRecorder()
+	m.ServeHTTP(w, httptest.NewRequest("GET", "/existing/asset", nil))
+	if w.Code != 200 || w.Body.String() != "first" {
+		t.Fatal("later source was skipped", w.Code)
+	}
+	reopened, err := New(m.Root, m.store, sources)
+	if err != nil {
+		t.Fatal("startup failed for one broken destination", err)
+	}
+	reopened.Close()
+	// The empty placeholder is replaced by the first publication alias.
+	work, err := m.Prepare(t.Context(), placeholder, 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(work, "asset"), []byte("synced"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Publish(t.Context(), placeholder, 7); err != nil {
+		t.Fatal("placeholder blocked publication", err)
+	}
+	if st, err := os.Lstat(filepath.Join(m.Root, "placeholder")); err != nil || st.Mode()&os.ModeSymlink == 0 {
+		t.Fatal("placeholder was not replaced by alias", err)
+	}
+	if data, err := os.ReadFile(filepath.Join(m.Root, "occupied")); err != nil || string(data) != "user file" {
+		t.Fatal("user content changed", err)
+	}
+}
+
+func TestSourceTypeChangeKeepsServingButStartsFresh(t *testing.T) {
+	m, source := testManager(t)
+	work, err := m.Prepare(t.Context(), source, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(work, "rsync-only"), []byte("old"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Publish(t.Context(), source, 1); err != nil {
+		t.Fatal(err)
+	}
+	retyped := source
+	retyped.Type = "github_release"
+	reopened, err := New(m.Root, m.store, []config.Source{retyped})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	if p := reopened.Publications(); len(p) != 1 || p[0].Type != "rsync" {
+		t.Fatal("retained generation was relabeled", p)
+	}
+	w := httptest.NewRecorder()
+	reopened.ServeHTTP(w, httptest.NewRequest("GET", "/"+source.Dest+"/rsync-only", nil))
+	if w.Code != 200 {
+		t.Fatal("old content unavailable before the first new publication", w.Code)
+	}
+	work, err = reopened.Prepare(t.Context(), retyped, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(work, "rsync-only")); !os.IsNotExist(err) {
+		t.Fatal("other source type cloned into new work tree", err)
+	}
+}
+
+func TestPublishIgnoresLowSpace(t *testing.T) {
+	m, source := testManager(t)
+	work, err := m.Prepare(t.Context(), source, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(work, "asset"), []byte("done"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	m.space = func(string) (DiskSpace, error) { return DiskSpace{Total: 10 << 30, Available: 1}, nil }
+	if _, err := m.Publish(t.Context(), source, 1); err != nil {
+		t.Fatal("completed work discarded by low-space check", err)
+	}
+}

@@ -8,6 +8,7 @@ import (
 	"mirrordock/internal/config"
 	"net"
 	"net/http"
+	"net/netip"
 	"strings"
 	"sync"
 	"time"
@@ -59,12 +60,24 @@ func (a *auth) authorized(r *http.Request) bool {
 
 // Use the transport peer, never an untrusted forwarding header. Keep buckets
 // bounded and expire idle entries so arbitrary client addresses cannot grow RAM.
+// IPv6 clients are bucketed by /64, the smallest prefix normally assigned to
+// one subscriber, so rotating interface addresses cannot multiply attempts.
 func clientIP(r *http.Request) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
-		return r.RemoteAddr
+		host = r.RemoteAddr
 	}
-	return host
+	address, err := netip.ParseAddr(host)
+	if err != nil {
+		return host
+	}
+	address = address.Unmap()
+	if address.Is6() {
+		if prefix, err := address.Prefix(64); err == nil {
+			return prefix.String()
+		}
+	}
+	return address.String()
 }
 func (a *auth) limited(ip string) bool {
 	a.mu.Lock()
@@ -77,8 +90,16 @@ func (a *auth) limited(ip string) bool {
 	}
 	v, exists := a.attempts[ip]
 	if !exists {
+		// A full table evicts the oldest window instead of refusing every new
+		// client; otherwise address spraying could lock the administrator out.
 		if len(a.attempts) >= 4096 {
-			return true
+			var oldest string
+			for key, window := range a.attempts {
+				if oldest == "" || window.start.Before(a.attempts[oldest].start) {
+					oldest = key
+				}
+			}
+			delete(a.attempts, oldest)
 		}
 		v.start = now
 	}

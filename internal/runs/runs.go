@@ -146,10 +146,13 @@ func New(cfg *config.Manager, store *database.Store, m *mirrors.Manager, runner 
 					r.Attempts[len(r.Attempts)-1].ErrorCode = r.ErrorCode
 				}
 			}
-			sourceIndex := slices.IndexFunc(sources, func(s config.Source) bool {
-				return s.ID == r.SourceID && s.Dest == r.Dest && s.Type == r.Type && s.Enabled
-			})
-			if r.State == "interrupted" && r.ErrorCode == "SERVICE_INTERRUPTED" && sourceIndex >= 0 && r.ElapsedSeconds < r.BudgetSeconds {
+			conflict := sourceConflict(&r, sources)
+			if conflict != "" {
+				// YAML may change while stopped. Never run a snapshot against a
+				// removed, retyped, moved or disabled source after restart.
+				stopForSource(&r, conflict)
+			}
+			if r.State == "interrupted" && r.ErrorCode == "SERVICE_INTERRUPTED" && conflict == "" && r.ElapsedSeconds < r.BudgetSeconds {
 				r.State = "queued"
 				r.EndedAt = time.Time{}
 				r.Error, r.ErrorCode = "", ""
@@ -227,10 +230,12 @@ func (e *Engine) Start() {
 					slog.Error("check mirror capacity", "error", spaceErr)
 				}
 				for id, a := range e.working {
-					if errors.Is(spaceErr, mirrors.ErrLowSpace) {
+					r := e.current[id]
+					// Publication only renames the finished work tree on the same
+					// filesystem; stopping it would discard a completed sync.
+					if errors.Is(spaceErr, mirrors.ErrLowSpace) && r.Progress.Phase != "publish" {
 						a.cancel(spaceErr)
 					}
-					r := e.current[id]
 					r.ElapsedSeconds = a.base + time.Since(a.start).Seconds()
 					if err := e.store.SaveRun(id, r.State, r); err != nil {
 						slog.Error("save progress", "error", err)
@@ -278,9 +283,65 @@ func (e *Engine) validateChange(c config.Config) error {
 			continue
 		}
 		i := slices.IndexFunc(c.Sources, func(s config.Source) bool { return s.ID == r.SourceID })
-		if i < 0 || c.Sources[i].Dest != r.Dest {
-			return errors.New("活动、暂停或中断任务的源不能删除或变更 dest，请先取消任务")
+		if i < 0 || c.Sources[i].Dest != r.Dest || c.Sources[i].Type != r.Type {
+			return errors.New("活动、暂停或中断任务的源不能删除或变更类型、dest，请先取消任务")
 		}
+	}
+	return nil
+}
+
+// Source conflict codes describe why a reserved run no longer matches YAML.
+const (
+	sourceRemoved  = "SOURCE_REMOVED"
+	sourceChanged  = "SOURCE_CHANGED"
+	sourceDisabled = "SOURCE_DISABLED"
+)
+
+func sourceConflict(r *Run, sources []config.Source) string {
+	i := slices.IndexFunc(sources, func(s config.Source) bool { return s.ID == r.SourceID })
+	switch {
+	case i < 0:
+		return sourceRemoved
+	case sources[i].Type != r.Type || sources[i].Dest != r.Dest:
+		return sourceChanged
+	case !sources[i].Enabled:
+		return sourceDisabled
+	}
+	return ""
+}
+
+// stopForSource cancels runs whose source identity is gone. A disabled source
+// keeps its queued run resumable after it is enabled again.
+func stopForSource(r *Run, conflict string) {
+	switch conflict {
+	case sourceRemoved, sourceChanged:
+		if conflict == sourceRemoved {
+			r.Error = "源已从配置删除，任务已自动取消"
+		} else {
+			r.Error = "源类型或 dest 已变更，任务已自动取消"
+		}
+		r.State, r.ErrorCode = "cancelled", conflict
+		r.EndedAt = time.Now().UTC()
+	case sourceDisabled:
+		if r.State != "queued" {
+			return
+		}
+		r.State, r.ErrorCode = "interrupted", conflict
+		r.Error = "源已禁用；启用后可继续，或取消任务"
+	default:
+		return
+	}
+	r.Events = append(r.Events, Event{At: time.Now().UTC(), Message: r.Error})
+}
+
+func resumeConflict(conflict string) error {
+	switch conflict {
+	case sourceRemoved:
+		return errors.New("源已从配置删除，不能继续；请取消任务")
+	case sourceChanged:
+		return errors.New("源类型或 dest 已变更，不能继续；请取消任务")
+	case sourceDisabled:
+		return errors.New("源已禁用，启用后再继续")
 	}
 	return nil
 }
@@ -302,7 +363,21 @@ func (e *Engine) ApplyConfig(c config.Config, revision string, token, proxy *str
 	if reconcileErr != nil {
 		reconcileErr = fmt.Errorf("配置已保存，但发布目录接入失败，请修复后重新载入配置: %w", reconcileErr)
 	}
-	return errors.Join(reconcileErr, e.Schedules())
+	return partialApply(errors.Join(reconcileErr, e.Schedules()))
+}
+
+// PartialApplyError means YAML was already saved or loaded, but a follow-up
+// step failed. Callers must adopt the new revision and show the warning.
+type PartialApplyError struct{ Err error }
+
+func (e *PartialApplyError) Error() string { return e.Err.Error() }
+func (e *PartialApplyError) Unwrap() error { return e.Err }
+
+func partialApply(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &PartialApplyError{Err: err}
 }
 
 func (e *Engine) Reload() error {
@@ -318,8 +393,9 @@ func (e *Engine) Reload() error {
 		}
 		return nil
 	})
+	var appliedErr error
 	if err == nil && e.ConfigApplied != nil {
-		err = e.ConfigApplied()
+		appliedErr = e.ConfigApplied()
 	}
 	e.mu.Unlock()
 	if err != nil {
@@ -329,7 +405,7 @@ func (e *Engine) Reload() error {
 	if reconcileErr != nil {
 		reconcileErr = fmt.Errorf("配置已载入，但发布目录接入失败，请修复后重新载入配置: %w", reconcileErr)
 	}
-	return errors.Join(reconcileErr, e.Schedules())
+	return partialApply(errors.Join(appliedErr, reconcileErr, e.Schedules()))
 }
 func (e *Engine) Enqueue(sourceID, trigger string) (*Run, error) {
 	e.configMu.Lock()
@@ -416,6 +492,9 @@ func (e *Engine) Action(id int64, action string) error {
 		if r.ElapsedSeconds >= r.BudgetSeconds {
 			return errors.New("累计预算已耗尽")
 		}
+		if err := resumeConflict(sourceConflict(r, e.cfg.Current().Sources)); err != nil {
+			return err
+		}
 		r.State = "queued"
 		r.Error = ""
 		r.ErrorCode = ""
@@ -451,6 +530,23 @@ func (e *Engine) Action(id int64, action string) error {
 		e.requestCleanup()
 	}
 	return nil
+}
+
+// stopQueued persists a source conflict found at dequeue time. Callers hold e.mu.
+func (e *Engine) stopQueued(r *Run, conflict string) {
+	previous := *r
+	stopForSource(r, conflict)
+	if err := e.save(r); err != nil {
+		slog.Error("save source conflict", "run", r.ID, "error", err)
+		*r = previous
+		r.State, r.ErrorCode = "interrupted", "PERSISTENCE_FAILED"
+		r.Error = "任务状态保存失败；修复存储后继续或取消"
+		return
+	}
+	if !reserved(r.State) {
+		delete(e.current, r.ID)
+		e.requestCleanup()
+	}
 }
 
 func (e *Engine) requestCleanup() {
@@ -560,13 +656,22 @@ func (e *Engine) worker() {
 		}
 		e.mu.Lock()
 		var r *Run
+		var sources []config.Source
 		for len(e.pending) > 0 {
 			candidate := e.pending[0]
 			e.pending = e.pending[1:]
-			if candidate.State == "queued" && e.working[candidate.ID] == nil {
-				r = candidate
-				break
+			if candidate.State != "queued" || e.working[candidate.ID] != nil {
+				continue
 			}
+			if sources == nil {
+				sources = e.cfg.Current().Sources
+			}
+			if conflict := sourceConflict(candidate, sources); conflict != "" {
+				e.stopQueued(candidate, conflict)
+				continue
+			}
+			r = candidate
+			break
 		}
 		if r == nil {
 			e.mu.Unlock()
@@ -578,11 +683,17 @@ func (e *Engine) worker() {
 			}
 			continue
 		}
-		admitErr := e.admitSync(r.ID)
-		if errors.Is(admitErr, mirrors.ErrLowSpace) {
+		if admitErr := e.admitSync(r.ID); admitErr != nil {
+			message := "镜像盘可用空间不足，保持排队；释放空间后自动继续"
+			if !errors.Is(admitErr, mirrors.ErrLowSpace) {
+				// A failed capacity probe blocks admission without consuming the
+				// task: keep it queued, unlike a confirmed low-space condition.
+				slog.Error("check mirror capacity before admission", "run", r.ID, "error", admitErr)
+				message = "镜像盘容量探测失败，保持排队；恢复后自动继续"
+			}
 			if r.Progress.Phase != "waiting_space" {
 				r.Progress.Phase = "waiting_space"
-				e.event(r, "镜像盘可用空间不足，保持排队；释放空间后自动继续")
+				e.event(r, message)
 				if err := e.save(r); err != nil {
 					slog.Error("save space wait", "error", err)
 				}
@@ -630,10 +741,7 @@ func (e *Engine) worker() {
 		}
 		snapshot := r.Snapshot
 		e.mu.Unlock()
-		err := admitErr
-		if err == nil {
-			err = e.execute(ctx, r.ID, snapshot)
-		}
+		err := e.execute(ctx, r.ID, snapshot)
 		if cause := context.Cause(ctx); cause != nil && err != nil {
 			err = cause
 		}
@@ -713,6 +821,9 @@ func (e *Engine) execute(ctx context.Context, id int64, snapshot Snapshot) error
 	if len(candidates) == 0 {
 		return errors.New("没有可用来源")
 	}
+	// Any transient candidate failure in a round justifies retrying the round,
+	// even when the last mirror reported a permanent source-local error.
+	roundRetryable := false
 	for index := first; ; index++ {
 		if err = e.waitRetry(ctx, id); err != nil {
 			return err
@@ -807,11 +918,12 @@ func (e *Engine) execute(ctx context.Context, id int64, snapshot Snapshot) error
 		}
 		failure := syncer.AsFailure(err)
 		failure.Message = redact(failure.Message, secrets...)
+		roundRetryable = roundRetryable || failure.Retryable
 		// Source-local permanent failures can still use another mirror.
 		if s.Type == "rsync" && (failure.Retryable || failure.SourceFailure) && index+1 < len(candidates) {
 			continue
 		}
-		if !failure.Retryable {
+		if !failure.Retryable && !(s.Type == "rsync" && failure.SourceFailure && roundRetryable) {
 			return failure
 		}
 		e.mu.Lock()
@@ -831,6 +943,7 @@ func (e *Engine) execute(ctx context.Context, id int64, snapshot Snapshot) error
 			delay = time.Until(r.RetryAt)
 		}
 		r.CandidateIndex = 0
+		roundRetryable = false
 		received, incomplete := receivedBytes(r.Attempts)
 		r.Progress = syncer.Progress{Phase: "retry", ReceivedBytes: received, ReceivedIncomplete: incomplete}
 		e.event(r, fmt.Sprintf("网络或上游临时失败，%s 后自动重试（%d/%d）", delay, r.RetryCount, snapshot.Settings.RetryCount))

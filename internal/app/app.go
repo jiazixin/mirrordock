@@ -334,19 +334,35 @@ func (a *App) saveConfig(w http.ResponseWriter, r *http.Request) {
 		failure(w, err)
 		return
 	}
-	if err := a.Runs.ApplyConfig(body.Config, body.Revision, body.TokenUpdate, body.ProxyUpdate); err != nil {
+	err := a.Runs.ApplyConfig(body.Config, body.Revision, body.TokenUpdate, body.ProxyUpdate)
+	if _, partial := errors.AsType[*runs.PartialApplyError](err); err != nil && !partial {
 		failure(w, err)
 		return
 	}
 	_ = a.Store.SetState("last_config_change", time.Now().UTC().Format(time.RFC3339))
-	respond(w, 200, a.Config.View())
+	a.configApplied(w, err)
 }
 func (a *App) reload(w http.ResponseWriter, r *http.Request) {
-	if err := a.Runs.Reload(); err != nil {
+	err := a.Runs.Reload()
+	if _, partial := errors.AsType[*runs.PartialApplyError](err); err != nil && !partial {
 		failure(w, err)
 		return
 	}
-	respond(w, 200, a.Config.View())
+	a.configApplied(w, err)
+}
+
+// configApplied returns the adopted revision even when a follow-up step failed,
+// so the editor does not keep a stale revision for an already written YAML.
+func (a *App) configApplied(w http.ResponseWriter, warning error) {
+	result := struct {
+		config.View
+		Warning string `json:"warning,omitempty"`
+	}{View: a.Config.View()}
+	if warning != nil {
+		slog.Error("apply configuration", "error", warning)
+		result.Warning = syncer.CleanLog(warning.Error())
+	}
+	respond(w, 200, result)
 }
 func (a *App) listRuns(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
@@ -495,6 +511,7 @@ func (a *App) checks(w http.ResponseWriter, r *http.Request) {
 	out["mirror_writable"] = checkWritable(a.Mirrors.Root)
 	out["reflink"] = a.Mirrors.ProbeReflink(r.Context())
 	out["storage"] = a.Mirrors.StorageInfo()
+	out["publication_issues"] = a.Mirrors.Issues()
 	out["github_token_configured"] = a.Config.View().TokenConfigured
 	out["github_proxy_configured"] = a.Config.View().ProxyConfigured
 	respond(w, 200, out)

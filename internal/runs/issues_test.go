@@ -98,7 +98,7 @@ func TestRecoveryPagesAndPreservesPauseBudgetAndFailure(t *testing.T) {
 	e, cfg, store, m := testEngine(t, "30s", runner)
 	e.Close()
 	for i := range 105 {
-		r := &Run{SourceID: fmt.Sprint("paused-", i), State: "paused", BudgetSeconds: 30}
+		r := &Run{SourceID: "test", Dest: "test", Type: "rsync", Name: fmt.Sprint("paused-", i), State: "paused", BudgetSeconds: 30}
 		if _, err := store.CreateRun(r.SourceID, r.State, time.Now().UTC().Format(time.RFC3339Nano), r); err != nil {
 			t.Fatal(err)
 		}
@@ -112,7 +112,8 @@ func TestRecoveryPagesAndPreservesPauseBudgetAndFailure(t *testing.T) {
 		{state: "pausing", kind: "rsync", want: "paused", elapsed: 7},
 		{state: "interrupted", code: "PERSISTENCE_FAILED", kind: "rsync", want: "interrupted", elapsed: 7},
 		{state: "interrupted", code: "SERVICE_INTERRUPTED", kind: "rsync", want: "timed_out", elapsed: 30},
-		{state: "interrupted", code: "SERVICE_INTERRUPTED", kind: "reposync", want: "interrupted", elapsed: 7},
+		// The configured source is rsync: a retyped snapshot is never resumed.
+		{state: "interrupted", code: "SERVICE_INTERRUPTED", kind: "reposync", want: "cancelled", elapsed: 7},
 	}
 	for i := range cases {
 		c := &cases[i]
@@ -128,7 +129,7 @@ func TestRecoveryPagesAndPreservesPauseBudgetAndFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer restored.Close()
-	if len(restored.current) != 109 || len(restored.pending) != 1 {
+	if len(restored.current) != 108 || len(restored.pending) != 1 {
 		t.Fatal(len(restored.current), len(restored.pending))
 	}
 	for _, c := range cases {

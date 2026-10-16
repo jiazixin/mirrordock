@@ -57,8 +57,21 @@ export async function saveConfiguration(
   if (session !== sessionID) return
   state.config = saved
   await refresh()
-  if (session === sessionID)
-    notify('配置已写回 YAML' + (saved.restart_required ? '，部分设置重启生效' : ''))
+  if (session !== sessionID) return
+  // The YAML is already written even when follow-up integration failed.
+  if (saved.warning) notify(saved.warning, 'error')
+  else notify('配置已写回 YAML' + (saved.restart_required ? '，部分设置重启生效' : ''))
+}
+
+export async function reloadConfiguration() {
+  const session = sessionID
+  const loaded = await api<ConfigView>('/config/reload', 'POST')
+  if (session !== sessionID) return
+  state.config = loaded
+  await refresh()
+  if (session !== sessionID) return
+  if (loaded.warning) notify(loaded.warning, 'error')
+  else notify('已重新载入磁盘配置')
 }
 
 export function connectEvents() {

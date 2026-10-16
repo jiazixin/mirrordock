@@ -33,10 +33,14 @@ func TestImportDatabaseFailureRestoresOriginalDirectory(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(local, "package.rpm"), []byte("original"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	manager, err := New(root, store, []config.Source{{ID: "repo", Type: "rsync", Dest: "repo"}})
-	if err == nil {
-		manager.Close()
-		t.Fatal("import should fail")
+	sources := []config.Source{{ID: "repo", Type: "rsync", Dest: "repo"}}
+	manager, err := New(root, store, sources)
+	if err != nil {
+		t.Fatal("a per-source import failure must not stop startup", err)
+	}
+	defer manager.Close()
+	if issues := manager.Issues(); len(issues) != 1 || issues[0].SourceID != "repo" {
+		t.Fatal("import failure was not reported", issues)
 	}
 	data, readErr := os.ReadFile(filepath.Join(local, "package.rpm"))
 	if readErr != nil || string(data) != "original" {
@@ -45,11 +49,12 @@ func TestImportDatabaseFailureRestoresOriginalDirectory(t *testing.T) {
 	if _, err := store.DB.Exec("DROP TRIGGER reject_publication"); err != nil {
 		t.Fatal(err)
 	}
-	manager, err = New(root, store, []config.Source{{ID: "repo", Type: "rsync", Dest: "repo"}})
-	if err != nil {
-		t.Fatal("next startup could not import", err)
+	if err := manager.Reconcile(t.Context(), sources); err != nil {
+		t.Fatal("next reconciliation could not import", err)
 	}
-	defer manager.Close()
+	if len(manager.Issues()) != 0 || len(manager.Publications()) != 1 {
+		t.Fatal("successful import left stale state", manager.Issues())
+	}
 }
 
 func testManager(t *testing.T) (*Manager, config.Source) {
@@ -354,9 +359,14 @@ func TestAliasFailureCannotPublish(t *testing.T) {
 	m, s := testManager(t)
 	work, _ := m.Prepare(t.Context(), s, 1)
 	os.WriteFile(filepath.Join(work, "pkg.rpm"), []byte("package"), 0644)
+	// An empty placeholder may be replaced, but user content never is.
 	os.Mkdir(filepath.Join(m.Root, s.Dest), 0755)
+	os.WriteFile(filepath.Join(m.Root, s.Dest, "user-file"), []byte("user"), 0644)
 	if _, err := m.Publish(t.Context(), s, 1); err == nil {
 		t.Fatal("occupied alias accepted")
+	}
+	if data, err := os.ReadFile(filepath.Join(m.Root, s.Dest, "user-file")); err != nil || string(data) != "user" {
+		t.Fatal("user content changed", err)
 	}
 	if len(m.Publications()) != 0 {
 		t.Fatal("failed publication became visible")
