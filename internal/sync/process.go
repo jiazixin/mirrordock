@@ -203,6 +203,9 @@ func command(ctx context.Context, name string, args []string, emit func(Progress
 	err = cmd.Wait()
 	close(done)
 	stop()
+	// Descendants that outlive the direct child, such as an rsync receiver,
+	// share its process group; never leave them writing into the work tree.
+	stopProcess(cmd.Process.Pid, true)
 	if parent.Err() != nil {
 		return parent.Err()
 	}

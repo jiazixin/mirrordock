@@ -88,6 +88,13 @@ func OpenConfig(cfg *config.Manager) (*App, error) {
 		fail()
 		return nil, err
 	}
+	// A previous instance killed with SIGKILL may leave executor descendants
+	// writing into task work directories. Stop them before any run recovers.
+	if n, err := syncer.TerminateStrays(filepath.Join(m.Root, ".mirrordock", "work")); err != nil {
+		slog.Error("terminate leftover executor processes", "count", n, "error", err)
+	} else if n > 0 {
+		slog.Warn("terminated leftover executor processes", "count", n)
+	}
 	location := startupLocation()
 	engine, err := runs.New(cfg, store, m, syncer.SystemRunner{}, location)
 	if err != nil {

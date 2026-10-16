@@ -1,5 +1,79 @@
 # 验收记录
 
+## Linux 实机验收：AlmaLinux 10.2（2026-10-16）
+
+范围：提交 `a4e0245` 的源码（`git archive` + `go mod vendor` + 本地构建的 `web/dist`），在用户提供的测试虚拟机 `test-mirrordock` 上运行：AlmaLinux 10.2、内核 6.12.0-211.22.1.el10_2.x86_64、20 核、3.5 GiB 内存，根分区 XFS（`reflink=1`），SELinux Permissive，系统 rsync 3.4.4、DNF 4.20。Go 1.27.2 放在 `~/mirrordock-test`，未写入系统路径；为 race 与 strace 安装了 `gcc`、`strace`（用户注释掉 dnf.conf 的 exclude 后安装 gcc）。测试实例只监听 127.0.0.1:18080，上游为本机 127.0.0.1:18873 的 rsync daemon 与随机数据夹具；未访问真实发行版镜像，未改动用户配置或生产数据。
+
+### 已执行检查
+
+| 项目 | 结果 |
+| --- | --- |
+| `go vet ./...` | 通过 |
+| `go test -count=1 ./...`（`MIRRORDOCK_TEST_RSYNC=/usr/bin/rsync`） | 9 个包全部通过，161 个测试，0 跳过 |
+| `go test -race -count=1 ./...`（同上，CGO_ENABLED=1） | 9 个包全部通过，161 个测试，0 跳过，无 data race |
+| 环境检查 API | reflink 实测“支持”；`statfs` 总量/可用量与 `df -B1` 一致（494.3 / 481.3 GiB），余量 4.94 GiB、准入需 5.44 GiB |
+| 首次 rsync 同步与下载 | 成功；256 MiB 文件经公开 HTTP 下载与上游逐字节一致 |
+| 空占位 dest | 启动不报错，首次发布后替换为发布链接 |
+| reflink 共享块 | 仅修改一个小文件后发布新代：文件系统已用空间增加约 260 KB；新代中 256 MiB 文件的 extent 标记为 shared（FIEMAP flags 0x2001），内容与旧代一致 |
+| HTTP/1.1 sendfile | `strace` 观测到 384 次 `sendfile(…)`，累计约 268 MB，即整个 256 MiB 文件经 sendfile 发出 |
+| 同步进程优先级 | rsync 父子进程 nice=10、ionice best-effort 7，同一进程组 |
+| 暂停 / 继续 | 暂停后 rsync 进程组全部退出，`.rsync-partial` 保留；继续沿用同一 work 目录 |
+| 正常停机（SIGTERM） | rsync 无残留；数据库记为 interrupted / SERVICE_INTERRUPTED |
+| 停机期间改 YAML 后重启 | 改 dest 的中断任务自动 cancelled（SOURCE_CHANGED），work 已清理；dest 迁移后新路径 200、旧路径 404 |
+| dest 被普通文件占用 | 服务照常启动；环境检查与重载均报告该源问题（重载返回 200 + 警告），用户文件未被改动 |
+| 配置重载 | 修改 `limit_mb` 后重载生效（rsync 以 `--bwlimit=1953` 运行） |
+| GitHub Release 直连 | jqlang/jq 最新 Release（jq-1.8.2）两个附件同步成功，公开下载的 SHA-256 与 GitHub digest 一致 |
+| GitHub Release 经 socks5h 代理 | 代理 `proxy.jzxk.cc:2002` 连通；其出口 IP 的匿名 API 配额已被耗尽（GitHub 返回 403 rate limit），任务正确归类为 GITHUB_RATE_LIMIT 并按重置时间安排重试，随后手动取消。经该代理的完整下载未验证 |
+| systemd（临时单元：UMask 0077、NoNewPrivileges、ProtectSystem=strict、ProtectHome=read-only、PrivateTmp、LimitNOFILE=8192、Restart=on-failure） | 以普通用户运行；同步中对主进程 SIGKILL，systemd 清理整个 cgroup 后重启，任务自动恢复并成功、内容一致；正常停止退出成功 |
+
+### 发现的问题（已在下一节修复并复测）
+
+**中：服务进程被 SIGKILL（OOM、崩溃、`kill -9`）时，rsync 派生的接收子进程不会退出。** `Pdeathsig` 只作用于直接子进程；rsync 自己 fork 的接收进程被 init 接管后继续向 work 目录写入（实测在服务被杀后，partial 文件从 4 MB 增长到 68 MB），并一直闲置存活（观察超过 8 分钟）。重启后恢复的任务把同一 work 目录改名成发布代，残留进程的 cwd 随之落在**已发布的不可变代**内。本次残留进程恰好已写完，发布内容正确，但不能保证每次都如此。
+
+- systemd（默认 `KillMode=control-group`）与容器部署可兜底：实测 systemd 在重启前杀掉整个 cgroup，但残留的 rsync 不响应 SIGTERM，要等满 `TimeoutStopSec=45` 后才 SIGKILL，崩溃后约 50 秒才恢复服务。
+- 裸进程（nohup/setsid、无 cgroup 清理的进程管理器）部署没有兜底。
+- 修复与复测见下一节“残留执行器进程修复与复测”。
+
+### 残留执行器进程修复与复测（2026-10-17）
+
+改动：
+- `internal/sync/strays*.go` 新增 `TerminateStrays`。Linux 扫描 `/proc`，Darwin 用 `ps`，只看**本用户**进程中**参数**引用 `<mirror_root>/.mirrordock/work/` 的进程；先 SIGKILL，再轮询直到消失，最多 10 秒。不按工作目录匹配，以免误杀停留在 work 目录的管理员 shell 或服务发布代的 rsync daemon；其他用户的进程不纳入。
+- `app.OpenConfig` 在持有实例锁、构建发布管理器之后、恢复任务之前调用它：结束时记 WARN 与数量，未能结束记 ERROR，启动不因此中止。
+- `command()` 在执行器退出后再对其进程组发送一次 SIGKILL，清理已关闭标准输出、脱离父进程的同组子进程。
+
+测试：新增 `TestTerminateStraysStopsOnlyWorkProcesses`。它断言参数引用 work 的进程被结束，仅工作目录在 work 内的进程和在发布代内服务的进程保留，第二次扫描为空。新增 `TestCommandStopsDescendantsAfterExit`：去掉进程组清理时实测失败，恢复后通过。
+
+| 检查 | 结果 |
+| --- | --- |
+| 本机 `go vet ./...`、`gofmt -l` | 通过 |
+| 本机 `go test -race -count=1 ./...`（rsync 3.5.1） | 全部包通过 |
+| 虚拟机 `go vet ./...` | 通过 |
+| 虚拟机 `go test -race -count=1 ./...`（`/usr/bin/rsync` 3.4.4） | 9 个包全部通过，164 个测试，0 跳过，无 data race；两个新测试在 Linux 上通过 |
+| 虚拟机裸进程复现（setsid 启动，限速同步 96 MiB 时 SIGKILL 服务） | 2 秒后仍有 1 个残留 rsync（父进程为 1），复现成功。重启 324 ms 内就绪，日志 `terminated leftover executor processes count=1`；之后只剩新尝试的 rsync（父进程为新服务），任务第 2 次尝试成功、内容一致；没有任何进程的 cwd 落在 `.mirrordock/` 内 |
+| 虚拟机 systemd 回归（同上加固参数，普通用户运行） | 同步中对主进程 SIGKILL 后约 37 秒自动重启，任务恢复成功、内容一致；测试目录无非 `k` 属主文件 |
+
+外部 `ocr review` 7 个请求全部失败，未产生结果，不计为通过。改用 `ocr delegate preview`（5 个可审查文件：`app.go`、`process.go`、`strays.go`、`strays_linux.go`、`strays_darwin.go`；测试与 ACCEPTANCE 为默认排除）和 Go 规则组，由当前会话逐文件审查，覆盖 5/5。审查修复：
+
+- 中：最初的实现也匹配工作目录在 work 内的进程，可能误杀管理员 shell，且对其他用户进程反复 EPERM、拖满 10 秒——改为只匹配本用户进程的参数。
+
+遗留观察：systemd 部署下崩溃恢复仍取决于 systemd 自身的停止阶段（残留 rsync 不响应 TERM 时最多等 `TimeoutStopSec`），本修复不改变这一点；如需更快恢复，可在部署时酌情调小 `TimeoutStopSec`，但要保留正常停机所需的约 10 秒进程组退出时间。
+
+### 未验证项
+
+- 生产规模（多 TB、百万级文件）、长期运行、真实上游镜像、物理网卡吞吐、HTTPS/HTTP2 下的下载路径。
+- 经 socks5 代理的 GitHub 完整下载（受代理出口 IP 的匿名配额限制；需 Token 或未受限出口）。
+- Reposync / DNF4 与 GPG 校验本轮未在该虚拟机上重跑。
+- SELinux Enforcing、真实断电与磁盘故障、Docker 镜像构建。
+- 版本号：从 `git archive` 构建，无 `.git`，`--version` 显示 `dev`，属预期。
+
+### 测试过程中的操作失误
+
+为 systemd 测试编写的脚本里，自定义 shell 函数 `id` 覆盖了系统命令，导致第一次 `systemd-run --uid=$(id -u)` 以 root 启动服务约 1 分钟。该实例未执行任何同步任务，只在启动时以 root 身份重建了 3 个 dest 链接；已停止服务并把测试目录属主改回 `k`（复核 0 个非 `k` 文件），随后以普通用户重跑全部 systemd 用例。影响仅限测试目录。
+
+### 清理
+
+两轮测试后均已停止测试服务与 rsync daemon，删除临时单元与 `~/mirrordock-test/run` 测试数据。保留 `~/mirrordock-test` 下的 Go 工具链、源码与测试日志（约 1.3 GB）以便复测；`gcc`、`strace` 保留在系统中。
+
 ## 全项目逻辑审查问题 1–8 修复（2026-10-16）
 
 范围：工作区未提交改动——`internal/runs/runs.go`、`internal/mirrors/mirrors.go`、`internal/app/{app,auth}.go`、`web/src/app/{state,types}.ts`、`web/src/features/settings/{Settings,EnvironmentChecks}.vue`，以及对应测试、README 与 DESIGN。下载热路径（`http.go`、`roots.go`）未改动。
