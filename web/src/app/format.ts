@@ -1,4 +1,5 @@
 import { state } from './state'
+import type { SourceType } from './types'
 export function time(value?: string) {
   if (!value || value.startsWith('0001')) return '—'
   const date = new Date(value)
@@ -30,10 +31,18 @@ export function duration(seconds?: number | null) {
   return `${Math.floor(n / 3600)}h${Math.floor((n % 3600) / 60)}m`
 }
 export function bytes(n: number) {
-  if (!n) return '0 B'
+  if (!(n >= 1)) return '0 B'
   const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB']
   const index = Math.min(4, Math.floor(Math.log(n) / Math.log(1024)))
   return `${(n / 1024 ** index).toFixed(index ? 1 : 0)} ${units[index]}`
+}
+const sourceTypeLabels: Record<SourceType, string> = {
+  rsync: 'Rsync',
+  reposync: 'Reposync',
+  github_release: 'GitHub Release',
+}
+export function sourceType(type: SourceType) {
+  return sourceTypeLabels[type] ?? type
 }
 export const phases: Record<string, string> = {
   waiting_space: '等待镜像盘空间',

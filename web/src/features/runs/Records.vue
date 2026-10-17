@@ -10,7 +10,7 @@ import RunDetail from './RunDetail.vue'
 import { api } from '../../app/api'
 import { state, perform, notify } from '../../app/state'
 import StackedTime from '../../components/StackedTime.vue'
-import { time, duration, bytes } from '../../app/format'
+import { time, duration, bytes, sourceType } from '../../app/format'
 const tab = ref('succeeded')
 const source = ref('')
 const age = ref('')
@@ -97,7 +97,7 @@ async function clear() {
               <th>耗时</th>
               <th>数据量</th>
               <th class="text-left">{{ tab === 'succeeded' ? '处理结果' : '失败原因' }}</th>
-              <th class="right"><span class="action-heading">详情</span></th>
+              <th class="center">详情</th>
             </tr>
           </thead>
           <tbody>
@@ -113,7 +113,7 @@ async function clear() {
               </td>
               <td class="text-left">
                 <strong>{{ run.name }}</strong
-                ><small>{{ run.type }} · #{{ run.id }}</small>
+                ><small>{{ sourceType(run.type) }} · #{{ run.id }}</small>
               </td>
               <td><StatusBadge :state="run.state" /></td>
               <td>
@@ -134,13 +134,14 @@ async function clear() {
                   ></template
                 >
               </td>
-              <td class="right">
+              <td class="center">
                 <button
-                  class="icon-button"
+                  class="icon-button outlined"
                   aria-label="查看记录详情"
+                  title="查看详情"
                   @click="detail = run.id"
                 >
-                  <Info :size="17" />
+                  <Info :size="15" />
                 </button>
               </td>
             </tr>

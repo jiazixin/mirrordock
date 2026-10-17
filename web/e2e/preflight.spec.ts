@@ -154,7 +154,7 @@ test('switching source types ignores hidden required fields and modal traps focu
     await page.getByLabel('目的目录 · dest').fill('repo-fixture')
     await page.getByRole('button', { name: '添加备用来源' }).click()
     await page.getByRole('combobox', { name: '同步方式', exact: true }).click()
-    await page.getByRole('option', { name: 'DNF reposync' }).click()
+    await page.getByRole('option', { name: 'DNF Reposync' }).click()
     await dialog.locator('.upstream-row input').first().fill('https://example.com/repo/')
     await page.getByLabel('仓库 ID').fill('fixture')
     await page.getByRole('switch', { name: '检查包签名', exact: true }).uncheck()

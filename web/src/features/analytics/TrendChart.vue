@@ -29,13 +29,20 @@ const value = (day: AnalyticsDay) =>
       : day.duration_samples
         ? day.elapsed_seconds / day.duration_samples
         : 0
+// Tick steps are whole units (bytes in 1024 powers, durations in s/m/h) so
+// every axis label is a readable value instead of a fraction of a byte.
+const byteSteps = [0, 1, 2, 3, 4].flatMap((power) =>
+  [1, 2, 5, 10, 20, 50, 100, 256, 512].map((n) => n * 1024 ** power),
+)
+const durationSteps = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800].concat(
+  [1, 2, 3, 6, 12, 24, 48, 120, 240].map((hours) => hours * 3600),
+)
 const maximum = computed(() => {
   const max = Math.max(0, ...props.days.map(value))
   if (props.metric === 'runs') return Math.max(4, Math.ceil(max / 4) * 4)
-  if (!max) return 1
-  const magnitude = 10 ** Math.floor(Math.log10(max)),
-    scaled = max / magnitude
-  return (scaled <= 1 ? 1 : scaled <= 2 ? 2 : scaled <= 5 ? 5 : 10) * magnitude
+  const steps = props.metric === 'bytes' ? byteSteps : durationSteps
+  const step = steps.find((candidate) => candidate * 4 >= max) ?? Math.ceil(max / 4)
+  return step * 4
 })
 const x = (i: number) => left + ((i + 0.5) * plotWidth.value) / props.days.length
 const y = (n: number) => top + plotHeight * (1 - n / maximum.value)
@@ -46,6 +53,16 @@ const format = (n: number) =>
       ? duration(n)
       : n.toLocaleString('zh-CN', { maximumFractionDigits: 1 })
 const ticks = computed(() => Array.from({ length: 5 }, (_, i) => (maximum.value * i) / 4))
+const tickLabel = (n: number) =>
+  props.metric === 'bytes'
+    ? bytes(n).replace('.0 ', ' ')
+    : props.metric === 'duration' && n >= 60
+      ? n % 3600 === 0
+        ? `${n / 3600}h`
+        : n < 3600 && n % 60 === 0
+          ? `${n / 60}m`
+          : duration(n)
+      : format(n)
 const path = computed(() =>
   props.days.map((d, i) => `${i ? 'L' : 'M'}${x(i)},${y(value(d))}`).join(' '),
 )
@@ -102,7 +119,7 @@ const metricLabel = computed(() =>
           text-anchor="end"
           class="chart-text"
         >
-          {{ format(tick) }}
+          {{ tickLabel(tick) }}
         </text>
       </g>
       <template v-if="metric === 'runs'">

@@ -8,7 +8,7 @@ import { RefreshCw, Pause, Play, X, Info, Layers3, RotateCcw } from '@lucide/vue
 import StatusBadge from '../../components/StatusBadge.vue'
 import RunDetail from './RunDetail.vue'
 import { state, refresh, perform, runAction, runSource } from '../../app/state'
-import { time, duration, bytes, phases } from '../../app/format'
+import { time, duration, bytes, phases, sourceType } from '../../app/format'
 import type { Run, SourceType } from '../../app/types'
 function received(progress: Run['progress']) {
   return progress.received_bytes == null ? '未统计' : bytes(progress.received_bytes)
@@ -17,7 +17,7 @@ function transferDescription(type: SourceType) {
   return type === 'github_release'
     ? '本任务各次尝试实际读取的资产响应正文；不含本地复用、已有续传片段和 HTTP/TLS 头部。'
     : type === 'rsync'
-      ? '累计 rsync 报告的 Total bytes received，包含协议数据；命令结束后更新。缺少统计的尝试不会推算。'
+      ? '累计 Rsync 报告的 Total bytes received，包含协议数据；命令结束后更新。缺少统计的尝试不会推算。'
       : 'DNF 尚未提供可靠的接收字节统计。'
 }
 const selectedState = ref('')
@@ -135,7 +135,7 @@ const groups = computed(() => {
                 ><span
                   class="type-pill"
                   :class="run.type"
-                  >{{ run.type === 'github_release' ? 'GitHub Release' : run.type }}</span
+                  >{{ sourceType(run.type) }}</span
                 ><StatusBadge :state="run.state" /><span class="run-duration"
                   >{{ ['running', 'pausing'].includes(run.state) ? '已运行 ' : ''
                   }}{{ duration(run.elapsed_seconds)
@@ -190,22 +190,25 @@ const groups = computed(() => {
                 <div class="row-actions">
                   <button
                     v-if="['running', 'queued'].includes(run.state)"
-                    class="icon-button"
+                    class="icon-button outlined"
                     aria-label="暂停任务"
+                    title="暂停任务"
                     @click="perform(() => runAction(run.id, 'pause'))"
                   >
                     <Pause :size="15" /></button
                   ><button
                     v-if="['paused', 'interrupted'].includes(run.state)"
-                    class="icon-button"
+                    class="icon-button outlined"
                     aria-label="继续任务"
+                    title="继续任务"
                     @click="perform(() => runAction(run.id, 'resume'))"
                   >
                     <Play :size="15" /></button
                   ><button
                     v-if="['failed', 'timed_out', 'succeeded', 'cancelled'].includes(run.state)"
-                    class="icon-button"
+                    class="icon-button outlined"
                     aria-label="重新同步"
+                    title="重新同步"
                     @click="perform(() => runSource(run.source_id))"
                   >
                     <RotateCcw :size="15" /></button
@@ -213,17 +216,19 @@ const groups = computed(() => {
                     v-if="
                       ['queued', 'running', 'paused', 'interrupted', 'pausing'].includes(run.state)
                     "
-                    class="icon-button"
+                    class="icon-button outlined"
                     aria-label="取消任务"
+                    title="取消任务"
                     @click="perform(() => runAction(run.id, 'cancel'))"
                   >
                     <X :size="15" /></button
                   ><button
-                    class="icon-button"
+                    class="icon-button outlined"
                     aria-label="查看运行详情"
+                    title="查看运行详情"
                     @click="detail = run.id"
                   >
-                    <Info :size="16" />
+                    <Info :size="15" />
                   </button>
                 </div>
               </div>

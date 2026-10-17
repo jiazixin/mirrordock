@@ -122,7 +122,7 @@ test('real configuration, rsync failover, publication, records and responsive UI
     await expect(page.getByLabel('GitHub 仓库')).toBeVisible()
     await engine.press('Home')
     await engine.press('Enter')
-    await expect(engine).toHaveText('rsync')
+    await expect(engine).toHaveText('Rsync')
     await expect(page.getByLabel('GitHub 仓库')).toHaveCount(0)
     await page.getByLabel('源名称').fill('隔离测试源')
     await page.getByLabel('唯一标识').fill('isolated')
@@ -151,7 +151,7 @@ test('real configuration, rsync failover, publication, records and responsive UI
     await expect(row.locator('td').nth(2)).toHaveText('/docker-ce/')
     await expect(row.locator('td').nth(3)).toHaveText('—')
     await expect(row.locator('td').nth(4)).toHaveText('尚未运行')
-    await row.getByRole('button', { name: '同步', exact: true }).click()
+    await row.getByRole('button', { name: '同步 隔离测试源', exact: true }).click()
     await page.getByRole('link', { name: '批次记录' }).click()
     await expect(page.locator('.run-row').first().getByText('成功', { exact: true })).toBeVisible({
       timeout: 20000,
@@ -597,8 +597,8 @@ test('real configuration, rsync failover, publication, records and responsive UI
     // Source types are neutral labels; color is reserved for run anomalies.
     expect(new Set(typeColors.map((item) => item.color)).size).toBe(1)
     await expect(page.locator('.source-table .type-pill')).toHaveText([
-      'rsync',
-      'reposync',
+      'Rsync',
+      'Reposync',
       'GitHub Release',
     ])
     await page.screenshot({ path: testInfo.outputPath('sources-tags.png'), fullPage: true })

@@ -120,8 +120,12 @@ test('analytics charts, filtering, request races, empty/error and mobile states'
     await page.getByRole('link', { name: 'Rsync 分析', exact: true }).click()
     await expect(page.getByText('这段时间暂无运行记录', { exact: true })).toBeVisible()
     await expect(page.locator('.result-ring strong')).toHaveText('—')
-    await page.getByRole('link', { name: 'Reposync分析', exact: true }).click()
-    await expect(page.getByRole('heading', { name: 'Reposync分析' })).toBeVisible()
+    const axis = page.locator('.trend-panel svg > g > text')
+    await page.getByRole('button', { name: '处理量', exact: true }).click()
+    // Empty ranges label the axis in whole bytes, never fractions of a byte.
+    await expect(axis).toHaveText(['0 B', '1 B', '2 B', '3 B', '4 B'])
+    await page.getByRole('link', { name: 'Reposync 分析', exact: true }).click()
+    await expect(page.getByRole('heading', { name: 'Reposync 分析' })).toBeVisible()
     await expect(page.getByText('这段时间暂无运行记录', { exact: true })).toBeVisible()
     await expect(page.getByRole('alert')).toHaveCount(0)
     await page.getByRole('link', { name: 'Rsync 分析', exact: true }).click()
@@ -165,8 +169,10 @@ test('analytics charts, filtering, request races, empty/error and mobile states'
     await expect(page.locator('.trend-readout')).toContainText('2026-10-01')
     await page.getByRole('button', { name: '处理量', exact: true }).click()
     await expect(page.locator('.trend-panel path')).toHaveCount(2)
+    await expect(axis).toHaveText(['0 B', '1 GiB', '2 GiB', '3 GiB', '4 GiB'])
     await page.getByRole('button', { name: '耗时', exact: true }).click()
     await expect(page.locator('.trend-panel')).toContainText('无样本日期以 0 绘制')
+    await expect(axis).toHaveText(['0s', '30s', '1m', '1m30s', '2m'])
     await page.getByRole('button', { name: '次数', exact: true }).click()
     await page.screenshot({
       path: testInfo.outputPath('rsync-desktop.png'),
@@ -190,8 +196,8 @@ test('analytics charts, filtering, request races, empty/error and mobile states'
     await expect(page.locator('.source-ranking tbody')).toContainText('镜像测试源')
     await page.waitForTimeout(450)
     await expect(page.locator('.source-ranking tbody')).not.toContainText('较慢的上游')
-    await page.getByRole('link', { name: 'Release分析', exact: true }).click()
-    await expect(page.getByRole('heading', { name: 'Release分析' })).toBeVisible()
+    await page.getByRole('link', { name: 'Release 分析', exact: true }).click()
+    await expect(page.getByRole('heading', { name: 'Release 分析' })).toBeVisible()
     await expect(source).toContainText('全部同步源')
     const gh = fixture('github_release', 90, '').summary
     await expect(page.locator('.asset-labels')).toContainText(String(gh.reused))
@@ -217,9 +223,9 @@ test('analytics charts, filtering, request races, empty/error and mobile states'
     await page.setViewportSize({ width: 1440, height: 1000 })
     await page.getByRole('link', { name: 'Rsync 分析', exact: true }).click()
     await page.getByRole('button', { name: '处理量', exact: true }).click()
-    await page.getByRole('link', { name: 'Reposync分析', exact: true }).click()
+    await page.getByRole('link', { name: 'Reposync 分析', exact: true }).click()
     await expect(page).toHaveURL(`${base}/admin/analytics/reposync`)
-    await expect(page.getByRole('heading', { name: 'Reposync分析' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Reposync 分析' })).toBeVisible()
     await expect(page.getByRole('button', { name: '次数', exact: true })).toHaveAttribute(
       'aria-pressed',
       'true',

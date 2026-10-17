@@ -150,8 +150,8 @@ async function save() {
             aria-label="同步方式"
             :options="
               [
-                { value: 'rsync', label: 'rsync' },
-                { value: 'reposync', label: 'DNF reposync' },
+                { value: 'rsync', label: 'Rsync' },
+                { value: 'reposync', label: 'DNF Reposync' },
                 { value: 'github_release', label: 'GitHub Release' },
               ] satisfies { value: Source['type']; label: string }[]
             " /></label
@@ -166,7 +166,7 @@ async function save() {
       <section class="form-section">
         <h3>运行计划</h3>
         <label
-          >cron 表达式<input
+          >Cron 表达式<input
             v-model="draft.schedule.cron"
             placeholder="0 2 * * *"
           /><small>五字段，使用程序启动时区；任务重叠默认跳过。</small></label
@@ -227,7 +227,7 @@ async function save() {
         v-if="draft.type === 'rsync'"
         class="form-section"
       >
-        <h3>rsync 选项</h3>
+        <h3>Rsync 选项</h3>
         <label
           >排除规则 · exclude<textarea
             v-model="exclusions"

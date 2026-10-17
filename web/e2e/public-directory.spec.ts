@@ -143,7 +143,7 @@ test('public directory layout, icons, search, sorting, unpaginated and safe file
     await page
       .getByRole('row')
       .filter({ hasText: '文件列表测试' })
-      .getByRole('button', { name: '同步', exact: true })
+      .getByRole('button', { name: '同步 文件列表测试', exact: true })
       .click()
     await expect
       .poll(

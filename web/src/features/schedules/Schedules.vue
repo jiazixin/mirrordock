@@ -5,7 +5,7 @@ import { computed } from 'vue'
 import { RefreshCw, Clock3, Play } from '@lucide/vue'
 import { clone, state, refresh, perform, runSource, saveConfiguration } from '../../app/state'
 import type { Source } from '../../app/types'
-import { time } from '../../app/format'
+import { time, sourceType } from '../../app/format'
 import StackedTime from '../../components/StackedTime.vue'
 const sources = computed(() => state.config?.config.sources ?? [])
 const { page, pageSize, visible } = usePagination(sources)
@@ -40,14 +40,14 @@ async function cron(source: Source, event: Event) {
     </div>
     <div class="panel">
       <div class="table-scroll">
-        <table>
+        <table class="schedule-table">
           <thead>
             <tr>
               <th class="text-left">同步源</th>
-              <th>cron 表达式</th>
-              <th>下次运行</th>
-              <th>自动计划</th>
-              <th>操作</th>
+              <th>Cron 表达式</th>
+              <th class="center">下次运行</th>
+              <th class="center">自动计划</th>
+              <th class="center">操作</th>
             </tr>
           </thead>
           <tbody>
@@ -57,17 +57,17 @@ async function cron(source: Source, event: Event) {
             >
               <td class="text-left">
                 <strong>{{ source.name }}</strong
-                ><small>{{ source.type }}</small>
+                ><small>{{ sourceType(source.type) }}</small>
               </td>
               <td>
                 <input
                   class="cron-input"
                   :value="source.schedule.cron"
-                  aria-label="cron 表达式"
+                  aria-label="Cron 表达式"
                   @change="perform(() => cron(source, $event))"
                 />
               </td>
-              <td class="schedule-timestamp">
+              <td class="schedule-timestamp center">
                 <StackedTime
                   v-if="source.enabled && source.schedule.enabled"
                   :value="time(state.info?.schedules[source.id])"
@@ -78,7 +78,7 @@ async function cron(source: Source, event: Event) {
                   >未启用</span
                 >
               </td>
-              <td>
+              <td class="center">
                 <button
                   class="toggle"
                   :class="{ on: source.schedule.enabled }"
@@ -93,13 +93,15 @@ async function cron(source: Source, event: Event) {
                   >同步源已禁用</small
                 >
               </td>
-              <td>
+              <td class="center">
                 <button
-                  class="button compact"
+                  class="icon-button outlined"
                   :disabled="!source.enabled"
+                  :aria-label="'立即同步 ' + source.name"
+                  :title="source.enabled ? '立即同步' : '同步源已禁用'"
                   @click="perform(() => runSource(source.id))"
                 >
-                  <Play :size="14" />立即同步
+                  <Play :size="15" />
                 </button>
               </td>
             </tr>

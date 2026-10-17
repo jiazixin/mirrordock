@@ -129,10 +129,43 @@ test('management pagination covers complete history, filtering, page sizes, jump
       await pager.getByRole('button', { name: '跳转', exact: true }).click()
     }
     await expect(page.locator('.source-table tbody tr')).toHaveCount(50)
+    // The selected size is marked by color and every label fits without truncation.
+    await pager.getByRole('combobox', { name: '每页条数' }).click()
+    const sizeOptions = page.getByRole('listbox').locator('[role="option"] > span')
+    await expect(sizeOptions).toHaveText(['20 条 / 页', '50 条 / 页', '100 条 / 页'])
+    expect(
+      await sizeOptions.evaluateAll((spans) => spans.every((s) => s.scrollWidth <= s.clientWidth)),
+    ).toBe(true)
+    await expect(page.getByRole('option', { name: '50 条 / 页', exact: true })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    )
+    await page.keyboard.press('Escape')
     const locationRow = page.locator('.source-table tbody tr').first()
     const origin = await locationRow.locator('.source-origin').boundingBox()
     const dest = await locationRow.locator('.dest').boundingBox()
     expect(Math.abs(origin!.y + origin!.height / 2 - dest!.y - dest!.height / 2)).toBeLessThan(2)
+    // Latest-run and action columns share their header's center line; actions are equal boxes.
+    const centerOf = async (locator: ReturnType<typeof page.locator>) => {
+      const box = (await locator.boundingBox())!
+      return box.x + box.width / 2
+    }
+    const headers = page.locator('.source-table th')
+    for (const [column, content] of [
+      [3, locationRow.locator('td').nth(3).locator(':scope > *')],
+      [5, locationRow.locator('.row-actions')],
+    ] as const)
+      expect(
+        Math.abs((await centerOf(headers.nth(column))) - (await centerOf(content))),
+      ).toBeLessThan(2)
+    const actionBoxes = await locationRow.locator('.row-actions button').evaluateAll((buttons) =>
+      buttons.map((button) => {
+        const style = getComputedStyle(button)
+        return `${button.offsetWidth}x${button.offsetHeight} ${style.borderTopColor} ${style.backgroundColor} ${button.textContent?.trim()}`
+      }),
+    )
+    expect(actionBoxes).toHaveLength(3)
+    expect(new Set(actionBoxes).size).toBe(1)
     await page.screenshot({ path: testInfo.outputPath('source-alignment.png'), fullPage: false })
     await expect(pager).toContainText('共 125 个同步源')
     await pager.getByRole('button', { name: '末页', exact: true }).click()

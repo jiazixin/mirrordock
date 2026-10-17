@@ -117,7 +117,7 @@ onBeforeUnmount(() => {
       <h1>软件源同步<br />与镜像分发</h1>
       <p>按计划从上游同步，校验后发布不可变的镜像代；失败时保留上一代，公开下载不受影响。</p>
       <div class="login-grid">
-        <span>rsync</span><span>reposync</span><span>GitHub Release</span><span>HTTP / TLS</span>
+        <span>Rsync</span><span>Reposync</span><span>GitHub Release</span><span>HTTP / TLS</span>
       </div>
       <small>源仓 · 自托管软件源</small>
     </div>

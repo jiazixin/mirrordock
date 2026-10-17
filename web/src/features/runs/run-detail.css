@@ -26,6 +26,10 @@
   gap: 10px;
   flex-shrink: 0;
 }
+/* Let the borderless refresh glyph, not its hit area, meet the content edge. */
+.detail-heading-actions > .icon-button:last-child {
+  margin-right: -8px;
+}
 .run-lifecycle {
   list-style: none;
   padding: 0;

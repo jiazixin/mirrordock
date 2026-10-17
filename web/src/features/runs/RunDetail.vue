@@ -5,7 +5,7 @@ import { ArrowDownToLine, Download, RefreshCw } from '@lucide/vue'
 import Modal from '../../components/Modal.vue'
 import StatusBadge from '../../components/StatusBadge.vue'
 import StackedTime from '../../components/StackedTime.vue'
-import { time, duration, bytes, phases } from '../../app/format'
+import { time, duration, bytes, phases, sourceType } from '../../app/format'
 import { useRunDetail } from './useRunDetail'
 import './run-detail.css'
 const props = defineProps<{ id: number }>()
@@ -74,7 +74,7 @@ function download() {
           <h3>{{ run.name }}</h3>
           <p>
             {{ run.trigger === 'schedule' ? '自动计划' : '手动触发' }} ·
-            {{ run.type === 'github_release' ? 'GitHub Release' : run.type }}
+            {{ sourceType(run.type) }}
           </p>
         </div>
         <div class="detail-heading-actions">

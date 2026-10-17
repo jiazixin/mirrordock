@@ -29,8 +29,8 @@ const kindInfo = computed(
   () =>
     ({
       rsync: { title: 'Rsync 分析', insight: '来源可靠性', icon: GitBranch },
-      reposync: { title: 'Reposync分析', insight: '执行与重试', icon: RefreshCw },
-      github_release: { title: 'Release分析', insight: '资产完成与复用', icon: ArrowDownToLine },
+      reposync: { title: 'Reposync 分析', insight: '执行与重试', icon: RefreshCw },
+      github_release: { title: 'Release 分析', insight: '资产完成与复用', icon: ArrowDownToLine },
     })[props.kind],
 )
 const trendMetrics = computed(() =>
@@ -145,8 +145,8 @@ onBeforeUnmount(() => {
       aria-label="分析类型"
     >
       <RouterLink to="/analytics/rsync">Rsync 分析</RouterLink
-      ><RouterLink to="/analytics/reposync">Reposync分析</RouterLink
-      ><RouterLink to="/analytics/github">Release分析</RouterLink>
+      ><RouterLink to="/analytics/reposync">Reposync 分析</RouterLink
+      ><RouterLink to="/analytics/github">Release 分析</RouterLink>
     </nav>
     <div class="analytics-filters">
       <SelectField
@@ -212,7 +212,7 @@ onBeforeUnmount(() => {
         <article v-else>
           <span>成功任务处理量</span
           ><strong class="bytes-stat">{{ bytes(data.summary.bytes) }}</strong
-          ><small>{{ github ? '包含复用资产的有效字节' : 'rsync 报告的处理字节' }}</small>
+          ><small>{{ github ? '包含复用资产的有效字节' : 'Rsync 报告的处理字节' }}</small>
         </article>
       </div>
       <div
@@ -542,6 +542,7 @@ onBeforeUnmount(() => {
   font-size: 15px;
 }
 .analytics-panel-heading > svg {
+  align-self: center;
   color: var(--t3);
 }
 .chart-tabs {
@@ -786,6 +787,14 @@ i {
 .source-ranking th:first-child {
   width: 25%;
 }
+.source-ranking th:first-child,
+.source-ranking td:first-child {
+  padding-left: 24px;
+}
+.source-ranking th:last-child,
+.source-ranking td:last-child {
+  padding-right: 24px;
+}
 .source-ranking td:first-child strong,
 .source-ranking td:first-child small {
   overflow-wrap: anywhere;
@@ -798,7 +807,6 @@ i {
 }
 .ranking-count strong {
   min-width: 24px;
-  text-align: right;
 }
 .ranking-count > div {
   height: 2px;
@@ -910,6 +918,14 @@ i {
   }
   .source-ranking .analytics-panel-heading {
     padding: 18px 16px 0;
+  }
+  .source-ranking th:first-child,
+  .source-ranking td:first-child {
+    padding-left: 16px;
+  }
+  .source-ranking th:last-child,
+  .source-ranking td:last-child {
+    padding-right: 16px;
   }
   .trend-panel .analytics-panel-heading {
     align-items: flex-start;

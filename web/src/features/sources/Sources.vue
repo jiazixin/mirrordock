@@ -9,7 +9,7 @@ import StatusBadge from '../../components/StatusBadge.vue'
 import { clone, state, perform, refresh, runSource, saveConfiguration } from '../../app/state'
 import type { Source } from '../../app/types'
 import StackedTime from '../../components/StackedTime.vue'
-import { time, bytes } from '../../app/format'
+import { time, bytes, sourceType } from '../../app/format'
 const search = ref('')
 const type = ref('')
 const edit = ref<Source | undefined>()
@@ -103,8 +103,8 @@ async function remove(source: Source) {
             aria-label="筛选同步方式"
             :options="[
               { value: '', label: '同步方式' },
-              { value: 'rsync', label: 'rsync' },
-              { value: 'reposync', label: 'reposync' },
+              { value: 'rsync', label: 'Rsync' },
+              { value: 'reposync', label: 'Reposync' },
               { value: 'github_release', label: 'GitHub Release' },
             ]"
           />
@@ -118,9 +118,9 @@ async function remove(source: Source) {
               <th>同步源</th>
               <th>来源</th>
               <th>目标</th>
-              <th>最近运行</th>
+              <th class="center">最近运行</th>
               <th>状态</th>
-              <th>操作</th>
+              <th class="center">操作</th>
             </tr>
           </thead>
           <tbody>
@@ -145,7 +145,7 @@ async function remove(source: Source) {
                 <span
                   class="type-pill"
                   :class="source.type"
-                  >{{ source.type === 'github_release' ? 'GitHub Release' : source.type }}</span
+                  >{{ sourceType(source.type) }}</span
                 >
               </td>
               <td>
@@ -172,33 +172,37 @@ async function remove(source: Source) {
               <td>
                 <code class="dest">/{{ source.dest }}/</code>
               </td>
-              <td class="run-timestamp">
+              <td class="run-timestamp center">
                 <StackedTime
                   :value="time(latest(source.id)?.created_at)"
                   :datetime="latest(source.id)?.created_at"
                 />
               </td>
               <td><StatusBadge :state="latest(source.id)?.state ?? 'idle'" /></td>
-              <td class="right">
+              <td class="center">
                 <div class="row-actions">
                   <button
-                    class="button compact"
+                    class="icon-button outlined"
                     :disabled="!source.enabled"
+                    :aria-label="'同步 ' + source.name"
+                    :title="source.enabled ? '立即同步' : '同步源已禁用'"
                     @click="perform(() => runSource(source.id))"
                   >
-                    <Play :size="14" />同步</button
+                    <Play :size="15" /></button
                   ><button
-                    class="icon-button"
+                    class="icon-button outlined"
                     :aria-label="'编辑 ' + source.name"
+                    title="编辑"
                     @click="editSource(source)"
                   >
-                    <Pencil :size="16" /></button
+                    <Pencil :size="15" /></button
                   ><button
-                    class="icon-button danger"
+                    class="icon-button outlined danger"
                     :aria-label="'删除 ' + source.name"
+                    title="删除"
                     @click="perform(() => remove(source))"
                   >
-                    <Trash2 :size="16" />
+                    <Trash2 :size="15" />
                   </button>
                 </div>
               </td>

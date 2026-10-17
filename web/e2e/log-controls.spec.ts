@@ -90,7 +90,7 @@ test('log refresh releases its state and follow defaults on, toggles and survive
     expect(await page.locator('.form-section h3').allTextContents()).toEqual([
       '运行计划',
       '同步来源按数字顺序尝试，切换不重置任务预算',
-      'rsync 选项',
+      'Rsync 选项',
     ])
     await page.getByRole('button', { name: '取消', exact: true }).click()
     await page.getByRole('link', { name: '运行记录', exact: true }).click()

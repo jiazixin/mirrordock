@@ -3,7 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import RunDetail from '../runs/RunDetail.vue'
 import { api } from '../../app/api'
 import { state, notify, perform, runAction, runSource } from '../../app/state'
-import { bytes, duration, phases } from '../../app/format'
+import { bytes, duration, phases, sourceType } from '../../app/format'
 import type { Run, Source } from '../../app/types'
 
 const HOUR = 3_600_000
@@ -121,7 +121,7 @@ const grid = computed(() => {
       t,
       left,
       label: (t + offset.value) % (24 * HOUR) === 0 ? day(t) : clock(t),
-      hidden: Math.abs(left - nowLeft.value) < 5,
+      hidden: Math.abs(left - nowLeft.value) < 11,
     })
   }
   return lines
@@ -404,7 +404,7 @@ const kpis = computed(() => {
           >
             <div class="lane-name">
               <strong>{{ lane.source.name }}</strong
-              ><small>{{ lane.source.type }} · /{{ lane.source.dest }}/</small>
+              ><small>{{ sourceType(lane.source.type) }} · /{{ lane.source.dest }}/</small>
             </div>
             <div class="track">
               <span
