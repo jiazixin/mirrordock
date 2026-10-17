@@ -142,7 +142,7 @@ func TestSystemRsyncProtocol(t *testing.T) {
 
 func TestIncrementalScanDoesNotClaimCompleteProgress(t *testing.T) {
 	p, ok := ParseProgress("1,000 100% 1.00MB/s 0:00:01 (xfr#1, ir-chk=9/20)")
-	if !ok || p.Phase != "scan" || p.Percent != nil || p.ETA != nil {
+	if !ok || p.Phase != "transfer" || p.Percent != nil || p.ETA != nil {
 		t.Fatal(p, ok)
 	}
 	if _, ok = ParseProgress(strings.Repeat("9", 1000) + " 100% 1.00MB/s 0:00:01"); ok {
@@ -224,6 +224,38 @@ func TestRsyncCommandRetainsAuthenticationFailureBeforeExitSummary(t *testing.T)
 	err := command(t.Context(), "rsync", nil, func(Progress) {}, io.Discard)
 	if err == nil || AsFailure(err).Retryable || !strings.Contains(err.Error(), "auth failed") {
 		t.Fatal("lost auth diagnostic", err)
+	}
+}
+
+func TestIncrementalRecursionStaysInTransfer(t *testing.T) {
+	_, cancel := context.WithCancelCause(t.Context())
+	defer cancel(nil)
+	var seen []Progress
+	out := processOutput{name: "rsync", log: io.Discard, cancel: cancel, emit: func(p Progress) { seen = append(seen, p) }}
+	out.scan(strings.NewReader(strings.Join([]string{
+		"  2,379,397,210   8%    4.31MB/s    1:42:56  ",
+		"  2,381,280,309   8%    3.02MB/s    0:12:31 (xfr#1550, ir-chk=10465/12100)",
+		"  2,383,803,445   8%    4.16MB/s    1:46:38  ",
+		"  2,386,512,297   8%    3.02MB/s    0:12:32 (xfr#1551, ir-chk=10464/12100)",
+		"  2,388,281,769   8%    3.90MB/s    1:53:45  ",
+	}, "\n")))
+	if len(seen) != 5 {
+		t.Fatal(seen)
+	}
+	for i, p := range seen {
+		// The first line arrives before rsync reveals incremental recursion.
+		if p.Phase != "transfer" || i > 0 && (p.Percent != nil || p.ETA != nil || p.Total != 0) {
+			t.Fatal(i, p)
+		}
+	}
+	if seen[4].Bytes != 2388281769 || seen[4].Speed <= 0 {
+		t.Fatal(seen[4])
+	}
+	seen = nil
+	out = processOutput{name: "rsync", log: io.Discard, cancel: cancel, emit: func(p Progress) { seen = append(seen, p) }}
+	out.scan(strings.NewReader("5,000 50% 1.00MB/s 0:00:05\n5,500 55% 1.00MB/s 0:00:02 (xfr#2, to-chk=8/20)\n"))
+	if len(seen) != 2 || seen[1].Percent == nil || *seen[1].Percent != 55 || seen[1].ETA == nil || *seen[1].ETA != 5 {
+		t.Fatal("complete file list lost percent or ETA", seen)
 	}
 }
 

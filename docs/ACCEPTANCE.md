@@ -836,3 +836,13 @@ OCR 排除原因：default_path 18（测试与锁文件），unsupported_ext 17�
 - `npm --prefix web run format:check`、Web 构建通过；以新构建嵌入 Web 的临时二进制运行 `e2e/log-controls.spec.ts` 通过。新增断言：桌面下载按钮右缘与日志框右缘对齐；375/320 宽度三按钮同一行且右缘对齐。修改前 320 宽度实测下载按钮单独换到左侧，已由整组容器修复。
 - OCR 外部入口 `ocr review --audience agent --background ... --output <scratchpad>` 退出码 1，原因为 LLM 认证被拒（HTTP 401），未执行外部模型审查。改由当前代理人工复核全部 3 个变更文件（OCR 选中 RunDetail.vue、run-detail.css；E2E spec 为默认排除的测试路径），未发现正确性、安全性或性能问题；不宣称外部模型复核。
 - 未执行：全套 E2E、Go 测试（本次无 Go 与下载路径改动）。
+
+## 2026-10-17：rsync 增量递归阶段跳变
+
+现象：同步 AlmaLinux 源时，运行阶段在“准备”和“传输”间反复切换。原因：`--info=progress2` 在增量递归时每完成一个文件输出带 `ir-chk=` 的行，旧解析把这类行判为 `scan`（前端归入准备），下一条普通进度行又回到 `transfer`。
+
+当前范围：internal/sync/process.go、runner_test.go。进度行一律为 `transfer`；文件完成行（`-chk=`）的时间是已用时，不作 ETA；`ir-chk` 出现后至 `to-chk` 出现前文件列表仍在增长，隐藏 percent/total/ETA，避免数值闪烁；`to-chk` 后恢复百分比并沿用最近一次 ETA。尝试开始到首条进度行之前仍由 runs 设为 `scan`。
+
+- `go vet ./internal/sync`、`go test -race -count=1 ./...` 全部通过。新增回归用用户日志的真实行序列，断言阶段始终为 transfer、增量期间不出现百分比/ETA，并覆盖 to-chk 完整列表下的百分比与 ETA。
+- OCR 外部入口再次因 LLM 认证被拒（HTTP 401）退出码 1，未执行外部模型审查；由当前代理人工复核 process.go 与测试（ParseProgress 唯一调用方、双 goroutine 共享状态由既有互斥锁保护、reposync 输出不含 `-chk=`），未发现正确性、安全性或性能问题。
+- 未执行：真实 AlmaLinux 同步验证（用户正在运行的任务使用旧二进制，需重新部署后观察）。

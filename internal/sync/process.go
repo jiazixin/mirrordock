@@ -69,11 +69,14 @@ func ParseProgress(line string) (Progress, bool) {
 		return Progress{}, false
 	}
 	p := Progress{Phase: "transfer", Bytes: n, Total: total, Percent: new(percent), Speed: speed, ETA: new(remaining)}
+	// File-completion lines report elapsed time, not ETA. With ir-chk the
+	// file list is still growing, so percent and total cover only part of it.
+	if strings.Contains(line, "-chk=") {
+		p.ETA = nil
+	}
 	if strings.Contains(line, "ir-chk=") {
-		p.Phase = "scan"
 		p.Total = 0
 		p.Percent = nil
-		p.ETA = nil
 	}
 	return p, true
 }
@@ -99,6 +102,7 @@ type processOutput struct {
 	err           error
 	cancel        context.CancelCauseFunc
 	progress      Progress
+	incremental   bool
 }
 
 func (o *processOutput) scan(reader io.Reader) {
@@ -125,6 +129,16 @@ func (o *processOutput) scan(reader io.Reader) {
 			o.last = line
 		}
 		if p, ok := ParseProgress(line); ok {
+			if strings.Contains(line, "ir-chk=") {
+				o.incremental = true
+			} else if strings.Contains(line, "to-chk=") {
+				o.incremental = false
+			}
+			if o.incremental {
+				p.Total, p.Percent, p.ETA = 0, nil, nil
+			} else if p.ETA == nil {
+				p.ETA = o.progress.ETA
+			}
 			p.ReceivedBytes = o.progress.ReceivedBytes
 			p.Files = o.progress.Files
 			p.Success = o.progress.Success
