@@ -29,7 +29,13 @@ async function cron(source: Source, event: Event) {
   <section>
     <div class="page-heading">
       <div>
-        <h1>计划管理</h1>
+        <h1>
+          计划管理<span
+            class="title-dot"
+            aria-hidden="true"
+            >.</span
+          >
+        </h1>
       </div>
       <button
         class="button"
@@ -95,7 +101,7 @@ async function cron(source: Source, event: Event) {
               </td>
               <td class="center">
                 <button
-                  class="icon-button outlined"
+                  class="icon-button outlined tone-green"
                   :disabled="!source.enabled"
                   :aria-label="'立即同步 ' + source.name"
                   :title="source.enabled ? '立即同步' : '同步源已禁用'"

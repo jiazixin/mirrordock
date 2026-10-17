@@ -37,9 +37,9 @@ const enabled = defineModel<boolean | null>({ required: true })
   gap: 16px;
   min-width: 0;
   min-height: 60px;
-  padding: 11px 14px;
+  padding: 12px 16px;
   border: 1px solid var(--line);
-  border-radius: 4px;
+  border-radius: 10px;
   background: transparent;
   color: var(--t1);
   cursor: pointer;
@@ -52,7 +52,8 @@ const enabled = defineModel<boolean | null>({ required: true })
   background: var(--hover);
 }
 .source-option-card.on {
-  border-color: var(--line-strong);
+  border-color: var(--ok-bd);
+  background: var(--tint);
 }
 .source-option-card.disabled {
   opacity: 0.5;
@@ -66,8 +67,8 @@ const enabled = defineModel<boolean | null>({ required: true })
   overflow-wrap: anywhere;
 }
 .option-copy strong {
-  font-size: 13px;
-  font-weight: 400;
+  font-size: 14px;
+  font-weight: 600;
   color: var(--t1);
   line-height: 1.5;
 }
@@ -92,19 +93,19 @@ const enabled = defineModel<boolean | null>({ required: true })
   color: var(--t3);
 }
 .on .option-state {
-  color: var(--t1);
+  color: var(--ok);
 }
 .source-option-card input {
   appearance: none;
   position: relative;
   flex-shrink: 0;
-  width: 30px;
-  height: 16px;
+  width: 36px;
+  height: 20px;
   margin: 0;
   padding: 0;
   border: 1px solid var(--line-strong);
-  border-radius: 3px;
-  background: transparent;
+  border-radius: 999px;
+  background: var(--gray-bg);
   cursor: pointer;
   transition:
     background 0.15s,
@@ -115,10 +116,11 @@ const enabled = defineModel<boolean | null>({ required: true })
   position: absolute;
   top: 2px;
   left: 2px;
-  width: 10px;
-  height: 10px;
-  border-radius: 2px;
-  background: var(--t3);
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--panel);
+  box-shadow: 0 1px 2px rgba(18, 26, 21, 0.25);
   transition:
     transform 0.15s,
     background 0.15s;
@@ -127,12 +129,11 @@ const enabled = defineModel<boolean | null>({ required: true })
   border-color: var(--t3);
 }
 .source-option-card input:checked {
-  border-color: var(--btn);
-  background: var(--btn);
+  border-color: var(--brand);
+  background: var(--brand);
 }
 .source-option-card input:checked:before {
-  background: var(--btn-ink);
-  transform: translateX(14px);
+  transform: translateX(16px);
 }
 .source-option-card input:disabled {
   opacity: 1;

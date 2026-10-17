@@ -246,7 +246,7 @@ const metricLabel = computed(() =>
   font-family: inherit;
 }
 .bar-ok {
-  fill: var(--t2);
+  fill: var(--chart-ok);
 }
 .bar-fail {
   fill: var(--red);

@@ -47,7 +47,13 @@ async function remove(source: Source) {
   <section>
     <div class="page-heading">
       <div>
-        <h1>同步源</h1>
+        <h1>
+          同步源<span
+            class="title-dot"
+            aria-hidden="true"
+            >.</span
+          >
+        </h1>
       </div>
       <div class="heading-actions">
         <button
@@ -182,7 +188,7 @@ async function remove(source: Source) {
               <td class="center">
                 <div class="row-actions">
                   <button
-                    class="icon-button outlined"
+                    class="icon-button outlined tone-green"
                     :disabled="!source.enabled"
                     :aria-label="'同步 ' + source.name"
                     :title="source.enabled ? '立即同步' : '同步源已禁用'"

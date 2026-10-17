@@ -57,7 +57,13 @@ const groups = computed(() => {
   <section>
     <div class="page-heading">
       <div>
-        <h1>批次记录</h1>
+        <h1>
+          批次记录<span
+            class="title-dot"
+            aria-hidden="true"
+            >.</span
+          >
+        </h1>
       </div>
       <button
         class="button"
@@ -190,7 +196,7 @@ const groups = computed(() => {
                 <div class="row-actions">
                   <button
                     v-if="['running', 'queued'].includes(run.state)"
-                    class="icon-button outlined"
+                    class="icon-button outlined tone-amber"
                     aria-label="暂停任务"
                     title="暂停任务"
                     @click="perform(() => runAction(run.id, 'pause'))"
@@ -198,7 +204,7 @@ const groups = computed(() => {
                     <Pause :size="15" /></button
                   ><button
                     v-if="['paused', 'interrupted'].includes(run.state)"
-                    class="icon-button outlined"
+                    class="icon-button outlined tone-green"
                     aria-label="继续任务"
                     title="继续任务"
                     @click="perform(() => runAction(run.id, 'resume'))"
@@ -206,7 +212,7 @@ const groups = computed(() => {
                     <Play :size="15" /></button
                   ><button
                     v-if="['failed', 'timed_out', 'succeeded', 'cancelled'].includes(run.state)"
-                    class="icon-button outlined"
+                    class="icon-button outlined tone-green"
                     aria-label="重新同步"
                     title="重新同步"
                     @click="perform(() => runSource(run.source_id))"
@@ -216,7 +222,7 @@ const groups = computed(() => {
                     v-if="
                       ['queued', 'running', 'paused', 'interrupted', 'pausing'].includes(run.state)
                     "
-                    class="icon-button outlined"
+                    class="icon-button outlined danger"
                     aria-label="取消任务"
                     title="取消任务"
                     @click="perform(() => runAction(run.id, 'cancel'))"

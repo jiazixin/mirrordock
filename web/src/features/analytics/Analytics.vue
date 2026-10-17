@@ -64,7 +64,7 @@ const average = (s: AnalyticsStats) =>
 const resultParts = computed(() =>
   data.value
     ? [
-        { label: '成功', count: data.value.summary.succeeded, color: 'var(--t2)' },
+        { label: '成功', count: data.value.summary.succeeded, color: 'var(--chart-ok)' },
         { label: '失败 / 超时', count: data.value.summary.failed, color: 'var(--red)' },
         { label: '已取消', count: data.value.summary.cancelled, color: 'var(--line-strong)' },
         { label: '未结束', count: data.value.summary.active, color: 'var(--amb)' },
@@ -128,7 +128,14 @@ onBeforeUnmount(() => {
 <template>
   <section class="analytics-page">
     <header class="page-heading">
-      <h1>{{ kindInfo.title }}</h1>
+      <h1>
+        {{ kindInfo.title
+        }}<span
+          class="title-dot"
+          aria-hidden="true"
+          >.</span
+        >
+      </h1>
       <button
         class="button"
         :disabled="loading"
@@ -621,7 +628,7 @@ i {
 }
 .result-ring strong {
   font-size: 26px;
-  font-weight: 300;
+  font-weight: 650;
   letter-spacing: -0.03em;
 }
 .result-ring small {
@@ -654,7 +661,7 @@ i {
 }
 .insight-total strong {
   font-size: 36px;
-  font-weight: 300;
+  font-weight: 650;
   letter-spacing: -0.03em;
 }
 .insight-total span {
@@ -665,10 +672,11 @@ i {
   display: flex;
   height: 8px;
   overflow: hidden;
-  background: var(--line);
+  border-radius: 4px;
+  background: var(--gray-bg);
 }
 .asset-track > span:first-child {
-  background: var(--t2);
+  background: var(--chart-ok);
 }
 .asset-track > span:last-child {
   background: var(--bar);
@@ -693,7 +701,7 @@ i {
   margin-left: 6px;
 }
 .asset-labels i {
-  background: var(--t2);
+  background: var(--chart-ok);
 }
 .asset-labels span:last-child i {
   background: var(--bar);
@@ -711,7 +719,7 @@ i {
 }
 .reliability-stats strong {
   font-size: 32px;
-  font-weight: 300;
+  font-weight: 650;
   letter-spacing: -0.03em;
 }
 .reliability-stats span {
@@ -809,15 +817,17 @@ i {
   min-width: 24px;
 }
 .ranking-count > div {
-  height: 2px;
-  background: var(--line);
+  height: 6px;
+  border-radius: 3px;
+  background: var(--gray-bg);
   flex: 1;
   min-width: 40px;
   overflow: hidden;
 }
 .ranking-count span {
   display: block;
-  background: var(--t2);
+  border-radius: 3px;
+  background: var(--chart-ok);
   height: 100%;
 }
 .ranking-empty {

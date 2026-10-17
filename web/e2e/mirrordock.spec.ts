@@ -516,8 +516,8 @@ test('real configuration, rsync failover, publication, records and responsive UI
       button: getComputedStyle(document.querySelector('.heading-actions .button')!).fontWeight,
     }))
     expect(fonts.family).not.toContain('Avenir')
-    expect(fonts.heading).toBe('400')
-    expect(fonts.button).toBe('500')
+    expect(fonts.heading).toBe('700')
+    expect(fonts.button).toBe('600')
     const icon = await request.get(base + '/favicon.ico?v=2')
     const adminIcon = await request.get(base + '/admin/favicon.ico?v=2')
     expect(icon.status()).toBe(200)

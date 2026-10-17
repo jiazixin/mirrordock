@@ -35,11 +35,17 @@ async function clear() {
   <section>
     <div class="page-heading">
       <div>
-        <h1>运行记录</h1>
+        <h1>
+          运行记录<span
+            class="title-dot"
+            aria-hidden="true"
+            >.</span
+          >
+        </h1>
       </div>
       <div class="heading-actions">
         <button
-          class="button"
+          class="button tone-amber"
           @click="perform(clear)"
         >
           <Trash2 :size="16" />清理日志</button

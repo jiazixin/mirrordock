@@ -95,7 +95,13 @@ async function save() {
   >
     <div class="page-heading">
       <div>
-        <h1>系统设置</h1>
+        <h1>
+          系统设置<span
+            class="title-dot"
+            aria-hidden="true"
+            >.</span
+          >
+        </h1>
       </div>
       <div class="heading-actions">
         <button
@@ -401,6 +407,10 @@ async function save() {
 .settings-sections {
   display: flex;
   flex-direction: column;
+  padding: 0 26px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
 }
 .setting-row {
   display: grid;
@@ -415,7 +425,6 @@ async function save() {
 }
 .setting-row:first-child {
   border-top: 0;
-  padding-top: 8px;
 }
 .setting-description {
   max-width: 520px;
@@ -463,6 +472,9 @@ async function save() {
 @media (max-width: 480px) {
   .settings-tabs {
     gap: 18px;
+  }
+  .settings-sections {
+    padding: 0 18px;
   }
   .setting-option-grid {
     grid-template-columns: minmax(0, 1fr);

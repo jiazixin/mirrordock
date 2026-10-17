@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { CircleAlert, CirclePause, Package, RefreshCw, Server, Tag, Unplug } from '@lucide/vue'
 import RunDetail from '../runs/RunDetail.vue'
 import { api } from '../../app/api'
 import { state, notify, perform, runAction, runSource } from '../../app/state'
@@ -58,8 +59,16 @@ async function load() {
 }
 function tick() {
   if (document.visibilityState !== 'visible') return
+  refresh()
+}
+function refresh() {
   now.value = Date.now()
   void load()
+}
+const typeIcons: Record<string, typeof Server> = {
+  rsync: Server,
+  reposync: Package,
+  github_release: Tag,
 }
 watch(
   () => state.revision,
@@ -292,6 +301,17 @@ const headline = computed(() =>
         ? `${attention.value.length} 项需要处理`
         : '全部正常',
 )
+const tone = computed(() =>
+  running.value.length
+    ? 'live'
+    : queued.value.length
+      ? ''
+      : attention.value.length
+        ? attention.value.some((item) => !held.includes(item.run.state))
+          ? 'bad'
+          : 'warn'
+        : 'good',
+)
 const kpis = computed(() => {
   const list = sources.value
   const { succeeded, failed, timedOut, evaluated } = counts.value
@@ -326,25 +346,31 @@ const kpis = computed(() => {
 
 <template>
   <section class="overview">
-    <header class="overview-hero">
-      <div class="hero-copy">
-        <span class="hero-date"
-          >{{ day(now) }} {{ clock(now) }} · {{ state.info?.timezone ?? '—' }}</span
-        >
-        <h1>{{ headline }}</h1>
-        <p>
-          {{
-            live.length
-              ? attention.length
-                ? `另有 ${attention.length} 项需要处理。`
-                : '没有需要处理的事项。'
-              : '当前没有运行中的任务。'
-          }}<template v-if="nextPlan"
-            >下一次计划在 {{ when(nextPlan.t) }}，{{ nextPlan.name }}。</template
+    <div class="page-heading">
+      <div>
+        <h1>
+          概览<span
+            class="title-dot"
+            aria-hidden="true"
+            >.</span
           >
-        </p>
+        </h1>
       </div>
-      <div class="stat-grid hero-stats">
+      <button
+        class="button"
+        type="button"
+        @click="refresh"
+      >
+        <RefreshCw :size="17" />刷新
+      </button>
+    </div>
+
+    <header class="overview-hero">
+      <div class="hero-line">
+        <strong :class="tone">{{ headline }}</strong
+        ><span>{{ day(now) }} {{ clock(now) }} · {{ state.info?.timezone ?? '—' }}</span>
+      </div>
+      <div class="hero-stats">
         <article
           v-for="item in kpis"
           :key="item.label"
@@ -355,13 +381,25 @@ const kpis = computed(() => {
           ><small>{{ item.foot }}</small>
         </article>
       </div>
+      <p class="hero-note">
+        {{
+          live.length
+            ? attention.length
+              ? `另有 ${attention.length} 项需要处理。`
+              : '没有需要处理的事项。'
+            : '当前没有运行中的任务。'
+        }}<template v-if="nextPlan"
+          >下一次计划在 <b>{{ when(nextPlan.t) }}</b
+          >，{{ nextPlan.name }}。</template
+        >
+      </p>
     </header>
 
     <section
-      class="overview-section"
+      class="card"
       aria-labelledby="timeline-title"
     >
-      <div class="section-heading">
+      <div class="card-head">
         <div>
           <h2 id="timeline-title">同步时间轴</h2>
           <small>过去 24 小时 · 未来 12 小时 · 每行一个同步源</small>
@@ -401,10 +439,20 @@ const kpis = computed(() => {
             v-for="lane in lanes"
             :key="lane.source.id"
             class="lane"
+            :class="{ disabled: !lane.source.enabled }"
           >
             <div class="lane-name">
-              <strong>{{ lane.source.name }}</strong
-              ><small>{{ sourceType(lane.source.type) }} · /{{ lane.source.dest }}/</small>
+              <span
+                class="type-icon"
+                aria-hidden="true"
+                ><component
+                  :is="typeIcons[lane.source.type] ?? Server"
+                  :size="17"
+              /></span>
+              <div>
+                <strong>{{ lane.source.name }}</strong
+                ><small>{{ sourceType(lane.source.type) }} · /{{ lane.source.dest }}/</small>
+              </div>
             </div>
             <div class="track">
               <span
@@ -471,12 +519,20 @@ const kpis = computed(() => {
 
     <div class="overview-columns">
       <section
-        class="overview-section"
+        class="card"
         aria-labelledby="live-title"
       >
-        <div class="section-heading">
-          <h2 id="live-title">进行中</h2>
-          <small>准备、传输、校验、发布与重试等待共用累计预算</small>
+        <div class="card-head">
+          <div>
+            <h2 id="live-title">
+              进行中<span
+                v-if="live.length"
+                class="count-pill"
+                >{{ live.length }}</span
+              >
+            </h2>
+            <small>准备、传输、校验、发布与重试等待共用累计预算</small>
+          </div>
         </div>
         <article
           v-for="run in running"
@@ -512,30 +568,30 @@ const kpis = computed(() => {
           </ol>
           <div class="live-figures">
             <div>
-              <small>实际接收</small><strong>{{ received(run) }}</strong>
+              <strong>{{ received(run) }}</strong
+              ><small>实际接收</small>
             </div>
             <div>
-              <small>已运行</small><strong>{{ duration(run.elapsed_seconds) }}</strong>
+              <strong>{{ duration(run.elapsed_seconds) }}</strong
+              ><small>已运行</small>
             </div>
             <div>
-              <small>预算剩余</small
-              ><strong>{{
-                duration(Math.max(0, run.budget_seconds - run.elapsed_seconds))
-              }}</strong>
+              <strong>{{ duration(Math.max(0, run.budget_seconds - run.elapsed_seconds)) }}</strong
+              ><small>预算剩余</small>
             </div>
             <div v-if="run.progress.percent !== null && run.progress.phase === 'transfer'">
-              <small>进度</small><strong>{{ run.progress.percent.toFixed(0) }}%</strong>
+              <strong>{{ run.progress.percent.toFixed(0) }}%</strong><small>进度</small>
             </div>
           </div>
           <div class="live-actions">
             <button
               v-if="run.state === 'running'"
-              class="button compact"
+              class="button compact tone-amber"
               @click="perform(() => runAction(run.id, 'pause'))"
             >
               暂停</button
             ><button
-              class="button compact"
+              class="button compact tone-red"
               @click="perform(() => runAction(run.id, 'cancel'))"
             >
               取消</button
@@ -561,7 +617,7 @@ const kpis = computed(() => {
           ><strong>{{ run.name }}</strong
           ><small>#{{ run.id }} · {{ phases[run.progress.phase] ?? '等待空闲 worker' }}</small>
           <button
-            class="button compact"
+            class="button compact tone-red"
             @click="perform(() => runAction(run.id, 'cancel'))"
           >
             取消
@@ -576,12 +632,14 @@ const kpis = computed(() => {
       </section>
 
       <section
-        class="overview-section"
+        class="card"
         aria-labelledby="attention-title"
       >
-        <div class="section-heading">
-          <h2 id="attention-title">需要处理</h2>
-          <small>按各同步源最近一次任务</small>
+        <div class="card-head">
+          <div>
+            <h2 id="attention-title">需要处理</h2>
+            <small>按各同步源最近一次任务</small>
+          </div>
         </div>
         <article
           v-for="item in attention"
@@ -589,10 +647,19 @@ const kpis = computed(() => {
           class="attention-row"
         >
           <span
-            class="attention-dot"
+            class="attention-icon"
             :class="item.run.state"
             aria-hidden="true"
-          />
+            ><component
+              :is="
+                item.run.state === 'paused'
+                  ? CirclePause
+                  : item.run.state === 'interrupted'
+                    ? Unplug
+                    : CircleAlert
+              "
+              :size="18"
+          /></span>
           <div>
             <div class="attention-title">
               <strong>{{ item.source.name }}</strong
@@ -612,7 +679,7 @@ const kpis = computed(() => {
               >
                 继续</button
               ><button
-                class="button compact"
+                class="button compact tone-red"
                 @click="perform(() => runAction(item.run.id, 'cancel'))"
               >
                 取消
@@ -620,7 +687,7 @@ const kpis = computed(() => {
             </template>
             <template v-else>
               <button
-                class="button compact"
+                class="button compact primary"
                 :disabled="!item.source.enabled"
                 @click="perform(() => runSource(item.source.id))"
               >
@@ -660,81 +727,136 @@ const kpis = computed(() => {
 .overview {
   display: flex;
   flex-direction: column;
-  gap: 56px;
+  gap: 16px;
+}
+.overview .page-heading {
+  margin-bottom: 4px;
 }
 .overview-hero {
   display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 32px 56px;
-}
-.hero-copy {
-  display: flex;
   flex-direction: column;
-  gap: 12px;
-  flex: 1 1 340px;
-  max-width: 520px;
+  gap: 4px;
+  padding: 20px 22px 18px;
+  border: 1px solid var(--tint-line);
+  border-radius: var(--radius);
+  background: var(--tint);
 }
-.hero-date {
-  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
-  font-size: 12px;
-  color: var(--t3);
-}
-.hero-copy h1 {
-  font-size: 40px;
-  line-height: 1.15;
-  letter-spacing: -0.025em;
-}
-.hero-copy p {
-  font-size: 15px;
-  line-height: 1.7;
-  color: var(--t2);
-}
-.hero-stats {
-  flex: 999 1 620px;
-  max-width: 860px;
-  margin: 0;
-  border-top: 0;
-  border-bottom: 0;
-}
-.hero-stats article {
-  padding-top: 4px;
-  padding-bottom: 4px;
-}
-.hero-stats article:first-child {
-  border-left: 1px solid var(--line);
-  padding-left: 24px;
-}
-.hero-stats article > strong {
-  font-size: 40px;
-}
-.overview-section {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-}
-.section-heading {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: space-between;
-  align-items: baseline;
-  gap: 8px 24px;
-  padding-bottom: 14px;
-  border-bottom: 1px solid var(--line-strong);
-}
-.section-heading > div:first-child {
+.hero-line {
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
   gap: 4px 14px;
 }
+.hero-line strong {
+  font-size: 17px;
+  font-weight: 700;
+}
+.hero-line strong.good {
+  color: var(--ok);
+}
+.hero-line strong.live {
+  color: var(--blue);
+}
+.hero-line strong.warn {
+  color: var(--amb);
+}
+.hero-line strong.bad {
+  color: var(--red);
+}
+.hero-line span {
+  font-size: 13px;
+  color: var(--t3);
+}
+.hero-stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin: 14px 0 12px;
+}
+.hero-stats article {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  padding: 4px 22px;
+  border-left: 1px solid var(--tint-line);
+}
+.hero-stats article:first-child {
+  padding-left: 0;
+  border-left: 0;
+}
+.hero-stats article > span {
+  font-size: 13.5px;
+  color: var(--t3);
+}
+.hero-stats article > strong {
+  font-size: 30px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+.hero-stats strong small {
+  margin-left: 5px;
+  font-size: 14px;
+  font-weight: 500;
+  letter-spacing: 0;
+  color: var(--t3);
+}
+.hero-note {
+  font-size: 13.5px;
+  color: var(--t2);
+  padding-top: 12px;
+  border-top: 1px solid var(--tint-line);
+}
+.hero-note b {
+  font-weight: 600;
+  color: var(--t1);
+}
+.card {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+  overflow: hidden;
+}
+.card-head {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px 24px;
+  padding: 20px 22px;
+}
+.card-head > div:first-child {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.card-head h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.count-pill {
+  display: inline-grid;
+  place-items: center;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 7px;
+  border-radius: 999px;
+  background: var(--blue-bg);
+  color: var(--blue);
+  font-size: 12.5px;
+  font-weight: 600;
+}
 .legend {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px 18px;
-  font-size: 12px;
-  color: var(--t3);
+  gap: 6px 16px;
+  font-size: 13px;
+  color: var(--t2);
 }
 .legend span {
   display: inline-flex;
@@ -745,13 +867,13 @@ const kpis = computed(() => {
   display: inline-block;
   width: 14px;
   height: 8px;
-  border-radius: 1px;
+  border-radius: 3px;
 }
 .swatch.ok {
   background: var(--bar);
 }
 .swatch.run {
-  background: var(--acc);
+  background: var(--blue);
 }
 .swatch.fail {
   background: var(--red);
@@ -760,10 +882,10 @@ const kpis = computed(() => {
   background: var(--amb);
 }
 .swatch.plan {
-  width: 8px;
-  height: 8px;
+  width: 10px;
+  height: 10px;
   border-radius: 50%;
-  border: 1.5px solid var(--t3);
+  border: 2px solid var(--t3);
 }
 .swatch.plan.skip {
   border-color: var(--amb);
@@ -771,35 +893,62 @@ const kpis = computed(() => {
 }
 .lanes-scroll {
   overflow-x: auto;
+  border-top: 1px solid var(--line);
 }
 .lanes {
   min-width: 900px;
 }
 .lane {
   display: grid;
-  grid-template-columns: minmax(180px, 240px) minmax(0, 1fr) 150px;
+  grid-template-columns: minmax(200px, 270px) minmax(0, 1fr) 140px;
   align-items: center;
-  min-height: 64px;
+  min-height: 68px;
+  padding: 0 22px;
   border-bottom: 1px solid var(--line);
 }
+.lane:last-child {
+  border-bottom: 0;
+}
 .lane-head {
-  min-height: 40px;
-  font-size: 12px;
-  color: var(--t3);
+  min-height: 46px;
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--t2);
+  background: var(--head);
 }
 .lane-name {
   display: flex;
-  flex-direction: column;
-  gap: 2px;
+  align-items: center;
+  gap: 12px;
   padding-right: 16px;
   min-width: 0;
 }
+.lane-name > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.type-icon {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  flex-shrink: 0;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--gray-bg);
+  color: var(--t2);
+}
 .lane-name strong {
-  font-size: 14px;
-  font-weight: 400;
+  font-size: 14.5px;
+  font-weight: 600;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.lane.disabled .lane-name strong {
+  color: var(--t3);
 }
 .lane-name small {
   font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
@@ -809,20 +958,27 @@ const kpis = computed(() => {
 }
 .track {
   position: relative;
-  height: 64px;
+  height: 68px;
 }
 .lane-head .track {
-  height: 40px;
+  height: 46px;
 }
 .hour-label {
   position: absolute;
-  top: 12px;
+  top: 13px;
   transform: translateX(-50%);
-  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 12.5px;
+  font-weight: 400;
+  color: var(--t3);
   white-space: nowrap;
 }
 .now-label {
-  color: var(--acc);
+  top: 11px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--brand);
+  color: var(--brand-ink);
+  font-weight: 600;
 }
 .future {
   position: absolute;
@@ -840,18 +996,19 @@ const kpis = computed(() => {
   background: var(--line);
 }
 .now-line {
-  background: var(--acc);
-  opacity: 0.6;
+  width: 2px;
+  background: var(--brand);
+  opacity: 0.5;
 }
 .segment {
   position: absolute;
   top: 50%;
-  height: 10px;
-  min-width: 3px;
+  height: 14px;
+  min-width: 6px;
   margin: 0;
   padding: 0;
   border: 0;
-  border-radius: 1px;
+  border-radius: 4px;
   transform: translateY(-50%);
   background: var(--bar);
 }
@@ -861,12 +1018,12 @@ button.segment:focus-visible {
   outline-offset: 2px;
 }
 .segment.run {
-  background: var(--acc);
+  background: var(--blue);
   animation: live-pulse 2.4s ease-in-out infinite;
 }
 .segment.queue {
-  background: transparent;
-  box-shadow: inset 0 0 0 1px var(--t3);
+  background: var(--panel);
+  box-shadow: inset 0 0 0 1.5px var(--t3);
 }
 .segment.fail {
   background: var(--red);
@@ -880,18 +1037,18 @@ button.segment:focus-visible {
 .segment.hold-line {
   height: 0;
   min-width: 0;
-  border-top: 1px dashed var(--amb);
+  border-top: 1.5px dashed var(--amb);
   border-radius: 0;
   background: transparent;
 }
 .tick {
   position: absolute;
   top: 50%;
-  width: 9px;
-  height: 9px;
+  width: 11px;
+  height: 11px;
   border-radius: 50%;
-  border: 1.5px solid var(--t3);
-  background: var(--bg);
+  border: 2px solid var(--t3);
+  background: var(--panel);
   transform: translate(-50%, -50%);
 }
 .tick.skip {
@@ -900,41 +1057,47 @@ button.segment:focus-visible {
 }
 .lane-next {
   text-align: right;
-  font-size: 13px;
-  color: var(--t2);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--t1);
   white-space: nowrap;
 }
-.lane-head .lane-next {
-  font-size: 12px;
+.lane.disabled .lane-next {
   color: var(--t3);
+  font-weight: 400;
+}
+.lane-head .lane-next {
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--t2);
 }
 .lane-next.skip {
   color: var(--amb);
 }
 .lanes-empty {
-  padding: 32px 0;
+  padding: 32px 22px;
   color: var(--t3);
 }
 .lanes-empty a {
-  color: var(--t1);
-  text-decoration: underline;
-  text-underline-offset: 3px;
+  color: var(--brand);
+  font-weight: 600;
 }
 .lanes-note {
-  margin-top: 10px;
+  padding: 12px 22px;
+  border-top: 1px solid var(--line);
 }
 .overview-columns {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(440px, 100%), 1fr));
-  gap: 48px 64px;
+  gap: 16px;
   align-items: start;
 }
 .live-run {
   display: flex;
   flex-direction: column;
   gap: 18px;
-  padding: 24px 0;
-  border-bottom: 1px solid var(--line);
+  padding: 20px 22px 22px;
+  border-top: 1px solid var(--line);
 }
 .live-title {
   display: flex;
@@ -950,16 +1113,21 @@ button.segment:focus-visible {
   min-width: 0;
 }
 .live-title strong {
-  font-size: 18px;
-  font-weight: 400;
-  letter-spacing: -0.01em;
+  font-size: 16px;
+  font-weight: 650;
 }
 .live-phase {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 7px;
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--blue-bd);
+  border-radius: 7px;
+  background: var(--blue-bg);
   font-size: 13px;
-  color: var(--acc);
+  font-weight: 500;
+  color: var(--blue);
   white-space: nowrap;
 }
 .live-phase::before {
@@ -972,7 +1140,7 @@ button.segment:focus-visible {
 }
 .live-steps {
   display: flex;
-  gap: 4px;
+  gap: 6px;
   list-style: none;
   margin: 0;
   padding: 0;
@@ -983,35 +1151,40 @@ button.segment:focus-visible {
   flex-direction: column;
   gap: 8px;
   min-width: 0;
-  font-size: 12px;
+  font-size: 13px;
   color: var(--t3);
 }
 .live-steps i {
   display: block;
-  height: 2px;
-  background: var(--line-strong);
+  height: 6px;
+  border-radius: 3px;
+  background: var(--gray-bg);
+}
+.live-steps .done {
+  color: var(--ok);
 }
 .live-steps .done i {
-  background: var(--t2);
+  background: var(--bar);
 }
 .live-steps .now i {
-  background: var(--acc);
+  background: var(--blue);
 }
 .live-steps .now {
-  color: var(--t1);
+  color: var(--blue);
+  font-weight: 600;
 }
 .live-figures {
   display: flex;
   flex-wrap: wrap;
-  gap: 12px 36px;
+  gap: 12px 32px;
 }
 .live-figures > div {
   display: flex;
   flex-direction: column;
 }
 .live-figures strong {
-  font-size: 20px;
-  font-weight: 400;
+  font-size: 18px;
+  font-weight: 650;
 }
 .live-actions {
   display: flex;
@@ -1020,48 +1193,47 @@ button.segment:focus-visible {
 .queued-row {
   display: grid;
   grid-template-columns: auto minmax(0, auto) minmax(0, 1fr) auto;
-  align-items: baseline;
+  align-items: center;
   gap: 12px;
-  padding: 16px 0;
-  border-bottom: 1px solid var(--line);
+  padding: 16px 22px;
+  border-top: 1px solid var(--line);
 }
 .queued-row strong {
-  font-weight: 400;
+  font-weight: 600;
 }
 .attention-row {
   display: grid;
-  grid-template-columns: 14px minmax(0, 1fr) auto;
-  gap: 4px 12px;
-  padding: 22px 0;
-  border-bottom: 1px solid var(--line);
+  grid-template-columns: 38px minmax(0, 1fr) auto;
+  gap: 4px 14px;
+  padding: 18px 22px;
+  border-top: 1px solid var(--line);
   align-items: start;
 }
-.attention-dot {
-  width: 6px;
-  height: 6px;
-  margin-top: 8px;
-  border-radius: 50%;
-  background: var(--red);
+.attention-icon {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border: 1px solid var(--red-bd);
+  border-radius: 9px;
+  background: var(--red-soft);
+  color: var(--red);
 }
-.attention-dot.paused {
-  background: var(--amb);
-}
-.attention-dot.interrupted {
-  background: transparent;
-  box-shadow: inset 0 0 0 1.5px var(--amb);
+.attention-icon.paused,
+.attention-icon.interrupted {
+  border-color: var(--amb-bd);
+  background: var(--amb-soft);
+  color: var(--amb);
 }
 .attention-title {
   display: flex;
   flex-wrap: wrap;
-  align-items: baseline;
+  align-items: center;
   gap: 4px 10px;
 }
 .attention-title strong {
   font-size: 15px;
-  font-weight: 400;
-}
-.attention-title .badge-dot {
-  display: none;
+  font-weight: 600;
 }
 .attention-row p {
   margin-top: 4px;
@@ -1080,42 +1252,58 @@ button.segment:focus-visible {
   justify-content: space-between;
   align-items: center;
   gap: 12px;
-  padding-top: 18px;
+  padding: 13px 22px;
+  border-top: 1px solid var(--line);
+  background: var(--head);
 }
 .attention-footer a {
-  font-size: 13px;
-  color: var(--t2);
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--brand);
 }
 .attention-footer a:hover {
-  color: var(--t1);
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }
 .quiet {
-  padding: 24px 0;
+  padding: 22px;
   color: var(--t3);
-  font-size: 13px;
-  border-bottom: 1px solid var(--line);
+  font-size: 13.5px;
+  border-top: 1px solid var(--line);
 }
 @media (max-width: 900px) {
-  .hero-stats article:first-child {
-    border-left: 0;
+  .hero-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    row-gap: 14px;
+  }
+  .hero-stats article:nth-child(3) {
     padding-left: 0;
+    border-left: 0;
   }
   .overview-columns {
     grid-template-columns: minmax(0, 1fr);
   }
 }
 @media (max-width: 600px) {
-  .overview {
-    gap: 44px;
+  .overview-hero {
+    padding: 18px 16px 16px;
   }
-  .hero-copy h1 {
-    font-size: 30px;
+  .hero-stats article {
+    padding: 4px 14px;
   }
   .hero-stats article > strong {
-    font-size: 28px;
+    font-size: 24px;
+  }
+  .card-head,
+  .live-run,
+  .attention-row,
+  .queued-row,
+  .attention-footer {
+    padding-left: 16px;
+    padding-right: 16px;
   }
   .attention-row {
-    grid-template-columns: 14px minmax(0, 1fr);
+    grid-template-columns: 38px minmax(0, 1fr);
   }
   .attention-actions {
     grid-column: 2;
@@ -1126,6 +1314,16 @@ button.segment:focus-visible {
   }
   .queued-row small {
     grid-column: 2 / -1;
+  }
+}
+@media (max-width: 360px) {
+  .hero-stats {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .hero-stats article,
+  .hero-stats article:nth-child(3) {
+    padding-left: 0;
+    border-left: 0;
   }
 }
 </style>
