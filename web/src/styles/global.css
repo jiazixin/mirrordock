@@ -271,9 +271,12 @@ code {
   font-size: 15px;
   font-weight: 500;
   white-space: nowrap;
-  transition: background 0.15s;
+  transition:
+    background 0.2s linear,
+    color 0.2s linear;
 }
 .primary-nav nav a svg {
+  transition: color 0.2s linear;
   color: var(--t2);
   flex-shrink: 0;
 }
@@ -384,6 +387,22 @@ code {
 .page-content {
   max-width: 1560px;
   padding: 44px 48px 72px 60px;
+}
+/* Route switching: the old page fades out, then the new one fades in while settling 6px upward. */
+.page-enter-active {
+  transition:
+    opacity 0.2s linear,
+    transform 0.2s linear;
+}
+.page-leave-active {
+  transition: opacity 0.12s linear;
+}
+.page-enter-from {
+  opacity: 0;
+  transform: translateY(6px);
+}
+.page-leave-to {
+  opacity: 0;
 }
 .page-heading {
   display: flex;
@@ -1099,6 +1118,7 @@ td.center .stacked-time {
   padding: 0 0 13px;
   position: relative;
   white-space: nowrap;
+  transition: color 0.2s linear;
 }
 .tabs a:hover,
 .tabs button:hover {
@@ -1119,6 +1139,22 @@ td.center .stacked-time {
   bottom: -1px;
   left: 0;
   right: 0;
+  animation: tab-indicator-in 0.2s linear;
+}
+@keyframes tab-indicator-in {
+  from {
+    transform: scaleX(0);
+  }
+}
+/* Runs whenever a panel is shown again, including v-show toggles from display: none. */
+[role='tabpanel'] {
+  animation: tab-panel-in 0.2s linear;
+}
+@keyframes tab-panel-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
 }
 .tabs button svg {
   color: var(--t3);

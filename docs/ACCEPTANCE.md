@@ -1,5 +1,21 @@
 # 验收记录
 
+## 管理台切换过渡动画（2026-10-17）
+
+范围：`web/src/app/router.ts`、`web/src/layouts/Shell.vue`、`web/src/styles/global.css`。用户要求为管理台点击切换添加一套线性过渡动画。
+
+- 侧栏切换页面：`RouterView` 外包 `Transition`（`out-in`），旧页 0.12s 线性淡出，新页 0.2s 线性淡入并上移 6px。三个分析路由标记 `meta.view = 'analytics'` 共用同一个 key，切换分析类型时组件不重建（与原先行为一致），只由标签下划线表现切换。
+- 标签：当前项下划线 0.2s 线性从 `scaleX(0)` 展开；`role="tabpanel"` 面板（系统设置）显示时 0.2s 线性淡入上移 4px，`v-show` 从 `display: none` 恢复时同样触发。侧栏链接与标签文字颜色、侧栏背景改为 0.2s 线性过渡。
+- 全局 `prefers-reduced-motion: reduce` 重置仍会关闭以上动画；进入时的短暂 `transform` 不影响弹窗与下拉菜单（均 Teleport 到 `body`）。
+
+| 检查 | 结果 |
+| --- | --- |
+| `npm --prefix web run format:check` / `npm --prefix web run build`（含 `vue-tsc`） | 通过 |
+| 全部 Web E2E（`MIRRORDOCK_TEST_RSYNC=.cache/rsync/rsync-3.5.1/rsync`，scratchpad 临时测试二进制） | 14 通过，0 失败，0 跳过。此后只删除了包裹层上一个未使用的 class，重新执行了格式检查和构建，E2E 未再重跑 |
+| open-code-review | 外部 LLM 未执行：`ocr review` 返回 HTTP 401（3/3 文件失败）。改用 `ocr delegate preview`（3 个可审文件，无排除），由当前会话审查 3/3；确认无依赖页面直接子元素的选择器、无未 Teleport 的 `position: fixed` 元素受进入动画 `transform` 影响。修复 1 项：删除包裹层未使用的 `page-view` class |
+
+未验证：未在浏览器中逐帧目测动画观感；Linux 发行版浏览器观感；Go 测试未运行（未改 Go 代码）。
+
 ## 公开镜像目录浅色改版（2026-10-17）
 
 范围：`internal/mirrors/listing.{go,html,css,js}`、`internal/mirrors/listing_test.go`、`web/e2e/public-directory.spec.ts`，以及 README 中一句过时的深浅色说明。设计依据为用户确认的设计稿；用户要求只保留浅色。

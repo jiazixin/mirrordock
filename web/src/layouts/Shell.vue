@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { useRoute } from 'vue-router'
+import { useRoute, type RouteLocationNormalizedLoaded } from 'vue-router'
 import {
   ArrowUpRight,
   CalendarClock,
@@ -75,6 +75,9 @@ const groups: { label: string; links: NavLink[] }[] = [
 ]
 const current = (link: NavLink) =>
   link.section ? route.path.startsWith(link.section) : route.path === link.path
+// Routes sharing one view (analytics kinds) keep the component mounted and skip the page transition.
+const viewKey = (view: RouteLocationNormalizedLoaded) =>
+  typeof view.meta.view === 'string' ? view.meta.view : view.path
 </script>
 
 <template>
@@ -182,7 +185,19 @@ const current = (link: NavLink) =>
     ></div>
     <main class="main-shell">
       <div class="page-content">
-        <RouterView />
+        <RouterView v-slot="{ Component, route: view }">
+          <Transition
+            name="page"
+            mode="out-in"
+          >
+            <div
+              v-if="Component"
+              :key="viewKey(view)"
+            >
+              <component :is="Component" />
+            </div>
+          </Transition>
+        </RouterView>
       </div>
     </main>
   </div>
