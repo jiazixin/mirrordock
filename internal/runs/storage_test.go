@@ -3,11 +3,13 @@ package runs
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"mirrordock/internal/mirrors"
 	syncer "mirrordock/internal/sync"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -151,7 +153,7 @@ func TestCancelPersistenceFailurePreservesResumableWork(t *testing.T) {
 	if _, err := e.Enqueue("test", "manual"); err == nil {
 		t.Fatal("failed cancellation released source")
 	}
-	if err := m.CleanupWork(t.Context()); err != nil {
+	if err := m.CleanupWork(t.Context(), e.workPolicy(time.Now())); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(m.Work(r.ID)); err != nil {
@@ -163,5 +165,54 @@ func TestCancelPersistenceFailurePreservesResumableWork(t *testing.T) {
 	if err := e.Action(r.ID, "cancel"); err != nil {
 		t.Fatal(err)
 	}
-	waitWorkRemoved(t, m, r.ID)
+	waitState(t, e, r.ID, "cancelled")
+}
+
+func TestCancelledWorkSeedsNextRun(t *testing.T) {
+	started := make(chan struct{}, 1)
+	var calls atomic.Int32
+	var resumed atomic.Bool
+	e, _, _, m := testEngine(t, "5s", runnerFunc(func(ctx context.Context, task syncer.Task, emit func(syncer.Progress), log io.Writer) error {
+		if calls.Add(1) == 1 {
+			if err := os.WriteFile(filepath.Join(task.Directory, "downloaded.rpm"), []byte("fixture"), 0644); err != nil {
+				return err
+			}
+			started <- struct{}{}
+			<-ctx.Done()
+			return ctx.Err()
+		}
+		data, err := os.ReadFile(filepath.Join(task.Directory, "downloaded.rpm"))
+		resumed.Store(err == nil && string(data) == "fixture")
+		return nil
+	}))
+	first, err := e.Enqueue("test", "manual")
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-started
+	if err := e.Action(first.ID, "cancel"); err != nil {
+		t.Fatal(err)
+	}
+	waitState(t, e, first.ID, "cancelled")
+	if err := m.CleanupWork(t.Context(), e.workPolicy(time.Now())); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(m.Work(first.ID), "downloaded.rpm")); err != nil {
+		t.Fatal("cancelled work was not kept", err)
+	}
+	second, err := e.Enqueue("test", "manual")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := waitState(t, e, second.ID, "succeeded")
+	if !resumed.Load() {
+		t.Fatal("next run did not start from cancelled work")
+	}
+	if !slices.ContainsFunc(r.Events, func(event Event) bool {
+		return event.Message == fmt.Sprintf("复用任务 #%d 保留的未完成同步目录", first.ID)
+	}) {
+		t.Fatal("reuse not recorded", r.Events)
+	}
+	waitWorkRemoved(t, m, first.ID)
+	waitWorkRemoved(t, m, second.ID)
 }

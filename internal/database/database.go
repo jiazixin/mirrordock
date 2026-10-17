@@ -245,11 +245,13 @@ func (s *Store) LastRunID(ctx context.Context) (int64, error) {
 	return id, err
 }
 
-// RunState reads the indexed durable fact without decoding a run snapshot.
-func (s *Store) RunState(ctx context.Context, id int64) (string, error) {
+// RunState reads the durable state column with the raw run document; the
+// state column stays authoritative even if the document cannot be decoded.
+func (s *Store) RunState(ctx context.Context, id int64) (string, []byte, error) {
 	var state string
-	err := s.DB.QueryRowContext(ctx, "SELECT state FROM runs WHERE id=?", id).Scan(&state)
-	return state, err
+	var b []byte
+	err := s.DB.QueryRowContext(ctx, "SELECT state, data FROM runs WHERE id=?", id).Scan(&state, &b)
+	return state, b, err
 }
 
 // The correlated primary-key lookup seeks the (source_id,id DESC) index once

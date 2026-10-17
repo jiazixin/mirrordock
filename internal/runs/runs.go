@@ -205,7 +205,7 @@ func (e *Engine) Start() {
 				now = time.Now()
 			}
 			ctx, cancel := context.WithTimeout(e.ctx, 30*time.Second)
-			if err := e.mirror.CleanupWork(ctx); err != nil {
+			if err := e.mirror.CleanupWork(ctx, e.workPolicy(now)); err != nil {
 				slog.Error("clean terminal work", "error", err)
 			}
 			if err := e.mirror.CollectContext(ctx, now); err != nil {
@@ -549,6 +549,17 @@ func (e *Engine) stopQueued(r *Run, conflict string) {
 	}
 }
 
+func (e *Engine) workPolicy(now time.Time) mirrors.WorkPolicy {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	policy := mirrors.WorkPolicy{Sources: e.cfg.Current().Sources, Now: now}
+	for _, r := range e.current {
+		if r.State == "queued" && r.Progress.Phase == "waiting_space" {
+			policy.Waiting = append(policy.Waiting, r.SourceID)
+		}
+	}
+	return policy
+}
 func (e *Engine) requestCleanup() {
 	select {
 	case e.cleanupWake <- struct{}{}:
@@ -804,9 +815,18 @@ func (e *Engine) execute(ctx context.Context, id int64, snapshot Snapshot) error
 	if err := e.mirror.CollectContext(ctx, time.Now()); err != nil {
 		return err
 	}
-	work, err := e.mirror.Prepare(ctx, s, id)
+	work, reused, err := e.mirror.PrepareReuse(ctx, s, id)
 	if err != nil {
 		return err
+	}
+	if reused > 0 {
+		e.mu.Lock()
+		e.event(e.current[id], fmt.Sprintf("复用任务 #%d 保留的未完成同步目录", reused))
+		err = e.save(e.current[id])
+		e.mu.Unlock()
+		if err != nil {
+			return err
+		}
 	}
 	candidates := s.Candidates()
 	if s.Type == "github_release" {

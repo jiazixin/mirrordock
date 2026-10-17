@@ -2,7 +2,6 @@ package mirrors
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"os"
@@ -109,16 +108,31 @@ func (m *Manager) StorageInfo() DiskSpace {
 func (m *Manager) BeginSync(id int64) error {
 	m.storageMu.Lock()
 	defer m.storageMu.Unlock()
-	space, err := m.space(filepath.Join(m.Root, ".mirrordock", "work"))
+	short, err := m.admissionShortLocked()
 	if err != nil {
-		return fmt.Errorf("读取镜像盘容量：%w", err)
+		return err
 	}
-	reserve := max(uint64(1<<30), space.Total/100)
-	if space.Available < reserve+workerSpace*uint64(len(m.syncing)+1) {
+	if short {
 		return ErrLowSpace
 	}
 	m.syncing[id] = true
 	return nil
+}
+
+// admissionShort reports whether one more worker would be refused admission.
+func (m *Manager) admissionShort() (bool, error) {
+	m.storageMu.Lock()
+	defer m.storageMu.Unlock()
+	return m.admissionShortLocked()
+}
+
+func (m *Manager) admissionShortLocked() (bool, error) {
+	space, err := m.space(filepath.Join(m.Root, ".mirrordock", "work"))
+	if err != nil {
+		return false, fmt.Errorf("读取镜像盘容量：%w", err)
+	}
+	reserve := max(uint64(1<<30), space.Total/100)
+	return space.Available < reserve+workerSpace*uint64(len(m.syncing)+1), nil
 }
 
 func (m *Manager) EndSync(id int64) {
@@ -156,38 +170,6 @@ func (m *Manager) RemoveWork(ctx context.Context, id int64) error {
 	return removeGeneration(ctx, dir)
 }
 
-// CleanupWork consults persisted facts, including resumable interrupted runs.
-// Unknown directories are preserved, never guessed to be disposable.
-func (m *Manager) CleanupWork(ctx context.Context) error {
-	entries, err := os.ReadDir(filepath.Join(m.Root, ".mirrordock", "work"))
-	if err != nil {
-		return err
-	}
-	for _, entry := range entries {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		id, err := strconv.ParseInt(entry.Name(), 10, 64)
-		if err != nil || id <= 0 || !entry.IsDir() {
-			continue
-		}
-		state, err := m.store.RunState(ctx, id)
-		if err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				continue
-			}
-			return err
-		}
-		switch state {
-		case "succeeded", "failed", "timed_out", "cancelled":
-			if err := m.RemoveWork(ctx, id); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
 func fmtIdentity(dev, ino uint64, sec, nsec int64) string {
 	return fmt.Sprintf("%d:%d:%d:%d", dev, ino, sec, nsec)
 }
@@ -204,7 +186,8 @@ func (m *Manager) cleanupStaleTemporary(ctx context.Context) error {
 		for _, entry := range entries {
 			probe := strings.HasPrefix(entry.Name(), ".reflink-probe-")
 			legacyDNF := area == "work" && strings.HasPrefix(entry.Name(), "dnf-private-")
-			if entry.IsDir() && (probe || legacyDNF) {
+			discarded := area == "work" && strings.HasPrefix(entry.Name(), discardPrefix)
+			if entry.IsDir() && (probe || legacyDNF || discarded) {
 				if err := removeGeneration(ctx, filepath.Join(dir, entry.Name())); err != nil {
 					return err
 				}

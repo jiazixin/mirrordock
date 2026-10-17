@@ -855,3 +855,16 @@ OCR 排除原因：default_path 18（测试与锁文件），unsupported_ext 17�
 - OCR 托管审查：`ocr delegate preview` 为 workspace 模式，reviewable 3/3 reviewed（state.ts、Overview.vue、Batches.vue），排除 AGENTS.md（unsupported_ext）与 preflight.spec.ts（default_path），二者人工完整复核，总覆盖 5/5。未调用外部 OCR LLM，不宣称外部模型复核。
 - 审查发现并已修复：提示模板用 `String.replace` 代入任务名会解释 `$&` 等替换序列，改为模板函数；概览“重新同步”恢复以当前源 ID 与名称发起，避免显示旧快照名。修复后重新格式检查、构建并全量 E2E 通过。
 - 未执行：Go 测试（本次无 Go 改动）。
+
+## 2026-10-17：未完成同步目录复用
+
+需求：大源同步到一半失败/超时/取消时，下次同步不必从上一发布代重新开始。用户确认：失败、超时、取消都保留；固定保留 7 天（不新增配置字段）；有任务因空间不足排队时，按结束时间从旧到新回收其他源的保留目录，排队源自己的不回收。
+
+当前范围：internal/mirrors/keep.go（新增）、mirrors.go、storage.go、internal/database/database.go、internal/runs/runs.go、web/src/app/state.ts，测试 keep_test.go（新增）、mirrors/storage_test.go、runs/storage_test.go，README 与 DESIGN。
+
+- 行为：已写准备标记的失败/超时/取消 work 保留，磁盘不足失败、源删除或类型/dest 变化、超过 7 天时清理；每源只留最新一份。同源新任务在自身 work 不存在时改名接手（同一文件系统，无复制），记录事件“复用任务 #N 保留的未完成同步目录”；暂停/中断续跑仍用自身目录。删除先改名为 `work/.discard-*` 再删，与接手共用互斥，残留由下一轮或启动清理完成。发布条件不变：仍需完整同步与校验，失败不替换公开代。
+- `RunState` 改为返回状态列与原始文档；文档无法解码时仅视为不可复用，不阻断清理（审查发现，已补回归）。reposync 私有 DNF 目录在每次执行开始时清除，接手旧树不会沿用旧密钥或缓存。
+- `go vet ./internal/...`、`go test -race -count=1 ./...` 全部通过。新增覆盖：三种终态均可被下一任务接手且为移动而非复制、续跑不重复接手；磁盘不足/过期/成功/旧份/源删除/改类型不保留；无排队时不回收、有排队时只回收最旧的其他源、容量探测失败不回收；文档损坏不阻断清理；引擎端取消后下一任务从保留目录开始并记录事件。
+- 取消确认文案改为说明保留 7 天供下次复用。`npm --prefix web run format:check`、Web 构建通过，全量 E2E 13/13 通过（RunState 容错修复前执行；之后仅 Go 内部改动，已重跑全量 Go 测试）。
+- OCR 托管审查：`ocr delegate preview` workspace 模式，reviewable 6/6 reviewed（database.go、keep.go、mirrors.go、storage.go、runs.go、state.ts）；排除 README.md、DESIGN.md（unsupported_ext）及三个测试文件（default_path），均人工完整复核，总覆盖 11/11。未调用外部 OCR LLM。
+- 未执行：Linux 实机与真实大源验证（保留目录磁盘占用、超过 30 秒的大树删除跨轮继续），需部署后观察。

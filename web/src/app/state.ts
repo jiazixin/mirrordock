@@ -153,7 +153,7 @@ const runActionPrompts = {
   pause: (name: string) => `暂停任务“${name}”？当前传输会停止，工作目录保留，之后可继续。`,
   resume: (name: string) => `继续任务“${name}”？将沿用剩余运行预算。`,
   cancel: (name: string) =>
-    `取消任务“${name}”？取消后无法继续，未发布的工作目录会被清理，已发布镜像不受影响。`,
+    `取消任务“${name}”？取消后无法继续；已下载的内容保留 7 天，该源下次同步会接着使用，已发布镜像不受影响。`,
 }
 export async function runAction(
   run: Pick<Run, 'id' | 'name'>,

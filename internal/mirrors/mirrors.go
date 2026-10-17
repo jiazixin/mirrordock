@@ -45,6 +45,7 @@ type Manager struct {
 	probeMu       sync.Mutex
 	collectMu     sync.Mutex
 	storageMu     sync.Mutex
+	workMu        sync.Mutex
 	syncing       map[int64]bool
 	clone         func(*os.File, string) error
 	space         func(string) (DiskSpace, error)
@@ -427,39 +428,53 @@ func (m *Manager) Work(id int64) string {
 	return filepath.Join(m.Root, ".mirrordock", "work", fmt.Sprint(id))
 }
 func (m *Manager) Prepare(ctx context.Context, s config.Source, id int64) (string, error) {
+	work, _, err := m.PrepareReuse(ctx, s, id)
+	return work, err
+}
+
+// PrepareReuse also reports the earlier run whose kept work seeded this one.
+func (m *Manager) PrepareReuse(ctx context.Context, s config.Source, id int64) (string, int64, error) {
 	if check := m.ProbeReflink(ctx); check.Status != "supported" {
-		return "", errors.New(check.Detail)
+		return "", 0, errors.New(check.Detail)
 	}
 	if err := m.CheckSpace(); err != nil {
-		return "", err
+		return "", 0, err
 	}
 	work := m.Work(id)
 	marker := filepath.Join(work, ".mirrordock-prepared")
 	if st, err := os.Stat(marker); err == nil && st.Mode().IsRegular() {
-		return work, nil
+		return work, 0, nil
+	}
+	if _, err := os.Lstat(work); errors.Is(err, os.ErrNotExist) {
+		reused, err := m.adoptWork(ctx, s, id)
+		if err != nil || reused > 0 {
+			return work, reused, err
+		}
+	} else if err != nil {
+		return "", 0, err
 	}
 	if err := os.MkdirAll(work, 0755); err != nil {
-		return "", err
+		return "", 0, err
 	}
 	baseGeneration := ""
 	if p := m.table.Load().entries[s.Dest]; p != nil && p.Publication.Type == s.Type {
 		baseGeneration = p.Publication.Current.ID
 		if err := m.copyTree(ctx, p.Publication.Current.Directory, work); err != nil {
-			return "", err
+			return "", 0, err
 		}
 	}
 	fingerprint, err := treeFingerprint(ctx, work)
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
 	prepared, err := json.Marshal(preparation{Fingerprint: fingerprint, BaseGeneration: baseGeneration})
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
 	if err := config.AtomicWrite(marker, prepared, 0600); err != nil {
-		return "", err
+		return "", 0, err
 	}
-	return work, nil
+	return work, 0, nil
 }
 func (m *Manager) copyTree(ctx context.Context, src, dest string) error {
 	links := map[string]string{}

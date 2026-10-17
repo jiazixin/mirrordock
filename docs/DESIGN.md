@@ -70,7 +70,7 @@ GitHub 使用 go-github v88，按发布时间选 Release，仅 assets。tag 与�
 
 ## 发布与恢复
 
-工作目录为 `<mirror_root>/.mirrordock/work/<run-id>`，代为 `.mirrordock/published/<uuid>`。启动、环境检查刷新与准备前均在真实 published/work 目录创建小文件实测克隆。Linux FICLONE、Darwin APFS clonefile 原生克隆必须成功，失败保留错误并停止同步，不回退完整复制，不硬链接可变正文。克隆完整后才写准备标记；暂停继续复用同一工作目录。失败不替换公开代。
+工作目录为 `<mirror_root>/.mirrordock/work/<run-id>`，代为 `.mirrordock/published/<uuid>`。启动、环境检查刷新与准备前均在真实 published/work 目录创建小文件实测克隆。Linux FICLONE、Darwin APFS clonefile 原生克隆必须成功，失败保留错误并停止同步，不回退完整复制，不硬链接可变正文。克隆完整后才写准备标记；暂停继续复用同一工作目录。失败不替换公开代。失败/超时/取消（磁盘不足除外）且已写准备标记的 work 保留 7 天，每源只留最新一份，源 ID/类型/dest 须与当前配置一致；同源下一任务在自身 work 不存在时将其改名接手，并记录事件，准备标记随树沿用，发布时的“未变化”捷径仍按基准代与指纹判断。回收与接手共用互斥：删除前先改名为 `work/.discard-*`，接手不会看到半删除的树，残留由下一轮清理或启动清理完成。有任务等待空间时按结束时间回收其他源的保留目录；容量探测失败不回收。
 
 准备标记保存基础发布代 ID 与工作树元数据指纹。同步后先验证镜像，基础代仍一致且路径、类型、权限、所有者、大小/mtime、文件 inode/ctime 与符号链接均未变化才删除工作目录、复用当前发布。内部标记与根目录 mtime 排除，不读取包正文；旧格式标记禁用此优化。文件被替换或内容写入，即使大小/mtime 相同也保守创建新代。
 

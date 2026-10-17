@@ -179,7 +179,7 @@ func TestCleanupUsesDurableTerminalStates(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(m.Work(id), "partial"), []byte("fixture"), 0600); err != nil {
 			t.Fatal(err)
 		}
-		if err := m.CleanupWork(t.Context()); err != nil {
+		if err := m.CleanupWork(t.Context(), WorkPolicy{Now: time.Now()}); err != nil {
 			t.Fatal(err)
 		}
 		_, err = os.Stat(m.Work(id))
@@ -192,7 +192,7 @@ func TestCleanupUsesDurableTerminalStates(t *testing.T) {
 	if err := os.MkdirAll(unknown, 0755); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.CleanupWork(t.Context()); err != nil {
+	if err := m.CleanupWork(t.Context(), WorkPolicy{Now: time.Now()}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(unknown); err != nil {
@@ -200,7 +200,7 @@ func TestCleanupUsesDurableTerminalStates(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	if err := m.CleanupWork(ctx); !errors.Is(err, context.Canceled) {
+	if err := m.CleanupWork(ctx, WorkPolicy{Now: time.Now()}); !errors.Is(err, context.Canceled) {
 		t.Fatal("cleanup ignored cancellation", err)
 	}
 }
