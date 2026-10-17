@@ -1,5 +1,21 @@
 # 验收记录
 
+## 开关组件重设计（2026-10-17）
+
+范围：`web/src/components/OptionCard.vue`（系统设置、通知设置、同步源编辑共用的开关卡片）。
+
+- 问题：全局 `label { flex-direction: column }` 泄漏到组件根 `<label>`，组件只声明了 `display: flex`，开关被排成“文字居中、开关在下”的竖排，与控制室界面不符。
+- 改动：显式改为横排（文案左、控制右）；新增等宽 `ON` / `OFF` 状态字（`aria-hidden`，状态仍由 `role="switch"` 表达）；轨道与滑块改为 3px / 2px 方角；选中色使用中性 `--btn` / `--btn-ink`，不再用强调色（强调色只标运行中工作）；悬停加 `--hover` 底色；禁用态避免与全局 `input:disabled` 透明度叠加；保留 forced-colors 与 reduced-motion 处理。
+
+| 检查 | 结果 |
+| --- | --- |
+| `npm --prefix web run build`（含 `vue-tsc`） | 通过 |
+| `npm --prefix web run format:check` | 通过 |
+| 浏览器实测（临时目录、127.0.0.1:18731 隔离实例） | 暗色 1440 宽 GitHub Release 页、亮色 375 宽通知设置页：横排、开/关两态与状态字正确，无横向滚动 |
+| E2E `preflight.spec.ts`、`notifications.spec.ts` | 7 通过 |
+| E2E `mirrordock.spec.ts` | 跳过：本机无现代 rsync，未执行 |
+| open-code-review | 未完成：`ocr review` 外部 LLM 返回 HTTP 401（全部 1 个文件失败）；随后本机找不到 `ocr` 命令，delegate preview/rule 也未能执行。改由当前会话按 bug / 可访问性 / 主题 / 全局样式冲突清单手工审查该 1 个文件（覆盖 1/1），未发现需修复问题 |
+
 ## Linux 实机验收：AlmaLinux 10.2（2026-10-16）
 
 范围：提交 `a4e0245` 的源码（`git archive` + `go mod vendor` + 本地构建的 `web/dist`），在用户提供的测试虚拟机 `test-mirrordock` 上运行：AlmaLinux 10.2、内核 6.12.0-211.22.1.el10_2.x86_64、20 核、3.5 GiB 内存，根分区 XFS（`reflink=1`），SELinux Permissive，系统 rsync 3.4.4、DNF 4.20。Go 1.27.2 放在 `~/mirrordock-test`，未写入系统路径；为 race 与 strace 安装了 `gcc`、`strace`（用户注释掉 dnf.conf 的 exclude 后安装 gcc）。测试实例只监听 127.0.0.1:18080，上游为本机 127.0.0.1:18873 的 rsync daemon 与随机数据夹具；未访问真实发行版镜像，未改动用户配置或生产数据。
