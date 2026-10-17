@@ -15,7 +15,8 @@ import {
 } from '@lucide/vue'
 import { ref, watch, onBeforeUnmount } from 'vue'
 import ToastStack from '../components/ToastStack.vue'
-import { state, dismissToast } from '../app/state'
+import ConfirmDialog from '../components/ConfirmDialog.vue'
+import { state, dismissToast, settleConfirmation } from '../app/state'
 import logo from '../assets/logo.svg'
 const emit = defineEmits<{ logout: [] }>()
 const route = useRoute()
@@ -28,6 +29,7 @@ function closeOnEscape(event: KeyboardEvent) {
 }
 document.addEventListener('keydown', closeOnEscape)
 onBeforeUnmount(() => {
+  settleConfirmation(false)
   state.toasts = []
   document.removeEventListener('keydown', closeOnEscape)
 })
@@ -35,6 +37,8 @@ watch(
   () => route.fullPath,
   () => {
     mobile.value = false
+    // A confirmation belongs to the page that asked; leaving the page declines it.
+    settleConfirmation(false)
   },
 )
 interface NavLink {
@@ -84,6 +88,16 @@ const viewKey = (view: RouteLocationNormalizedLoaded) =>
   <ToastStack
     :items="state.toasts"
     @dismiss="dismissToast"
+  />
+  <ConfirmDialog
+    v-if="state.confirmation"
+    :key="state.confirmation.id"
+    :title="state.confirmation.title"
+    :message="state.confirmation.message"
+    :confirm-label="state.confirmation.confirmLabel"
+    :cancel-label="state.confirmation.cancelLabel"
+    :tone="state.confirmation.tone"
+    @settle="settleConfirmation"
   />
   <div class="app-shell">
     <aside class="sidebar">

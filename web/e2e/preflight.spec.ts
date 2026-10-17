@@ -429,32 +429,80 @@ test('batch run controls ask before pausing, resuming, cancelling or rerunning',
     )
     await server.login()
     await page.getByRole('link', { name: '批次记录', exact: true }).click()
+    const native: string[] = []
+    page.on('dialog', async (dialog) => {
+      native.push(dialog.message())
+      await dialog.dismiss()
+    })
+    const confirm = page.getByRole('alertdialog')
     const controls = [
-      ['暂停任务', '暂停任务“运行任务”', '/api/runs/1/pause'],
-      ['继续任务', '继续任务“暂停任务源”', '/api/runs/2/resume'],
-      ['重新同步', '重新同步“失败任务”', '/api/sources/done/run'],
+      ['暂停任务', '暂停“运行任务”', '暂停', '/api/runs/1/pause'],
+      ['继续任务', '继续“暂停任务源”', '继续', '/api/runs/2/resume'],
+      ['重新同步', '重新同步“失败任务”', '重新同步', '/api/sources/done/run'],
     ] as const
-    for (const [name, prompt, endpoint] of controls) {
+    for (const [name, prompt, label, endpoint] of controls) {
       for (const accept of [false, true]) {
-        const dialog = page.waitForEvent('dialog')
-        void page.getByRole('button', { name, exact: true }).click()
-        const shown = await dialog
-        expect(shown.type()).toBe('confirm')
-        expect(shown.message()).toContain(prompt)
-        await (accept ? shown.accept() : shown.dismiss())
+        await page.getByRole('button', { name, exact: true }).click()
+        await expect(confirm).toBeVisible()
+        await expect(confirm).toHaveAccessibleName(name)
+        await expect(confirm).toContainText(prompt)
+        await confirm.getByRole('button', { name: accept ? label : '取消', exact: true }).click()
+        await expect(confirm).toHaveCount(0)
         if (accept) await expect.poll(() => posted.at(-1)).toBe(endpoint)
         else expect(posted).not.toContain(endpoint)
       }
     }
     const cancel = page.getByRole('button', { name: '取消任务', exact: true }).first()
-    const dialog = page.waitForEvent('dialog')
-    void cancel.click()
-    const shown = await dialog
-    expect(shown.message()).toContain('取消后无法继续')
-    await shown.dismiss()
+    await cancel.click()
+    await expect(confirm).toContainText('取消后无法继续')
+    // Destructive confirmations start on the safe choice.
+    await expect(confirm.getByRole('button', { name: '保留任务' })).toBeFocused()
+    await page.keyboard.press('Tab')
+    await expect(confirm.getByRole('button', { name: '取消任务' })).toBeFocused()
+    await page.keyboard.press('Tab')
+    await expect(confirm.getByRole('button', { name: '保留任务' })).toBeFocused()
+    await page.keyboard.press('Escape')
+    await expect(confirm).toHaveCount(0)
+    await expect(cancel).toBeFocused()
+    await cancel.click()
+    await page.mouse.click(5, 5)
+    await expect(confirm).toHaveCount(0)
     await page.waitForTimeout(300)
     expect(posted.filter((path) => path.endsWith('/cancel'))).toEqual([])
     expect(posted).toEqual(['/api/runs/1/pause', '/api/runs/2/resume', '/api/sources/done/run'])
+    expect(native).toEqual([])
+  } finally {
+    await server.close()
+  }
+})
+
+test('clearing logs asks in the in-page dialog before posting', async ({ page, request }) => {
+  const server = await fixture(page, request)
+  try {
+    const cleared: string[] = []
+    await page.route('**/api/logs/clear', (route) => {
+      cleared.push(route.request().method())
+      return route.fulfill({ json: { cleared: 2 } })
+    })
+    const native: string[] = []
+    page.on('dialog', async (dialog) => {
+      native.push(dialog.message())
+      await dialog.dismiss()
+    })
+    await server.login()
+    await page.getByRole('link', { name: '运行记录', exact: true }).click()
+    const trigger = page.getByRole('button', { name: '清理日志', exact: true })
+    const confirm = page.getByRole('alertdialog', { name: '清理日志' })
+    await trigger.click()
+    await expect(confirm).toContainText('运行记录、来源尝试与错误摘要会保留')
+    await confirm.getByRole('button', { name: '取消', exact: true }).click()
+    await expect(confirm).toHaveCount(0)
+    expect(cleared).toEqual([])
+    await trigger.click()
+    await confirm.getByRole('button', { name: '清理', exact: true }).click()
+    await expect(page.getByText('已清理 2 份日志')).toBeVisible()
+    expect(cleared).toEqual(['POST'])
+    expect(native).toEqual([])
   } finally {
     await server.close()
   }

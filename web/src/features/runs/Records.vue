@@ -8,7 +8,7 @@ import { CheckCircle2, CircleAlert, Search, RefreshCw, Trash2, Info } from '@luc
 import StatusBadge from '../../components/StatusBadge.vue'
 import RunDetail from './RunDetail.vue'
 import { api } from '../../app/api'
-import { state, perform, notify } from '../../app/state'
+import { state, perform, notify, confirmAction } from '../../app/state'
 import StackedTime from '../../components/StackedTime.vue'
 import { time, duration, bytes, sourceType } from '../../app/format'
 const tab = ref('succeeded')
@@ -25,7 +25,13 @@ const visible = computed(() =>
   ),
 )
 async function clear() {
-  if (!window.confirm('清理已结束任务的原始日志？运行记录、来源尝试与错误摘要会保留。')) return
+  const accepted = await confirmAction({
+    title: '清理日志',
+    message: '清理已结束任务的原始日志？运行记录、来源尝试与错误摘要会保留。',
+    confirmLabel: '清理',
+    tone: 'red',
+  })
+  if (!accepted) return
   const payload = await api<{ cleared: number }>('/logs/clear', 'POST')
   notify(`已清理 ${payload.cleared} 份日志`)
   await load()

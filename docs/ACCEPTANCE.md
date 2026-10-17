@@ -868,3 +868,13 @@ OCR 排除原因：default_path 18（测试与锁文件），unsupported_ext 17�
 - 取消确认文案改为说明保留 7 天供下次复用。`npm --prefix web run format:check`、Web 构建通过，全量 E2E 13/13 通过（RunState 容错修复前执行；之后仅 Go 内部改动，已重跑全量 Go 测试）。
 - OCR 托管审查：`ocr delegate preview` workspace 模式，reviewable 6/6 reviewed（database.go、keep.go、mirrors.go、storage.go、runs.go、state.ts）；排除 README.md、DESIGN.md（unsupported_ext）及三个测试文件（default_path），均人工完整复核，总覆盖 11/11。未调用外部 OCR LLM。
 - 未执行：Linux 实机与真实大源验证（保留目录磁盘占用、超过 30 秒的大树删除跨轮继续），需部署后观察。
+
+## 2026-10-18：确认改为页面内自绘模态窗口
+
+当前范围：新增 web/src/components/ConfirmDialog.vue；修改 web/src/app/state.ts、layouts/Shell.vue、features/runs/Records.vue、features/sources/Sources.vue、web/e2e/preflight.spec.ts。暂停、继续、取消、重新同步，以及删除同步源、清理日志，全部从 `window.confirm` 改为 `confirmAction`：状态层保存唯一待决确认（新请求、登出、外壳卸载或切换路由时按“不确认”结束），外壳渲染 `ConfirmDialog`（`role="alertdialog"`、白底、按语义着色的图标与按钮）。危险操作初始聚焦安全按钮，Tab 只在两个按钮间循环，Escape 与点击遮罩视为取消；键盘监听在捕获阶段并阻止传播，不会顺带关闭下层 Modal 或移动端菜单。取消任务的返回按钮写“保留任务”，避免两个“取消”。
+
+- `npm --prefix web run format:check`、Web 构建通过；以新构建嵌入 Web 的临时二进制运行 E2E：14 通过，2 跳过（mirrordock.spec、public-directory 首例需 `MIRRORDOCK_TEST_RSYNC`，本机无现代 rsync，未执行）。改写批次控制用例改为操作页面内对话框（取消/确认、Tab 循环、Escape 恢复焦点、点遮罩取消、全程无原生 dialog），新增清理日志用例。
+- 在内置浏览器中以临时配置（隔离端口、临时目录）手动查看桌面与 375px 宽度下的清理日志确认框，布局正常。
+- OCR 托管审查：`ocr delegate preview` 为 workspace 模式，reviewable 5/5 reviewed（state.ts、Records.vue、Sources.vue、Shell.vue、ConfirmDialog.vue），排除 preflight.spec.ts（default_path）并人工完整复核，总覆盖 6/6。未调用外部 OCR LLM，不宣称外部模型复核。
+- 审查发现并已修复：待决确认会跨路由保留，导航后旧页面的确认仍显示；改为路由变化时按“不确认”结束。确认等待期间运行状态可能变化（原生 confirm 会阻塞页面，现不阻塞），确认后由服务端校验并以错误提示反馈，不另做处理。
+- 未执行：删除同步源确认的 E2E（与清理日志同一路径，仅人工复核）；Go 测试（无 Go 改动）。

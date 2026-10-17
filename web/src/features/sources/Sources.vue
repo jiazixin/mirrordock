@@ -6,7 +6,15 @@ import { computed, ref } from 'vue'
 import { Plus, RefreshCw, Search, Play, Pencil, Trash2, FolderSync } from '@lucide/vue'
 import SourceEditor from './SourceEditor.vue'
 import StatusBadge from '../../components/StatusBadge.vue'
-import { clone, state, perform, refresh, runSource, saveConfiguration } from '../../app/state'
+import {
+  clone,
+  confirmAction,
+  state,
+  perform,
+  refresh,
+  runSource,
+  saveConfiguration,
+} from '../../app/state'
 import type { Source } from '../../app/types'
 import StackedTime from '../../components/StackedTime.vue'
 import { time, bytes, sourceType } from '../../app/format'
@@ -36,7 +44,13 @@ function editSource(source?: Source) {
   showEditor.value = true
 }
 async function remove(source: Source) {
-  if (!window.confirm(`删除同步源“${source.name}”？已保存的文件与运行记录会保留。`)) return
+  const accepted = await confirmAction({
+    title: '删除同步源',
+    message: `删除“${source.name}”？已保存的文件与运行记录会保留。`,
+    confirmLabel: '删除',
+    tone: 'red',
+  })
+  if (!accepted) return
   if (!state.config) return
   const config = clone(state.config.config)
   config.sources = config.sources.filter((item) => item.id !== source.id)

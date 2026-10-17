@@ -9,12 +9,15 @@ export const state = reactive({
   info: null as SystemInfo | null,
   username: '',
   toasts: [] as { id: number; message: string; tone: 'success' | 'error' | 'info' }[],
+  confirmation: null as (ConfirmRequest & { id: number }) | null,
   connected: false,
   revision: 0,
 })
 let stream: EventSource | null = null
 let refreshID = 0
 let refreshController: AbortController | undefined
+let confirmResolve: ((accepted: boolean) => void) | undefined
+let confirmID = 0
 let sessionID = 0
 
 export async function refresh() {
@@ -121,6 +124,7 @@ export function resetState() {
   refreshID++
   refreshController?.abort()
   disconnectEvents()
+  settleConfirmation(false)
   state.toasts = []
   state.username = ''
   state.config = null
@@ -149,23 +153,62 @@ export async function runSource(id: string) {
   notify('同步任务已加入队列')
   await refresh()
 }
+export interface ConfirmRequest {
+  title: string
+  message: string
+  confirmLabel: string
+  cancelLabel?: string
+  tone?: 'primary' | 'amber' | 'red'
+}
+// Resolves through the shell's ConfirmDialog; a newer request or logout declines the pending one.
+export function confirmAction(request: ConfirmRequest): Promise<boolean> {
+  settleConfirmation(false)
+  state.confirmation = { ...request, id: ++confirmID }
+  return new Promise((resolve) => {
+    confirmResolve = resolve
+  })
+}
+export function settleConfirmation(accepted: boolean) {
+  const resolve = confirmResolve
+  confirmResolve = undefined
+  state.confirmation = null
+  resolve?.(accepted)
+}
 const runActionPrompts = {
-  pause: (name: string) => `暂停任务“${name}”？当前传输会停止，工作目录保留，之后可继续。`,
-  resume: (name: string) => `继续任务“${name}”？将沿用剩余运行预算。`,
-  cancel: (name: string) =>
-    `取消任务“${name}”？取消后无法继续；已下载的内容保留 7 天，该源下次同步会接着使用，已发布镜像不受影响。`,
+  pause: (name: string): ConfirmRequest => ({
+    title: '暂停任务',
+    message: `暂停“${name}”？当前传输会停止，工作目录保留，之后可继续。`,
+    confirmLabel: '暂停',
+    tone: 'amber',
+  }),
+  resume: (name: string): ConfirmRequest => ({
+    title: '继续任务',
+    message: `继续“${name}”？将沿用剩余运行预算。`,
+    confirmLabel: '继续',
+  }),
+  cancel: (name: string): ConfirmRequest => ({
+    title: '取消任务',
+    message: `取消“${name}”？取消后无法继续；已下载的内容保留 7 天，该源下次同步会接着使用，已发布镜像不受影响。`,
+    confirmLabel: '取消任务',
+    cancelLabel: '保留任务',
+    tone: 'red',
+  }),
 }
 export async function runAction(
   run: Pick<Run, 'id' | 'name'>,
   action: keyof typeof runActionPrompts,
 ) {
-  if (!window.confirm(runActionPrompts[action](run.name))) return
+  if (!(await confirmAction(runActionPrompts[action](run.name)))) return
   await api(`/runs/${run.id}/${action}`, 'POST')
   await refresh()
 }
 export async function rerunSource(id: string, name: string) {
-  if (!window.confirm(`重新同步“${name}”？将新建一次同步任务。`)) return
-  await runSource(id)
+  const accepted = await confirmAction({
+    title: '重新同步',
+    message: `重新同步“${name}”？将新建一次同步任务。`,
+    confirmLabel: '重新同步',
+  })
+  if (accepted) await runSource(id)
 }
 export function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T
