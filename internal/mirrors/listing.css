@@ -358,9 +358,9 @@ th button:hover,th[aria-sort] button {
 th[aria-sort] .sort-arrow {
   color:var(--brand)
 }
-th.kind button {
-  /* Line the label up with the text inside .kind-tag, not the tag edge. */
-  padding-left:8px
+/* Data columns center label and value; the arrow is absolute, so it does not shift the label. */
+th:not(:first-child),td:not(.name) {
+  text-align:center
 }
 td {
   height:60px;
@@ -644,7 +644,7 @@ tbody tr:hover {
     background:none;
     flex-shrink:0
   }
-  th button,th.kind button {
+  th button {
     height:30px;
     padding:0 24px 0 12px;
     border:1px solid var(--line-strong);
@@ -688,6 +688,9 @@ tbody tr:hover {
     border:0;
     font-size:12px;
     color:var(--t3)
+  }
+  td:not(.name) {
+    text-align:left
   }
   td.name {
     order:0;

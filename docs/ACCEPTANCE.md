@@ -5,15 +5,15 @@
 范围：`internal/mirrors/listing.{html,css}`、`internal/mirrors/listing_test.go`。
 
 - 子目录标题不再加绿色句点（目录名常含 `.`，如 `v4.2.7`，句点有歧义），也不再显示与面包屑重复的完整路径副标题；首页“镜像目录.”与说明文字保持不变。
-- 排序箭头已为绝对定位、不占文字宽度；类型列表头额外左移 8px，对齐 `.kind-tag` 内的文字而非标签边缘。640px 以下排序胶囊仍为统一 12px 内边距。
+- 除名称列外，表头与单元格改为居中对齐（文件列表：类型 / 大小 / 修改时间；镜像列表：状态 / 大小 / 上次同步 / 下次同步）。排序箭头为绝对定位，不参与居中计算。同日首版只把类型表头左移 8px、仍为左对齐，用户指出未居中后改为本方案并撤销该偏移。640px 以下卡片行恢复左对齐，排序胶囊不变。
 - 单元测试：首页仍断言句点；子目录断言无句点、无 `page-subtitle`。
 
 | 检查 | 结果 |
 | --- | --- |
 | `go test -race -count=1 ./internal/mirrors`、`go vet ./internal/mirrors`、`git diff --check` | 通过 |
 | E2E `public-directory.spec.ts`（`MIRRORDOCK_TEST_RSYNC=.cache/rsync/rsync-3.5.1/rsync`，scratchpad 临时二进制） | 2/2 通过 |
-| 浏览器实测（scratchpad 静态渲染的 `/github/openlist/v4.2.7/` 示例页） | 1280 宽：类型 / 大小 / 修改时间表头文字与首行内容文字横坐标一致（664/664、822/822、967/967）；375 宽排序胶囊内边距一致 |
-| open-code-review | 未执行外部 LLM；`ocr delegate preview/rule` 选出 2/2 可审文件（listing.css、listing.html）由当前会话审查，排除的 listing_test.go（default_path）已人工核对。未发现正确性、安全性或性能问题 |
+| 浏览器实测（scratchpad 静态渲染的 `/github/openlist/` 文件列表与 `/github/` 镜像列表示例页） | 1280 宽：表头文字（不含箭头）中心与每行内容（标签 / 状态胶囊 / 两行时间按整体）中心横坐标一致：类型 723、大小 878.7、修改时间 1055.2；状态 557、大小 712.7、上次同步 878.7、下次同步 1065.6。375 宽单元格为左对齐，无横向滚动 |
+| open-code-review | 未执行外部 LLM；`ocr delegate preview/rule` 选出可审文件（首版 listing.css、listing.html；居中修正 listing.css）由当前会话审查，排除的 listing_test.go（default_path）已人工核对。未发现正确性、安全性或性能问题 |
 | 未执行 | Web 格式检查与构建（本次无 `web/` 源码变化）、其他 E2E |
 
 ## 管理台切换过渡动画（2026-10-17）
