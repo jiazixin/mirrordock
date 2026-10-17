@@ -197,6 +197,12 @@
   font-weight: 400;
   color: var(--t2);
 }
+.run-detail .log-actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-left: auto;
+}
 .run-detail .snapshot pre {
   margin-top: 4px;
 }

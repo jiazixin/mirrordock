@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import SelectField from '../../components/SelectField.vue'
 import { computed, ref, watch } from 'vue'
-import { ArrowDownToLine, Download, RefreshCw } from '@lucide/vue'
+import { ChevronsDown, Download, RefreshCw } from '@lucide/vue'
 import Modal from '../../components/Modal.vue'
 import StatusBadge from '../../components/StatusBadge.vue'
 import StackedTime from '../../components/StackedTime.vue'
@@ -242,34 +242,37 @@ function download() {
               :options="
                 run.attempts.map((item) => ({ value: item.number, label: `尝试 #${item.number}` }))
               "
-            /><button
-              class="icon-button log-refresh"
-              :class="{ 'is-loading': logLoading }"
-              aria-label="刷新日志"
-              :aria-busy="logLoading"
-              :disabled="logLoading || !run.attempts.length"
-              title="刷新日志"
-              @click="refreshLog()"
-            >
-              <RefreshCw :size="16" /></button
-            ><button
-              class="icon-button log-follow"
-              aria-label="持续跟随最新日志"
-              :aria-pressed="followLatest"
-              :title="followLatest ? '正在跟随最新日志，点击暂停' : '跟随最新日志'"
-              @click="followLatest = !followLatest"
-            >
-              <ArrowDownToLine :size="16" /></button
-            ><button
-              class="button compact"
-              :disabled="
-                !run.attempts.length ||
-                run.attempts.find((item) => item.number === attempt)?.log_cleared
-              "
-              @click="download"
-            >
-              <Download :size="15" />下载
-            </button>
+            />
+            <div class="log-actions">
+              <button
+                class="icon-button log-refresh"
+                :class="{ 'is-loading': logLoading }"
+                aria-label="刷新日志"
+                :aria-busy="logLoading"
+                :disabled="logLoading || !run.attempts.length"
+                title="刷新日志"
+                @click="refreshLog()"
+              >
+                <RefreshCw :size="16" /></button
+              ><button
+                class="icon-button log-follow"
+                aria-label="持续跟随最新日志"
+                :aria-pressed="followLatest"
+                :title="followLatest ? '正在跟随最新日志，点击暂停' : '跟随最新日志'"
+                @click="followLatest = !followLatest"
+              >
+                <ChevronsDown :size="16" /></button
+              ><button
+                class="button compact"
+                :disabled="
+                  !run.attempts.length ||
+                  run.attempts.find((item) => item.number === attempt)?.log_cleared
+                "
+                @click="download"
+              >
+                <Download :size="15" />下载
+              </button>
+            </div>
           </div>
           <pre
             ref="logView"

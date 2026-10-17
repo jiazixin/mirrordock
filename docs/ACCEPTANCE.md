@@ -828,3 +828,11 @@ OCR 排除原因：default_path 18（测试与锁文件），unsupported_ext 17�
 - OCR 外部入口 `ocr review --audience agent --background ... --output test-results/version-standard/ocr-external.txt` 退出码 1，原因为 `no valid LLM endpoint configured`，未执行外部模型审查、未发送源码。随后使用 open-code-review-delegate 的本地 preview/rule，由当前 Codex 审查全部变更；不宣称独立外部模型复核。
 - OCR reviewable 的 version.go、build.sh 为 2/2 reviewed、0 skipped。默认排除的 version_test.go（default_path）、删除的 version.sh（deleted），以及 README、AGENTS、目录规范、本验收文档（unsupported_ext）另行完整复核，总覆盖 8/8。检查入口顺序、链接覆盖、dirty 去重、回退规则、删除脚本引用和文档一致性，无遗留已确认的正确性、安全性或性能阻断项。规则、覆盖清单、哈希、测试脚本与结果位于 `test-results/version-standard/`。
 - 未执行：完整 Docker 镜像构建、Linux 运行验收、全套后端、Web 格式检查及浏览器 E2E（本次无业务/Web 源码变化）。无 Git 注入已在本机真实 Go 构建验证，不代替容器验收。本次无下载性能改动或性能结论；未运行真实同步，未修改用户镜像与凭证。
+
+## 2026-10-17：运行详情日志工具栏
+
+当前范围：web/src/features/runs/RunDetail.vue、run-detail.css、web/e2e/log-controls.spec.ts。刷新、跟随、下载三个按钮收进 `.log-actions` 整组右对齐，窄屏换行时整组移动而不拆散；跟随最新日志图标由 ArrowDownToLine 改为 ChevronsDown，避免与下载图标相同。
+
+- `npm --prefix web run format:check`、Web 构建通过；以新构建嵌入 Web 的临时二进制运行 `e2e/log-controls.spec.ts` 通过。新增断言：桌面下载按钮右缘与日志框右缘对齐；375/320 宽度三按钮同一行且右缘对齐。修改前 320 宽度实测下载按钮单独换到左侧，已由整组容器修复。
+- OCR 外部入口 `ocr review --audience agent --background ... --output <scratchpad>` 退出码 1，原因为 LLM 认证被拒（HTTP 401），未执行外部模型审查。改由当前代理人工复核全部 3 个变更文件（OCR 选中 RunDetail.vue、run-detail.css；E2E spec 为默认排除的测试路径），未发现正确性、安全性或性能问题；不宣称外部模型复核。
+- 未执行：全套 E2E、Go 测试（本次无 Go 与下载路径改动）。

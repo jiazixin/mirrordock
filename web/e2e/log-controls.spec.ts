@@ -148,6 +148,11 @@ test('log refresh releases its state and follow defaults on, toggles and survive
     await release()
     await expect(log).toContainText('恢复成功')
     await expect.poll(atBottom).toBe(true)
+    const download = page.getByRole('button', { name: '下载', exact: true })
+    const [downloadBox, logBox] = [await download.boundingBox(), await log.boundingBox()]
+    expect(
+      Math.abs(downloadBox!.x + downloadBox!.width - (logBox!.x + logBox!.width)),
+    ).toBeLessThan(2)
     await page.screenshot({ path: testInfo.outputPath('log-follow-desktop.png'), fullPage: true })
     for (const width of [375, 320]) {
       await page.setViewportSize({ width, height: 900 })
@@ -155,6 +160,12 @@ test('log refresh releases its state and follow defaults on, toggles and survive
         await page.getByRole('dialog').evaluate((el) => el.scrollWidth <= el.clientWidth),
       ).toBe(true)
       await expect(follow).toBeVisible()
+      const actions = await page
+        .locator('.log-actions > button')
+        .evaluateAll((els) => els.map((el) => el.getBoundingClientRect()))
+      const logRight = await log.evaluate((el) => el.getBoundingClientRect().right)
+      expect(new Set(actions.map((box) => Math.round(box.top + box.height / 2))).size).toBe(1)
+      expect(Math.abs(actions.at(-1)!.right - logRight)).toBeLessThan(2)
       await page.screenshot({
         path: testInfo.outputPath(`log-follow-${width}.png`),
         fullPage: true,
