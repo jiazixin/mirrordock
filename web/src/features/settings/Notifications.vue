@@ -549,8 +549,7 @@ onBeforeUnmount(() => {
 }
 .channel-option-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
+  gap: 12px;
 }
 .channel-actions {
   display: flex;
@@ -649,11 +648,6 @@ onBeforeUnmount(() => {
   .notification-card {
     grid-template-columns: 1fr;
     gap: 22px;
-  }
-}
-@media (max-width: 480px) {
-  .channel-option-grid {
-    grid-template-columns: minmax(0, 1fr);
   }
 }
 </style>

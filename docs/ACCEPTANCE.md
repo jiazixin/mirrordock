@@ -892,3 +892,12 @@ OCR 排除原因：default_path 18（测试与锁文件），unsupported_ext 17�
 - 在内置浏览器以静态页面加载 global.css 查看四种分段与百分比形态，显示正常。
 - OCR 托管审查：`ocr delegate preview` workspace 模式，reviewable 7/7 reviewed（app.go、progress.go、format.ts、state.ts、Batches.vue、RunDetail.vue、global.css）；排除 progress_test.go（default_path），app_test.go 在预览后修改，均人工完整复核。未调用外部 OCR LLM。
 - 未执行：真实大源 rsync 运行中的页面实测（状态回跳与进度条均未在真实同步中复现观察）；批次列表在 SSE 帧与 5 秒轮询记录间对同一任务仍可能有一秒内的短暂差异，未另做版本比对。
+
+## 2026-10-18：开关选项改为开关前置的无边框行
+
+当前范围：web/src/components/OptionCard.vue，features/settings/Settings.vue、Notifications.vue，features/sources/SourceEditor.vue。原两列卡片在窄栏里标题折行、高度不一，奇数项还会剩下单独一张卡。现在开关放在最左，后接标题和说明，不再显示 ON/OFF 文字，也不要卡片边框和开启底色。可点击区域收窄到开关和文字的实际宽度，键盘焦点框画在开关上。GitHub Release、Token、通知渠道改为单列；编辑同步源按用户要求保留两列（列间距 24px），480px 以下改为单列。组件名 `OptionCard` 未改，以免牵动调用方。
+
+- 以临时配置（隔离端口、临时目录、生成的测试密码）启动本轮构建，用 Playwright 截取 GitHub Release、钉钉通知、编辑同步源三处 2 倍图（`test-results/option-card-preview/`，已忽略），供用户比较方案 B/C 后选定 C。
+- `npm --prefix web run format:check`、Web 构建（含类型检查）通过。使用现代 rsync 3.5.1 运行 E2E：notifications、preflight、mirrordock 共 10/10 通过（编辑同步源恢复两列前的构建）；恢复两列后，以最终构建重跑 mirrordock.spec 和 preflight 中切换源类型的用例，2/2 通过。
+- OCR 托管审查：`ocr delegate preview` 为 workspace 模式，reviewable 4/4 reviewed，无排除文件，规则为默认组。未发现正确性、安全或性能问题；SourceEditor 的最终网格改动在预览后做出，已人工复核。未调用外部 OCR LLM。
+- 未执行：375px 窄屏的人工截图检查；其余 E2E（analytics、log-controls、pagination、public-directory、toasts）未涉及这些组件，本轮未跑；无 Go 改动，未跑 Go 测试。

@@ -460,8 +460,7 @@ async function save() {
 }
 .setting-option-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
+  gap: 12px;
 }
 @media (max-width: 900px) {
   .setting-row {
@@ -475,9 +474,6 @@ async function save() {
   }
   .settings-sections {
     padding: 0 18px;
-  }
-  .setting-option-grid {
-    grid-template-columns: minmax(0, 1fr);
   }
 }
 </style>
