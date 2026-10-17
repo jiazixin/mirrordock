@@ -149,9 +149,23 @@ export async function runSource(id: string) {
   notify('同步任务已加入队列')
   await refresh()
 }
-export async function runAction(id: number, action: string) {
-  await api(`/runs/${id}/${action}`, 'POST')
+const runActionPrompts = {
+  pause: (name: string) => `暂停任务“${name}”？当前传输会停止，工作目录保留，之后可继续。`,
+  resume: (name: string) => `继续任务“${name}”？将沿用剩余运行预算。`,
+  cancel: (name: string) =>
+    `取消任务“${name}”？取消后无法继续，未发布的工作目录会被清理，已发布镜像不受影响。`,
+}
+export async function runAction(
+  run: Pick<Run, 'id' | 'name'>,
+  action: keyof typeof runActionPrompts,
+) {
+  if (!window.confirm(runActionPrompts[action](run.name))) return
+  await api(`/runs/${run.id}/${action}`, 'POST')
   await refresh()
+}
+export async function rerunSource(id: string, name: string) {
+  if (!window.confirm(`重新同步“${name}”？将新建一次同步任务。`)) return
+  await runSource(id)
 }
 export function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T

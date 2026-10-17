@@ -3,7 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { CircleAlert, CirclePause, Package, RefreshCw, Server, Tag, Unplug } from '@lucide/vue'
 import RunDetail from '../runs/RunDetail.vue'
 import { api } from '../../app/api'
-import { state, notify, perform, runAction, runSource } from '../../app/state'
+import { state, notify, perform, runAction, rerunSource } from '../../app/state'
 import { bytes, duration, phases, sourceType } from '../../app/format'
 import type { Run, Source } from '../../app/types'
 
@@ -587,12 +587,12 @@ const kpis = computed(() => {
             <button
               v-if="run.state === 'running'"
               class="button compact tone-amber"
-              @click="perform(() => runAction(run.id, 'pause'))"
+              @click="perform(() => runAction(run, 'pause'))"
             >
               暂停</button
             ><button
               class="button compact tone-red"
-              @click="perform(() => runAction(run.id, 'cancel'))"
+              @click="perform(() => runAction(run, 'cancel'))"
             >
               取消</button
             ><button
@@ -618,7 +618,7 @@ const kpis = computed(() => {
           ><small>#{{ run.id }} · {{ phases[run.progress.phase] ?? '等待空闲 worker' }}</small>
           <button
             class="button compact tone-red"
-            @click="perform(() => runAction(run.id, 'cancel'))"
+            @click="perform(() => runAction(run, 'cancel'))"
           >
             取消
           </button>
@@ -675,12 +675,12 @@ const kpis = computed(() => {
             <template v-if="held.includes(item.run.state)">
               <button
                 class="button compact primary"
-                @click="perform(() => runAction(item.run.id, 'resume'))"
+                @click="perform(() => runAction(item.run, 'resume'))"
               >
                 继续</button
               ><button
                 class="button compact tone-red"
-                @click="perform(() => runAction(item.run.id, 'cancel'))"
+                @click="perform(() => runAction(item.run, 'cancel'))"
               >
                 取消
               </button>
@@ -689,7 +689,7 @@ const kpis = computed(() => {
               <button
                 class="button compact primary"
                 :disabled="!item.source.enabled"
-                @click="perform(() => runSource(item.source.id))"
+                @click="perform(() => rerunSource(item.source.id, item.source.name))"
               >
                 重新同步</button
               ><button

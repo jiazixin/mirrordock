@@ -385,3 +385,77 @@ test('old session requests cannot expire a new login', async ({ page, request })
     await server.close()
   }
 })
+
+test('batch run controls ask before pausing, resuming, cancelling or rerunning', async ({
+  page,
+  request,
+}) => {
+  const server = await fixture(page, request)
+  try {
+    const now = new Date().toISOString()
+    const base = {
+      type: 'rsync',
+      trigger: 'manual',
+      created_at: now,
+      elapsed_seconds: 0,
+      budget_seconds: 30,
+      progress: {
+        phase: 'transfer',
+        bytes: 0,
+        percent: null,
+        success: 0,
+        failed: 0,
+        skipped: 0,
+      },
+      attempts: [],
+      events: [],
+      snapshot: {},
+    }
+    const runs = [
+      { ...base, id: 1, source_id: 'live', name: '运行任务', state: 'running' },
+      { ...base, id: 2, source_id: 'held', name: '暂停任务源', state: 'paused' },
+      { ...base, id: 3, source_id: 'done', name: '失败任务', state: 'failed' },
+    ]
+    const posted: string[] = []
+    await page.route('**/api/runs?*', (route) =>
+      route.fulfill({ json: { items: runs, total: runs.length } }),
+    )
+    await page.route(/\/api\/(runs\/\d+\/\w+|sources\/[^/]+\/run)$/, (route) => {
+      posted.push(new URL(route.request().url()).pathname)
+      return route.fulfill({ json: {} })
+    })
+    await page.route('**/api/events', (route) =>
+      route.fulfill({ contentType: 'text/event-stream', body: '' }),
+    )
+    await server.login()
+    await page.getByRole('link', { name: '批次记录', exact: true }).click()
+    const controls = [
+      ['暂停任务', '暂停任务“运行任务”', '/api/runs/1/pause'],
+      ['继续任务', '继续任务“暂停任务源”', '/api/runs/2/resume'],
+      ['重新同步', '重新同步“失败任务”', '/api/sources/done/run'],
+    ] as const
+    for (const [name, prompt, endpoint] of controls) {
+      for (const accept of [false, true]) {
+        const dialog = page.waitForEvent('dialog')
+        void page.getByRole('button', { name, exact: true }).click()
+        const shown = await dialog
+        expect(shown.type()).toBe('confirm')
+        expect(shown.message()).toContain(prompt)
+        await (accept ? shown.accept() : shown.dismiss())
+        if (accept) await expect.poll(() => posted.at(-1)).toBe(endpoint)
+        else expect(posted).not.toContain(endpoint)
+      }
+    }
+    const cancel = page.getByRole('button', { name: '取消任务', exact: true }).first()
+    const dialog = page.waitForEvent('dialog')
+    void cancel.click()
+    const shown = await dialog
+    expect(shown.message()).toContain('取消后无法继续')
+    await shown.dismiss()
+    await page.waitForTimeout(300)
+    expect(posted.filter((path) => path.endsWith('/cancel'))).toEqual([])
+    expect(posted).toEqual(['/api/runs/1/pause', '/api/runs/2/resume', '/api/sources/done/run'])
+  } finally {
+    await server.close()
+  }
+})

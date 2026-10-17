@@ -846,3 +846,12 @@ OCR 排除原因：default_path 18（测试与锁文件），unsupported_ext 17�
 - `go vet ./internal/sync`、`go test -race -count=1 ./...` 全部通过。新增回归用用户日志的真实行序列，断言阶段始终为 transfer、增量期间不出现百分比/ETA，并覆盖 to-chk 完整列表下的百分比与 ETA。
 - OCR 外部入口再次因 LLM 认证被拒（HTTP 401）退出码 1，未执行外部模型审查；由当前代理人工复核 process.go 与测试（ParseProgress 唯一调用方、双 goroutine 共享状态由既有互斥锁保护、reposync 输出不含 `-chk=`），未发现正确性、安全性或性能问题。
 - 未执行：真实 AlmaLinux 同步验证（用户正在运行的任务使用旧二进制，需重新部署后观察）。
+
+## 2026-10-17：任务控制二次确认与 OCR 托管审查约定
+
+当前范围：web/src/app/state.ts、features/runs/Batches.vue、features/overview/Overview.vue、web/e2e/preflight.spec.ts、AGENTS.md。批次记录与概览中的暂停、继续、取消、重新同步统一在 `runAction` / `rerunSource` 内先 `window.confirm`（沿用删除同步源、清理日志的既有方式），取消则不发请求；提示写明任务名与后果（暂停保留工作目录可继续；取消不可继续、清理未发布工作目录、已发布镜像不受影响）。同步源/计划页的“立即同步”保持不确认。AGENTS.md 改为所有 OCR 审查一律使用托管模式。
+
+- `npm --prefix web run format:check`、Web 构建通过；以新构建嵌入 Web 的临时二进制运行全部 E2E，13/13 通过。新增用例覆盖四种操作：取消确认时不发请求、确认后各发一次对应接口，提示含任务名。
+- OCR 托管审查：`ocr delegate preview` 为 workspace 模式，reviewable 3/3 reviewed（state.ts、Overview.vue、Batches.vue），排除 AGENTS.md（unsupported_ext）与 preflight.spec.ts（default_path），二者人工完整复核，总覆盖 5/5。未调用外部 OCR LLM，不宣称外部模型复核。
+- 审查发现并已修复：提示模板用 `String.replace` 代入任务名会解释 `$&` 等替换序列，改为模板函数；概览“重新同步”恢复以当前源 ID 与名称发起，避免显示旧快照名。修复后重新格式检查、构建并全量 E2E 通过。
+- 未执行：Go 测试（本次无 Go 改动）。

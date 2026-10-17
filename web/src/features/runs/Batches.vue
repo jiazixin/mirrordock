@@ -7,7 +7,7 @@ import { timeRangeOptions } from './timeRanges'
 import { RefreshCw, Pause, Play, X, Info, Layers3, RotateCcw } from '@lucide/vue'
 import StatusBadge from '../../components/StatusBadge.vue'
 import RunDetail from './RunDetail.vue'
-import { state, refresh, perform, runAction, runSource } from '../../app/state'
+import { state, refresh, perform, runAction, rerunSource } from '../../app/state'
 import { time, duration, bytes, phases, sourceType } from '../../app/format'
 import type { Run, SourceType } from '../../app/types'
 function received(progress: Run['progress']) {
@@ -199,7 +199,7 @@ const groups = computed(() => {
                     class="icon-button outlined tone-amber"
                     aria-label="暂停任务"
                     title="暂停任务"
-                    @click="perform(() => runAction(run.id, 'pause'))"
+                    @click="perform(() => runAction(run, 'pause'))"
                   >
                     <Pause :size="15" /></button
                   ><button
@@ -207,7 +207,7 @@ const groups = computed(() => {
                     class="icon-button outlined tone-green"
                     aria-label="继续任务"
                     title="继续任务"
-                    @click="perform(() => runAction(run.id, 'resume'))"
+                    @click="perform(() => runAction(run, 'resume'))"
                   >
                     <Play :size="15" /></button
                   ><button
@@ -215,7 +215,7 @@ const groups = computed(() => {
                     class="icon-button outlined tone-green"
                     aria-label="重新同步"
                     title="重新同步"
-                    @click="perform(() => runSource(run.source_id))"
+                    @click="perform(() => rerunSource(run.source_id, run.name))"
                   >
                     <RotateCcw :size="15" /></button
                   ><button
@@ -225,7 +225,7 @@ const groups = computed(() => {
                     class="icon-button outlined danger"
                     aria-label="取消任务"
                     title="取消任务"
-                    @click="perform(() => runAction(run.id, 'cancel'))"
+                    @click="perform(() => runAction(run, 'cancel'))"
                   >
                     <X :size="15" /></button
                   ><button
