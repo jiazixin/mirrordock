@@ -1046,7 +1046,24 @@ td.center .stacked-time {
   background: var(--blue);
   transition: width 0.6s;
 }
-.progress-track.indeterminate > span {
+.progress-track.staged {
+  position: relative;
+}
+.progress-track.staged > i {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-radius: 3px;
+  background: var(--blue-bd);
+  overflow: hidden;
+}
+.progress-track.staged > i::after {
+  content: '';
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 40%;
+  border-radius: 3px;
+  background: var(--blue);
   animation: progress-wave 1.5s ease-in-out infinite;
 }
 .progress-line > span {
@@ -1768,7 +1785,7 @@ tbody tr:hover td.empty-state {
     transform: translateX(-100%);
   }
   100% {
-    transform: translateX(450%);
+    transform: translateX(250%);
   }
 }
 

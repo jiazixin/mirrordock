@@ -33,7 +33,9 @@ export async function refresh() {
     ])
     if (current !== refreshID || controller.signal.aborted) return
     state.config = config
-    state.runs = runs.items
+    // While connected, the event stream is the only ordered source of run states;
+    // mixing this response with older stream frames made states jump back.
+    if (!state.connected) state.runs = runs.items
     state.info = info
     state.revision++
   } catch (error) {

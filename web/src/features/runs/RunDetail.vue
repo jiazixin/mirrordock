@@ -5,7 +5,7 @@ import { ChevronsDown, Download, RefreshCw } from '@lucide/vue'
 import Modal from '../../components/Modal.vue'
 import StatusBadge from '../../components/StatusBadge.vue'
 import StackedTime from '../../components/StackedTime.vue'
-import { time, duration, bytes, phases, sourceType } from '../../app/format'
+import { time, duration, bytes, phases, sourceType, runStage, runStages } from '../../app/format'
 import { useRunDetail } from './useRunDetail'
 import './run-detail.css'
 const props = defineProps<{ id: number }>()
@@ -25,7 +25,7 @@ const {
   refreshLog,
 } = useRunDetail(() => props.id)
 const logView = ref<HTMLElement>()
-const steps = ['准备', '传输', '校验', '发布']
+const steps = runStages
 const step = computed(() => {
   if (run.value?.state === 'succeeded') return 4
   if (
@@ -33,14 +33,7 @@ const step = computed(() => {
     ['waiting_space', 'waiting_downloads'].includes(run.value.progress.phase)
   )
     return -1
-  return (
-    (
-      { prepare: 0, scan: 0, transfer: 1, verify: 2, publish: 3, complete: 3 } as Record<
-        string,
-        number
-      >
-    )[run.value.progress.phase] ?? -1
-  )
+  return runStage(run.value.progress.phase)
 })
 const percent = computed(() => {
   const value = run.value?.progress.percent

@@ -878,3 +878,17 @@ OCR 排除原因：default_path 18（测试与锁文件），unsupported_ext 17�
 - OCR 托管审查：`ocr delegate preview` 为 workspace 模式，reviewable 5/5 reviewed（state.ts、Records.vue、Sources.vue、Shell.vue、ConfirmDialog.vue），排除 preflight.spec.ts（default_path）并人工完整复核，总覆盖 6/6。未调用外部 OCR LLM，不宣称外部模型复核。
 - 审查发现并已修复：待决确认会跨路由保留，导航后旧页面的确认仍显示；改为路由变化时按“不确认”结束。确认等待期间运行状态可能变化（原生 confirm 会阻塞页面，现不阻塞），确认后由服务端校验并以错误提示反馈，不另做处理。
 - 未执行：删除同步源确认的 E2E（与清理日志同一路径，仅人工复核）；Go 测试（无 Go 改动）。
+
+## 2026-10-18：手动运行状态回跳与批次进度条阶段显示
+
+现象：同步源页手动运行后状态显示“运行中 → 已取消 → 运行中”；rsync 增量递归传输时批次进度条与“准备”阶段一样整条滑动。原因：点击后的 `refresh()` 直接取到新任务，而随后 SSE 推送的是点击前缓存（最长 1 秒）的快照，其中该源最新任务仍是上一条已取消任务；增量递归没有总体百分比，前端退回整条不定动画。
+
+当前范围：internal/app/progress.go、app.go，测试 progress_test.go、app_test.go；web/src/app/state.ts、format.ts、features/runs/Batches.vue、RunDetail.vue、styles/global.css；README、DESIGN。
+
+- 后端：已登录的非 GET 请求结束后使 SSE 快照失效（代数递增）并唤醒各连接立即推送；与失效重叠的读取不缓存、不返回，重新读取。匿名登录不触发失效（审查发现：否则未登录请求可迫使每次重新查询，已修复并补测试）。
+- 前端：SSE 已连接时 `refresh()` 不再覆盖 `state.runs`，运行状态只来自有序的事件流；未连接时仍用接口结果。阶段映射移入 `format.ts` 由详情与批次共用；无百分比时进度条按准备/传输/校验/发布四段显示，已过阶段实心、当前阶段内动画，等待/重试阶段整条动画。有百分比时行为不变。
+- `go vet ./internal/app`；`PATH=.cache/rsync/rsync-3.5.1:$PATH MIRRORDOCK_TEST_RSYNC=… go test -race -count=1 ./...` 全部通过（登录范围修复前执行；修复后重跑 `./internal/app` 通过）。新增覆盖：失效唤醒监听者、重叠读取被丢弃重读、失效后不复用缓存；匿名登录不失效、已登录写请求失效。
+- `npm --prefix web run format:check`、Web 构建（含类型检查）通过；以本轮构建的临时二进制和现代 rsync 运行全量 E2E：16/16 通过。
+- 在内置浏览器以静态页面加载 global.css 查看四种分段与百分比形态，显示正常。
+- OCR 托管审查：`ocr delegate preview` workspace 模式，reviewable 7/7 reviewed（app.go、progress.go、format.ts、state.ts、Batches.vue、RunDetail.vue、global.css）；排除 progress_test.go（default_path），app_test.go 在预览后修改，均人工完整复核。未调用外部 OCR LLM。
+- 未执行：真实大源 rsync 运行中的页面实测（状态回跳与进度条均未在真实同步中复现观察）；批次列表在 SSE 帧与 5 秒轮询记录间对同一任务仍可能有一秒内的短暂差异，未另做版本比对。

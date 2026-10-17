@@ -278,6 +278,12 @@ func (a *App) Handler() http.Handler {
 			return
 		}
 		api.ServeHTTP(w, r)
+		if !public && r.Method != "GET" && r.Method != "HEAD" {
+			// Authenticated writes may create or change runs; the next SSE frame
+			// must not replay a cached snapshot from before the write. Anonymous
+			// login attempts never trigger a fresh query.
+			a.progress.invalidate()
+		}
 	}))
 	mux.HandleFunc("/admin/", a.frontend)
 	mux.HandleFunc("/favicon.ico", a.frontend)
@@ -554,6 +560,7 @@ func (a *App) events(w http.ResponseWriter, r *http.Request) {
 		if !a.auth.authorized(r) {
 			return
 		}
+		changed := a.progress.changes()
 		b, err := a.progress.get(r.Context(), func(ctx context.Context) ([]byte, error) {
 			items, err := a.Runs.Latest(ctx)
 			if err != nil {
@@ -573,6 +580,7 @@ func (a *App) events(w http.ResponseWriter, r *http.Request) {
 			return
 		case <-r.Context().Done():
 			return
+		case <-changed:
 		case <-ticker.C:
 		}
 	}

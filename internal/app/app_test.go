@@ -137,10 +137,22 @@ func TestAdminAuthenticationWritebackAndPublicIsolation(t *testing.T) {
 	if !strings.Contains(string(b), `"username":"operator"`) {
 		t.Fatal("authenticated status omitted configured username")
 	}
+	generation := func() uint64 {
+		a.progress.mu.Lock()
+		defer a.progress.mu.Unlock()
+		return a.progress.generation
+	}
+	// Anonymous login attempts must not force fresh SSE snapshot queries.
+	if generation() != 0 {
+		t.Fatal("public login invalidated progress frames", generation())
+	}
 	res = request("POST", "/api/auth/setup", "{}", server.URL)
 	res.Body.Close()
 	if res.StatusCode != http.StatusNotFound {
 		t.Fatal("obsolete setup endpoint still available", res.StatusCode)
+	}
+	if generation() != 1 {
+		t.Fatal("authenticated write kept the cached progress frame", generation())
 	}
 	res = request("GET", "/api/config", "", "")
 	b, _ = io.ReadAll(res.Body)

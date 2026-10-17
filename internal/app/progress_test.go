@@ -71,3 +71,44 @@ func TestProgressFramesWaiterCancellationAndFailureRecovery(t *testing.T) {
 		t.Fatal(string(data), err)
 	}
 }
+
+func TestProgressFramesInvalidateDiscardsOverlappingRead(t *testing.T) {
+	var frames progressFrames
+	changed := frames.changes()
+	var calls atomic.Int64
+	entered, release := make(chan struct{}), make(chan struct{})
+	read := func(context.Context) ([]byte, error) {
+		if calls.Add(1) == 1 {
+			close(entered)
+			<-release
+			return []byte("before write"), nil
+		}
+		return []byte("after write"), nil
+	}
+	done := make(chan []byte)
+	go func() {
+		data, err := frames.get(t.Context(), read)
+		if err != nil {
+			t.Error(err)
+		}
+		done <- data
+	}()
+	<-entered
+	frames.invalidate()
+	select {
+	case <-changed:
+	default:
+		t.Fatal("listeners not woken by invalidate")
+	}
+	close(release)
+	if data := <-done; string(data) != "after write" {
+		t.Fatalf("served frame read before the write: %s", data)
+	}
+	if data, err := frames.get(t.Context(), read); err != nil || string(data) != "after write" || calls.Load() != 2 {
+		t.Fatal("fresh frame not cached", string(data), err, calls.Load())
+	}
+	frames.invalidate()
+	if _, err := frames.get(t.Context(), read); err != nil || calls.Load() != 3 {
+		t.Fatal("invalidated frame reused", err, calls.Load())
+	}
+}
