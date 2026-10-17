@@ -1,5 +1,27 @@
 # 验收记录
 
+## 公开镜像目录浅色改版（2026-10-17）
+
+范围：`internal/mirrors/listing.{go,html,css,js}`、`internal/mirrors/listing_test.go`、`web/e2e/public-directory.spec.ts`，以及 README 中一句过时的深浅色说明。设计依据为用户确认的设计稿；用户要求只保留浅色。
+
+- 页头改为与管理台一致的深绿方形 “M” Logo；首页标题为“镜像目录.”（句点 `aria-hidden`），子目录标题为当前目录名，副标题为完整路径。首页不再显示面包屑；子目录面包屑缩为标题上方小字，首项为“镜像目录”，自动换行，不再横向滚动（同时删除 `listing.js` 中滚动面包屑的代码）。
+- 含镜像项目的列表新增浅绿汇总卡：镜像数、同步正常（成功）、需要关注（失败 / 超时 / 中断）、公开文件总量。数据由已渲染的行计算，不新增数据库查询；全部大小未知时显示“—”。
+- 列表改为圆角卡片、灰底表头、60px 行高；图标放进浅色圆角方块（目录绿、软件包蓝、签名 / 校验和琥珀、其他灰）；状态改为浅色胶囊；类型改为灰色标签；上次 / 下次同步显示为“相对时间 + 月-日 时:分”两行。
+- 640px 以下表头变为可横滑的排序胶囊，行变为两行卡片（名称 + 状态 / 类型；大小与时间），空值单元格隐藏。
+- 删除 `prefers-color-scheme: dark` 样式，增加 `color-scheme` / `theme-color` 浅色声明。搜索、排序、无 JavaScript 链接、1000 项截断提示、CSP 脚本哈希与下载热路径未改。
+- 测试调整：首页面包屑、“首页”文字与“当前位置”标签的断言改为新设计（首页无面包屑、首项“镜像目录”）；`expectHeaderLayout` 的“面板距标题不超过 140px”改为标题、汇总卡与工具栏之间固定间距（28 / 36px）；新增汇总计数、大小未知和文件列表不显示汇总卡的单元测试。
+
+| 检查 | 结果 |
+| --- | --- |
+| `go vet ./...` | 通过 |
+| `go test -race -count=1 ./internal/mirrors` | 通过 |
+| `npm --prefix web run format:check` / `npm --prefix web run build` | 通过 |
+| E2E `public-directory.spec.ts`（`MIRRORDOCK_TEST_RSYNC=.cache/rsync/rsync-3.5.1/rsync`，临时测试二进制） | 2/2 通过 |
+| 浏览器实测（scratchpad 临时目录、127.0.0.1:48732 隔离实例，示例源未执行同步） | 1280 宽首页 / `/rocky/9/BaseOS/`、736 宽 `/github/`、375 与 320 宽首页和子目录：无横向滚动；搜索、按大小排序、条目计数正常，无控制台错误。发现并修复 2 处：`.site-wrap` 内边距覆盖了 `main` 顶部间距；手机端文件列表排序胶囊被桌面列宽挤压 |
+| open-code-review | 外部 LLM 未执行：`ocr review` 0 token，4/4 文件失败（“check your LLM configuration and API key”）。改用 `ocr review --preview` 与 `ocr rules check` 的选择与规则，由当前会话审查 4/4 个可审文件；排除的 2 个测试文件（默认路径）已人工核对。未发现需修复问题 |
+
+未验证：其他 E2E 规格未重跑（未涉及公开目录）；Linux 发行版浏览器观感；成功 / 同步中 / 失败等彩色状态胶囊只经单元与 E2E 断言，实测实例中的源均未同步，只看到“已发布”灰色胶囊。
+
 ## 管理台白绿浅色改版（2026-10-17）
 
 范围：未提交工作区中 `web/` 下 17 个文件（含删除 `web/src/app/theme.ts`）。设计依据为用户确认的概念稿（沿用其旧项目 video-rename 的设计语言）；用户要求只保留浅色。

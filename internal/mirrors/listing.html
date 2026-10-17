@@ -3,27 +3,36 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light">
+<meta name="theme-color" content="#ffffff">
 <link rel="icon" type="image/x-icon" href="/favicon.ico?v=2">
 <title>{{.Title}} · MirrorDock</title>
 <style>{{styles}}</style>
 </head>
 <body>
-<header class="site-header"><a class="brand" href="/"><span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M7 8.5h10M7 12h10M7 15.5h6"/></svg></span>MirrorDock</a></header>
-<main>
+<header class="site-header"><div class="site-wrap"><a class="brand" href="/"><span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 17V7l7 7 7-7v10"/></svg></span>MirrorDock</a><span class="site-caption">软件源镜像</span></div></header>
+<main class="site-wrap">
 <div class="directory-heading">
-<p class="location-label">当前位置</p>
-<nav class="directory-path" aria-label="目录路径"><ol class="path-segments">{{range $i, $crumb := .Crumbs}}<li>{{if $i}}<svg class="path-separator" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>{{end}}{{if eq $i (len $.Crumbs | minusOne)}}<span class="path-current" aria-current="page" title="{{$crumb.Name}}">{{if $i}}{{$crumb.Name}}{{else}}<svg class="home-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m3 10 9-7 9 7M5 9v12h5v-7h4v7h5V9"/></svg><span class="sr-only">首页</span>{{end}}</span>{{else}}<a href="{{$crumb.URL}}" title="{{$crumb.Name}}">{{if $i}}{{$crumb.Name}}{{else}}<svg class="home-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m3 10 9-7 9 7M5 9v12h5v-7h4v7h5V9"/></svg><span class="sr-only">首页</span>{{end}}</a>{{end}}</li>{{end}}</ol></nav>
+{{if gt (len .Crumbs) 1}}<nav class="directory-path" aria-label="目录路径"><ol class="path-segments">{{range $i, $crumb := .Crumbs}}<li>{{if $i}}<svg class="path-separator" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>{{end}}{{if eq $i (len $.Crumbs | minusOne)}}<span class="path-current" aria-current="page" title="{{$crumb.Name}}">{{$crumb.Name}}</span>{{else}}<a href="{{$crumb.URL}}" title="{{$crumb.Name}}">{{if not $i}}<svg class="home-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m3 10 9-7 9 7M5 9v12h5v-7h4v7h5V9"/></svg>{{end}}{{$crumb.Name}}</a>{{end}}</li>{{end}}</ol></nav>{{end}}
+<h1 class="page-title">{{.Heading}}<span class="title-dot" aria-hidden="true">.</span></h1>
+<p class="page-subtitle">{{if gt (len .Crumbs) 1}}{{.Title}}{{else}}本站同步的软件源与发布文件，点击名称进入目录下载。{{end}}</p>
 </div>
+{{with .Summary}}<dl class="summary" aria-label="镜像概况">
+<div><dt>镜像</dt><dd>{{.Count}}<small>个</small></dd></div>
+<div><dt>同步正常</dt><dd{{if .Healthy}} class="ok"{{end}}>{{.Healthy}}<small>个</small></dd></div>
+<div><dt>需要关注</dt><dd{{if .Attention}} class="bad"{{end}}>{{.Attention}}<small>个</small></dd></div>
+<div><dt>公开文件总量</dt><dd>{{.Size}}{{if .Unit}}<small>{{.Unit}}</small>{{end}}</dd></div>
+</dl>{{end}}
 <section aria-labelledby="files-heading">
 <div class="list-heading">
-<h2 id="files-heading">{{if .Projects}}镜像列表{{else}}文件列表{{end}} <span>{{len .Items}} 项{{if .More}}已列出{{end}}</span></h2>
-<label class="search" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/></svg><input type="search" placeholder="搜索当前目录的镜像..." aria-label="搜索当前目录" autocomplete="off"></label>
+<h2 id="files-heading">{{if .Projects}}全部镜像{{else}}文件列表{{end}} <span>{{len .Items}} 项{{if .More}}已列出{{end}}</span></h2>
+<label class="search" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/></svg><input type="search" placeholder="{{if .Projects}}搜索镜像…{{else}}搜索文件…{{end}}" aria-label="搜索当前目录" autocomplete="off"></label>
 </div>
 <div class="file-panel">
 <div class="table-scroll"><table{{if .Projects}} class="project-table"{{end}}>
 <thead><tr><th scope="col" aria-sort="ascending"><button type="button" data-sort="name">{{if .Projects}}镜像名{{else}}名称{{end}}<span class="sort-arrow" aria-hidden="true">↑</span></button></th>{{if .Projects}}<th scope="col" class="sync-status"><button type="button" data-sort="status">状态<span class="sort-arrow" aria-hidden="true">↕</span></button></th>{{else}}<th scope="col"><button type="button" data-sort="kind">类型<span class="sort-arrow" aria-hidden="true">↕</span></button></th>{{end}}<th scope="col" class="size"><button type="button" data-sort="bytes">大小<span class="sort-arrow" aria-hidden="true">↕</span></button></th>{{if .Projects}}<th scope="col" class="sync-time"><button type="button" data-sort="last">上次同步<span class="sort-arrow" aria-hidden="true">↕</span></button></th><th scope="col" class="sync-time"><button type="button" data-sort="next">下次同步<span class="sort-arrow" aria-hidden="true">↕</span></button></th>{{else}}<th scope="col" class="modified"><button type="button" data-sort="modified">修改时间<span class="sort-arrow" aria-hidden="true">↕</span></button></th>{{end}}</tr></thead>
 <tbody id="file-rows">{{range .Items}}<tr data-name="{{.Name}}" data-kind="{{.Kind}}" data-group="{{.Group}}" data-dir="{{.Dir}}" data-bytes="{{.Bytes}}" data-modified="{{.Timestamp}}" data-status="{{.Status}}" data-last="{{.LastTimestamp}}" data-next="{{.NextTimestamp}}">
-<td class="name"><a href="{{.URL}}" title="{{.Name}}"><span class="file-icon {{.Icon}}">{{template "icon" .Icon}}</span><span class="filename">{{.Name}}</span></a></td>{{if $.Projects}}<td class="sync-status">{{if .Project}}<span class="status-badge {{.StatusClass}}" title="所属项目最近同步状态">{{.Status}}</span>{{else}}—{{end}}</td>{{else}}<td class="kind">{{.Kind}}</td>{{end}}<td class="size">{{.Size}}</td>{{if $.Projects}}<td class="sync-time">{{if .LastTimestamp}}<time datetime="{{.LastTimestamp}}" title="{{.LastTimestamp}}">{{.LastSync}}</time>{{else}}—{{end}}</td><td class="sync-time">{{if .NextTimestamp}}<time datetime="{{.NextTimestamp}}" title="项目下次计划同步：{{.NextTimestamp}}">{{.NextSync}}</time>{{else}}—{{end}}</td>{{else}}<td class="modified">{{if .Timestamp}}<time datetime="{{.Timestamp}}" title="{{.Timestamp}}">{{.Modified}}</time>{{else}}—{{end}}</td>{{end}}
+<td class="name"><a href="{{.URL}}" title="{{.Name}}"><span class="file-icon {{.Icon}}">{{template "icon" .Icon}}</span><span class="filename">{{.Name}}</span></a></td>{{if $.Projects}}<td class="sync-status">{{if .Project}}<span class="status-badge {{.StatusClass}}" title="所属项目最近同步状态">{{.Status}}</span>{{else}}—{{end}}</td>{{else}}<td class="kind"><span class="kind-tag">{{.Kind}}</span></td>{{end}}<td class="size{{if lt .Bytes 0}} is-empty{{end}}">{{.Size}}</td>{{if $.Projects}}<td class="sync-time last{{if not .LastTimestamp}} is-empty{{end}}">{{if .LastTimestamp}}<time datetime="{{.LastTimestamp}}" title="{{.LastTimestamp}}"><b>{{.LastSync}}</b><span>{{.LastAt}}</span></time>{{else}}—{{end}}</td><td class="sync-time next{{if not .NextTimestamp}} is-empty{{end}}">{{if .NextTimestamp}}<time datetime="{{.NextTimestamp}}" title="项目下次计划同步：{{.NextTimestamp}}"><b>{{.NextSync}}</b><span>{{.NextAt}}</span></time>{{else}}—{{end}}</td>{{else}}<td class="modified{{if not .Timestamp}} is-empty{{end}}">{{if .Timestamp}}<time datetime="{{.Timestamp}}" title="{{.Timestamp}}">{{.Modified}}</time>{{else}}—{{end}}</td>{{end}}
 </tr>{{end}}</tbody>
 </table></div>
 <div id="empty-state" class="empty-state" {{if .Items}}hidden{{end}}><span class="empty-icon">{{template "icon" "folder"}}</span><h3>{{if .Items}}没有匹配的文件{{else}}目录为空{{end}}</h3><p>{{if .Items}}试试其他关键词。{{else}}文件发布后会出现在这里。{{end}}</p><button id="reset-filters" type="button" hidden>清除搜索</button></div>

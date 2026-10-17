@@ -35,6 +35,9 @@ async function expectHeaderLayout(page: Page) {
   const heading = await page.locator('.directory-heading').boundingBox()
   const toolbar = await page.locator('.list-heading').boundingBox()
   const panel = await page.locator('.file-panel').boundingBox()
+  const summary = (await page.locator('.summary').count())
+    ? await page.locator('.summary').boundingBox()
+    : null
   const title = await page.locator('#files-heading').boundingBox()
   const search = await page.locator('.search').boundingBox()
   expect(heading && toolbar && panel && title && search).toBeTruthy()
@@ -43,13 +46,17 @@ async function expectHeaderLayout(page: Page) {
     expect(Math.abs(box.width - panel!.width)).toBeLessThan(1)
   }
   expect(panel!.y - (toolbar!.y + toolbar!.height)).toBe(14)
+  // The heading, optional mirror summary and toolbar keep fixed rhythm.
+  const narrow = page.viewportSize()!.width <= 800
+  if (summary) expect(Math.round(summary.y - (heading!.y + heading!.height))).toBe(28)
+  const above = summary ?? heading!
+  expect(Math.round(toolbar!.y - (above.y + above.height))).toBe(narrow ? 28 : 36)
   expect(search!.x + search!.width).toBeLessThanOrEqual(panel!.x + panel!.width + 1)
-  if (page.viewportSize()!.width <= 800) {
+  if (narrow) {
     expect(search!.y).toBeGreaterThanOrEqual(title!.y + title!.height)
     expect(search!.width).toBeCloseTo(panel!.width, 0)
   } else {
     expect(search!.x).toBeGreaterThan(title!.x + title!.width)
-    expect(panel!.y - heading!.y).toBeLessThanOrEqual(140)
   }
 }
 
@@ -162,9 +169,9 @@ test('public directory layout, icons, search, sorting, unpaginated and safe file
       })
       await publicPage.goto(base + '/')
       const navigation = publicPage.getByRole('navigation', { name: '目录路径' })
-      await expect(navigation.locator('[aria-current="page"]')).toHaveText('首页')
-      await expect(navigation.locator('.home-icon')).toBeVisible()
-      await expect(navigation.getByRole('link')).toHaveCount(0)
+      const pageTitle = publicPage.getByRole('heading', { level: 1 })
+      await expect(pageTitle).toHaveAccessibleName('镜像目录')
+      await expect(navigation).toHaveCount(0)
       await expect(
         publicPage.locator(
           '.brand-caption, .public-label, .parent-link, .directory-slash, .action',
@@ -173,9 +180,13 @@ test('public directory layout, icons, search, sorting, unpaginated and safe file
       await publicPage.getByRole('link', { name: 'github', exact: true }).click()
       await expect(publicPage.locator('.project-table')).toBeVisible()
       await expect(publicPage.locator('#file-rows')).toContainText('同步成功')
+      await expect(publicPage.locator('.summary')).toContainText('同步正常1')
       await expect(publicPage.getByRole('button', { name: '上次同步', exact: false })).toBeVisible()
       await publicPage.getByRole('link', { name: 'mirror-client', exact: true }).click()
-      await expect(navigation.locator('li')).toHaveText(['首页', 'github', 'mirror-client'])
+      await expect(navigation.locator('li')).toHaveText(['镜像目录', 'github', 'mirror-client'])
+      await expect(navigation.locator('.home-icon')).toBeVisible()
+      await expect(pageTitle).toHaveAccessibleName('mirror-client')
+      await expect(publicPage.locator('.summary')).toHaveCount(0)
       await expect(navigation.getByRole('link', { name: 'github', exact: true })).toHaveAttribute(
         'href',
         '/github/',
@@ -185,7 +196,7 @@ test('public directory layout, icons, search, sorting, unpaginated and safe file
         navigation.getByRole('link', { name: 'mirror-client', exact: true }),
       ).toHaveCount(0)
       await expect(publicPage.getByRole('link', { name: '上级目录', exact: true })).toHaveCount(0)
-      await expect(publicPage.locator('.location-label')).toHaveText('当前位置')
+      await expect(publicPage.locator('.location-label')).toHaveCount(0)
       const rows = publicPage.locator('#file-rows tr:visible')
       await expect(rows).toHaveCount(15)
       await expect(rows.first()).toContainText('docs')
@@ -246,9 +257,9 @@ test('public directory layout, icons, search, sorting, unpaginated and safe file
       await publicPage.getByRole('link', { name: 'releases', exact: true }).click()
       await expect(publicPage.getByRole('heading', { name: '目录为空' })).toBeVisible()
       await expect(publicPage.getByRole('button', { name: '清除搜索' })).toBeHidden()
-      await navigation.getByRole('link', { name: '首页', exact: true }).click()
+      await navigation.getByRole('link', { name: '镜像目录', exact: true }).click()
       await expect(publicPage).toHaveURL(base + '/')
-      await expect(navigation.locator('[aria-current="page"]')).toHaveText('首页')
+      await expect(pageTitle).toHaveAccessibleName('镜像目录')
     } finally {
       await publicContext.close()
     }
@@ -444,7 +455,7 @@ sources:
     expect(decodeURIComponent(new URL(page.url()).pathname)).toBe(
       '/' + segments.slice(0, 7).join('/') + '/',
     )
-    await navigation.getByRole('link', { name: '首页', exact: true }).click()
+    await navigation.getByRole('link', { name: '镜像目录', exact: true }).click()
     await expect(page).toHaveURL(base + '/')
     const noJS = await browser.newContext({
       javaScriptEnabled: false,

@@ -1,8 +1,4 @@
 (() => {
-  const path = document.querySelector('.directory-path');
-  const showCurrentDirectory = () => { path.scrollLeft = path.scrollWidth; };
-  showCurrentDirectory();
-  window.addEventListener('resize', showCurrentDirectory);
   const body = document.getElementById('file-rows');
   const rows = Array.from(body.rows);
   const search = document.querySelector('input[type="search"]');

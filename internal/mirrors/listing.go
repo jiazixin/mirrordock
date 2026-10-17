@@ -42,14 +42,46 @@ var listingCSP = func() string {
 }()
 
 type listingItem struct {
-	Name, URL, Kind, Group, Icon string
-	Size, Modified, Timestamp    string
-	Bytes                        int64
-	Dir                          bool
-	Project                      bool
-	Status, StatusClass          string
-	LastSync, LastTimestamp      string
-	NextSync, NextTimestamp      string
+	Name, URL, Kind, Group, Icon    string
+	Size, Modified, Timestamp       string
+	Bytes                           int64
+	Dir                             bool
+	Project                         bool
+	Status, StatusClass             string
+	LastSync, LastAt, LastTimestamp string
+	NextSync, NextAt, NextTimestamp string
+}
+
+// listingSummary is derived from the rows already rendered, so the summary card
+// adds no store queries beyond the project metadata the table needs.
+type listingSummary struct {
+	Count, Healthy, Attention int
+	Size, Unit                string
+}
+
+func summarizeProjects(items []listingItem) *listingSummary {
+	s := &listingSummary{Size: "—"}
+	var total int64
+	sized := false
+	for _, item := range items {
+		if !item.Project {
+			continue
+		}
+		s.Count++
+		switch item.StatusClass {
+		case "success":
+			s.Healthy++
+		case "failure":
+			s.Attention++
+		}
+		if item.Bytes >= 0 {
+			total, sized = total+item.Bytes, true
+		}
+	}
+	if sized {
+		s.Size, s.Unit, _ = strings.Cut(fileSize(total), " ")
+	}
+	return s
 }
 
 type SourceListingInfo struct {
@@ -57,9 +89,10 @@ type SourceListingInfo struct {
 	Last, Next time.Time
 }
 
-func listingTime(at, now time.Time) (string, string) {
+// listingTime returns a relative label, a short local time and an RFC 3339 value.
+func listingTime(at, now time.Time) (string, string, string) {
 	if at.IsZero() {
-		return "—", ""
+		return "—", "", ""
 	}
 	delta := now.Sub(at)
 	suffix := "前"
@@ -77,7 +110,8 @@ func listingTime(at, now time.Time) (string, string) {
 	case suffix == "后":
 		label = "即将同步"
 	}
-	return label, at.In(time.Local).Format(time.RFC3339)
+	local := at.In(time.Local)
+	return label, local.Format("01-02 15:04"), local.Format(time.RFC3339)
 }
 
 func projectItem(item listingItem, p Publication, info SourceListingInfo) listingItem {
@@ -107,8 +141,8 @@ func projectItem(item listingItem, p Publication, info SourceListingInfo) listin
 		item.Bytes, item.Size = p.Current.Summary.Bytes, fileSize(p.Current.Summary.Bytes)
 	}
 	now := time.Now()
-	item.LastSync, item.LastTimestamp = listingTime(info.Last, now)
-	item.NextSync, item.NextTimestamp = listingTime(info.Next, now)
+	item.LastSync, item.LastAt, item.LastTimestamp = listingTime(info.Last, now)
+	item.NextSync, item.NextAt, item.NextTimestamp = listingTime(info.Next, now)
 	return item
 }
 
@@ -227,7 +261,7 @@ func renderListing(w http.ResponseWriter, r *http.Request, items []listingItem, 
 	if len(items) > 1000 {
 		items, more = items[:1000], true
 	}
-	crumbs := []listingCrumb{{Name: "首页", URL: "/"}}
+	crumbs := []listingCrumb{{Name: "镜像目录", URL: "/"}}
 	u := "/"
 	for segment := range strings.SplitSeq(strings.Trim(r.URL.Path, "/"), "/") {
 		if segment == "" {
@@ -236,15 +270,21 @@ func renderListing(w http.ResponseWriter, r *http.Request, items []listingItem, 
 		u += url.PathEscape(segment) + "/"
 		crumbs = append(crumbs, listingCrumb{Name: segment, URL: u})
 	}
-	title := "首页"
+	title, heading := "镜像目录", "镜像目录"
 	if len(crumbs) > 1 {
-		title = r.URL.Path
+		title, heading = r.URL.Path, crumbs[len(crumbs)-1].Name
+	}
+	projects := slices.ContainsFunc(items, func(i listingItem) bool { return i.Project })
+	var summary *listingSummary
+	if projects {
+		summary = summarizeProjects(items)
 	}
 	_ = listing.Execute(w, struct {
-		Title    string
-		Crumbs   []listingCrumb
-		Items    []listingItem
-		More     bool
-		Projects bool
-	}{title, crumbs, items, more, slices.ContainsFunc(items, func(i listingItem) bool { return i.Project })})
+		Title, Heading string
+		Crumbs         []listingCrumb
+		Items          []listingItem
+		More           bool
+		Projects       bool
+		Summary        *listingSummary
+	}{title, heading, crumbs, items, more, projects, summary})
 }

@@ -77,35 +77,71 @@ func TestListingEscapingBreadcrumbsAndScriptPolicy(t *testing.T) {
 
 func TestListingHomeAndFullPathNavigation(t *testing.T) {
 	for _, tc := range []struct {
-		path, title string
-		links       []string
+		path, title, heading string
+		links                []string
 	}{
-		{"/", "首页", nil},
-		{"/github/repo%20%26%20%E9%95%9C%E5%83%8F/v1/", "/github/repo &amp; 镜像/v1/", []string{`href="/"`, `href="/github/"`, `href="/github/repo%20&amp;%20%E9%95%9C%E5%83%8F/"`}},
+		{"/", "镜像目录", "镜像目录", nil},
+		{"/github/repo%20%26%20%E9%95%9C%E5%83%8F/v1/", "/github/repo &amp; 镜像/v1/", "v1", []string{`href="/"`, `href="/github/"`, `href="/github/repo%20&amp;%20%E9%95%9C%E5%83%8F/"`}},
 	} {
 		t.Run(tc.path, func(t *testing.T) {
 			w := httptest.NewRecorder()
 			renderListing(w, httptest.NewRequest("GET", tc.path, nil), nil, false)
 			body := w.Body.String()
-			if !strings.Contains(body, "<title>"+tc.title+" · MirrorDock</title>") || !strings.Contains(body, `class="home-icon"`) {
-				t.Fatal("missing home icon or full path title")
+			if !strings.Contains(body, "<title>"+tc.title+" · MirrorDock</title>") || !strings.Contains(body, `<h1 class="page-title">`+tc.heading+`<span class="title-dot" aria-hidden="true">.</span></h1>`) {
+				t.Fatal("missing page title or heading")
 			}
 			for _, link := range tc.links {
 				if !strings.Contains(body, link) {
 					t.Errorf("missing path link %s", link)
 				}
 			}
-			_, nav, _ := strings.Cut(body, `<nav class="directory-path"`)
+			_, nav, found := strings.Cut(body, `<nav class="directory-path"`)
+			if tc.links == nil {
+				// The home page heading names the location, so it has no breadcrumb.
+				if found || strings.Contains(body, `class="home-icon"`) {
+					t.Fatal("home page must not render a breadcrumb")
+				}
+				return
+			}
 			nav, _, _ = strings.Cut(nav, "</nav>")
-			if strings.Count(nav, `<a href=`) != len(tc.links) || strings.Count(nav, `aria-current="page"`) != 1 || !strings.Contains(nav, `<span class="path-current" aria-current="page"`) {
+			if strings.Count(nav, `<a href=`) != len(tc.links) || strings.Count(nav, `aria-current="page"`) != 1 || !strings.Contains(nav, `<span class="path-current" aria-current="page"`) || !strings.Contains(nav, `class="home-icon"`) {
 				t.Fatal("only ancestors should be links; current directory must be a non-clickable span")
 			}
-			for _, removed := range []string{"全部镜像", "镜像目录", "公开下载", "上级目录", `class="parent-link"`, `class="directory-slash"`, `class="action"`} {
+			for _, removed := range []string{"公开下载", "上级目录", "当前位置", `class="parent-link"`, `class="directory-slash"`, `class="action"`, "prefers-color-scheme"} {
 				if strings.Contains(body, removed) {
 					t.Errorf("obsolete UI: %s", removed)
 				}
 			}
 		})
+	}
+}
+
+func TestListingProjectSummary(t *testing.T) {
+	items := []listingItem{
+		{Name: "ok", Project: true, StatusClass: "success", Bytes: 1024},
+		{Name: "bad", Project: true, StatusClass: "failure", Bytes: 2048},
+		{Name: "pending", Project: true, StatusClass: "neutral", Bytes: -1},
+		{Name: "parent", Dir: true, Bytes: 1 << 40},
+	}
+	got := summarizeProjects(items)
+	if *got != (listingSummary{Count: 3, Healthy: 1, Attention: 1, Size: "3.0", Unit: "KiB"}) {
+		t.Fatalf("%+v", *got)
+	}
+	if got := summarizeProjects(items[2:]); got.Size != "—" || got.Unit != "" {
+		t.Fatalf("unknown size must not render as zero: %+v", *got)
+	}
+	w := httptest.NewRecorder()
+	renderListing(w, httptest.NewRequest("GET", "/", nil), items, false)
+	body := w.Body.String()
+	for _, want := range []string{`<dl class="summary" aria-label="镜像概况">`, `<dd class="ok">1<small>个</small></dd>`, `<dd class="bad">1<small>个</small></dd>`, `<dd>3.0<small>KiB</small></dd>`, "全部镜像"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("missing %s", want)
+		}
+	}
+	w = httptest.NewRecorder()
+	renderListing(w, httptest.NewRequest("GET", "/repo/", nil), []listingItem{newListingItem("a.rpm", "/repo/a.rpm", false, nil)}, false)
+	if body := w.Body.String(); strings.Contains(body, `class="summary"`) || !strings.Contains(body, "文件列表") {
+		t.Fatal("file listings must not render the mirror summary")
 	}
 }
 
