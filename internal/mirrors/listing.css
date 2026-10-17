@@ -358,6 +358,10 @@ th button:hover,th[aria-sort] button {
 th[aria-sort] .sort-arrow {
   color:var(--brand)
 }
+th.kind button {
+  /* Line the label up with the text inside .kind-tag, not the tag edge. */
+  padding-left:8px
+}
 td {
   height:60px;
   padding:0 16px;
@@ -640,7 +644,7 @@ tbody tr:hover {
     background:none;
     flex-shrink:0
   }
-  th button {
+  th button,th.kind button {
     height:30px;
     padding:0 24px 0 12px;
     border:1px solid var(--line-strong);

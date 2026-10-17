@@ -77,17 +77,18 @@ func TestListingEscapingBreadcrumbsAndScriptPolicy(t *testing.T) {
 
 func TestListingHomeAndFullPathNavigation(t *testing.T) {
 	for _, tc := range []struct {
-		path, title, heading string
-		links                []string
+		path, title, heading, dot string
+		links                     []string
 	}{
-		{"/", "镜像目录", "镜像目录", nil},
-		{"/github/repo%20%26%20%E9%95%9C%E5%83%8F/v1/", "/github/repo &amp; 镜像/v1/", "v1", []string{`href="/"`, `href="/github/"`, `href="/github/repo%20&amp;%20%E9%95%9C%E5%83%8F/"`}},
+		{"/", "镜像目录", "镜像目录", `<span class="title-dot" aria-hidden="true">.</span>`, nil},
+		// Directory names often contain dots, so they get no decorative period or path subtitle.
+		{"/github/repo%20%26%20%E9%95%9C%E5%83%8F/v1/", "/github/repo &amp; 镜像/v1/", "v1", "", []string{`href="/"`, `href="/github/"`, `href="/github/repo%20&amp;%20%E9%95%9C%E5%83%8F/"`}},
 	} {
 		t.Run(tc.path, func(t *testing.T) {
 			w := httptest.NewRecorder()
 			renderListing(w, httptest.NewRequest("GET", tc.path, nil), nil, false)
 			body := w.Body.String()
-			if !strings.Contains(body, "<title>"+tc.title+" · MirrorDock</title>") || !strings.Contains(body, `<h1 class="page-title">`+tc.heading+`<span class="title-dot" aria-hidden="true">.</span></h1>`) {
+			if !strings.Contains(body, "<title>"+tc.title+" · MirrorDock</title>") || !strings.Contains(body, `<h1 class="page-title">`+tc.heading+tc.dot+`</h1>`) {
 				t.Fatal("missing page title or heading")
 			}
 			for _, link := range tc.links {
@@ -102,6 +103,9 @@ func TestListingHomeAndFullPathNavigation(t *testing.T) {
 					t.Fatal("home page must not render a breadcrumb")
 				}
 				return
+			}
+			if strings.Contains(body, `class="page-subtitle"`) {
+				t.Fatal("directory pages must not repeat the path below the heading")
 			}
 			nav, _, _ = strings.Cut(nav, "</nav>")
 			if strings.Count(nav, `<a href=`) != len(tc.links) || strings.Count(nav, `aria-current="page"`) != 1 || !strings.Contains(nav, `<span class="path-current" aria-current="page"`) || !strings.Contains(nav, `class="home-icon"`) {

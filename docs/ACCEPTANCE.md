@@ -1,5 +1,21 @@
 # 验收记录
 
+## 公开目录标题与表头对齐微调（2026-10-17）
+
+范围：`internal/mirrors/listing.{html,css}`、`internal/mirrors/listing_test.go`。
+
+- 子目录标题不再加绿色句点（目录名常含 `.`，如 `v4.2.7`，句点有歧义），也不再显示与面包屑重复的完整路径副标题；首页“镜像目录.”与说明文字保持不变。
+- 排序箭头已为绝对定位、不占文字宽度；类型列表头额外左移 8px，对齐 `.kind-tag` 内的文字而非标签边缘。640px 以下排序胶囊仍为统一 12px 内边距。
+- 单元测试：首页仍断言句点；子目录断言无句点、无 `page-subtitle`。
+
+| 检查 | 结果 |
+| --- | --- |
+| `go test -race -count=1 ./internal/mirrors`、`go vet ./internal/mirrors`、`git diff --check` | 通过 |
+| E2E `public-directory.spec.ts`（`MIRRORDOCK_TEST_RSYNC=.cache/rsync/rsync-3.5.1/rsync`，scratchpad 临时二进制） | 2/2 通过 |
+| 浏览器实测（scratchpad 静态渲染的 `/github/openlist/v4.2.7/` 示例页） | 1280 宽：类型 / 大小 / 修改时间表头文字与首行内容文字横坐标一致（664/664、822/822、967/967）；375 宽排序胶囊内边距一致 |
+| open-code-review | 未执行外部 LLM；`ocr delegate preview/rule` 选出 2/2 可审文件（listing.css、listing.html）由当前会话审查，排除的 listing_test.go（default_path）已人工核对。未发现正确性、安全性或性能问题 |
+| 未执行 | Web 格式检查与构建（本次无 `web/` 源码变化）、其他 E2E |
+
 ## 管理台切换过渡动画（2026-10-17）
 
 范围：`web/src/app/router.ts`、`web/src/layouts/Shell.vue`、`web/src/styles/global.css`。用户要求为管理台点击切换添加一套线性过渡动画。
