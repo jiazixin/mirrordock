@@ -2,10 +2,11 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { CircleAlert, CirclePause, Package, RefreshCw, Server, Tag, Unplug } from '@lucide/vue'
 import RunDetail from '../runs/RunDetail.vue'
+import SelectField from '../../components/SelectField.vue'
 import { api } from '../../app/api'
 import { state, notify, perform, runAction, rerunSource } from '../../app/state'
 import { bytes, duration, phases, sourceType } from '../../app/format'
-import type { Run, Source } from '../../app/types'
+import type { Run, Source, SourceType } from '../../app/types'
 
 const HOUR = 3_600_000
 const PAST = 24 * HOUR
@@ -16,6 +17,8 @@ const active = ['running', 'pausing']
 const held = ['paused', 'interrupted']
 const terminal = ['succeeded', 'failed', 'timed_out', 'cancelled']
 const steps = ['准备', '传输', '校验', '发布']
+const types: SourceType[] = ['rsync', 'reposync', 'github_release']
+const TYPE_KEY = 'mirrordock.overview.type'
 
 const now = ref(Date.now())
 const history = ref<Run[]>([])
@@ -238,6 +241,35 @@ const lanes = computed(() =>
   }),
 )
 
+// The timeline type filter is a per-browser convenience; storage may be unavailable.
+const stored = ref<SourceType | ''>('')
+try {
+  const saved = localStorage.getItem(TYPE_KEY)
+  if (types.includes(saved as SourceType)) stored.value = saved as SourceType
+} catch {}
+const typeOptions = computed(() => [
+  { value: '' as const, label: `全部类型 · ${sources.value.length}` },
+  ...types.flatMap((type) => {
+    const count = sources.value.filter((source) => source.type === type).length
+    return count ? [{ value: type, label: `${sourceType(type)} · ${count}` }] : []
+  }),
+])
+// A remembered type with no sources left falls back to all without forgetting the choice.
+const laneType = computed<SourceType | ''>({
+  get: () =>
+    typeOptions.value.some((option) => option.value === stored.value) ? stored.value : '',
+  set: (value) => {
+    stored.value = value
+    try {
+      if (value) localStorage.setItem(TYPE_KEY, value)
+      else localStorage.removeItem(TYPE_KEY)
+    } catch {}
+  },
+})
+const shownLanes = computed(() =>
+  laneType.value ? lanes.value.filter((lane) => lane.source.type === laneType.value) : lanes.value,
+)
+
 const live = computed(() => {
   const merged = new Map<number, Run>()
   for (const run of [...state.runs, ...state.liveRuns])
@@ -407,15 +439,27 @@ const kpis = computed(() => {
           <h2 id="timeline-title">同步时间轴</h2>
           <small>过去 24 小时 · 未来 12 小时 · 每行一个同步源</small>
         </div>
-        <div
-          class="legend"
-          aria-hidden="true"
-        >
-          <span><i class="swatch ok" />成功</span><span><i class="swatch run" />运行中</span
-          ><span><i class="swatch fail" />失败 / 超时</span
-          ><span><i class="swatch held" />暂停 / 中断</span
-          ><span><i class="swatch plan" />计划</span
-          ><span><i class="swatch plan skip" />将跳过</span>
+        <div class="timeline-tools">
+          <div
+            class="legend"
+            aria-hidden="true"
+          >
+            <span><i class="swatch ok" />成功</span><span><i class="swatch run" />运行中</span
+            ><span><i class="swatch fail" />失败 / 超时</span
+            ><span><i class="swatch held" />暂停 / 中断</span
+            ><span><i class="swatch plan" />计划</span
+            ><span><i class="swatch plan skip" />将跳过</span>
+          </div>
+          <div
+            v-if="typeOptions.length > 2"
+            class="lane-filter"
+          >
+            <SelectField
+              v-model="laneType"
+              aria-label="按同步方式筛选时间轴"
+              :options="typeOptions"
+            />
+          </div>
         </div>
       </div>
       <div class="lanes-scroll">
@@ -439,7 +483,7 @@ const kpis = computed(() => {
             <span class="lane-next">下次计划</span>
           </div>
           <div
-            v-for="lane in lanes"
+            v-for="lane in shownLanes"
             :key="lane.source.id"
             class="lane"
             :class="{ disabled: !lane.source.enabled }"
@@ -853,6 +897,15 @@ const kpis = computed(() => {
   color: var(--blue);
   font-size: 12.5px;
   font-weight: 600;
+}
+.timeline-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 20px;
+}
+.lane-filter {
+  width: 200px;
 }
 .legend {
   display: flex;

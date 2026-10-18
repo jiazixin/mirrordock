@@ -1,5 +1,21 @@
 # 验收记录
 
+## 概览时间轴按同步方式筛选（2026-10-18）
+
+范围：`web/src/features/overview/Overview.vue`、新增 `web/e2e/overview-filter.spec.ts`、README 一句说明。后端与配置协议未改动。
+
+- 时间轴卡片头在图例右侧新增下拉框：“全部类型 · N”及当前存在的各同步方式（Rsync / Reposync / GitHub Release，附源数量）；只有一种同步方式时不显示。选中后只显示该类型的行。
+- 选择保存在浏览器 `localStorage`（键 `mirrordock.overview.type`），选“全部类型”时移除；存储不可用时照常工作。记住的类型已无源时回退到全部，但不清除记忆，配置加载前也不会被误清。
+- 顶部 KPI、“下一次计划”、空状态与截断提示仍按全部源计算，不受筛选影响。
+
+| 检查 | 结果 |
+| --- | --- |
+| `npm --prefix web run format:check` / `npm --prefix web run build`（含 `vue-tsc`） | 通过 |
+| E2E 全量（scratchpad 临时二进制） | 17 通过，2 跳过（`mirrordock.spec.ts`、`public-directory.spec.ts` 首例需 `MIRRORDOCK_TEST_RSYNC`，本机仅有 openrsync）；新增 `overview-filter.spec.ts` 覆盖选项计数、筛选、KPI 不变、刷新后记住、回到全部移除记忆、单一类型隐藏下拉与过期记忆回退 |
+| 截图核对（时间轴卡片，1440 宽） | 下拉位于图例右侧，筛选后仅显示 3 行 GitHub Release；375 宽截图恰逢侧栏收起动画被遮挡，未作为结论 |
+| open-code-review | 托管模式，未调用外部 LLM；`ocr delegate preview/rule` 选出 1/1 可审文件（Overview.vue），由当前会话审查，未发现正确性、安全性或性能问题；排除的 `web/e2e/overview-filter.spec.ts`（default_path）已人工核对 |
+| 未执行 | 窄屏无遮挡截图；需现代 rsync 的两例 E2E；Go 测试（无 Go 改动） |
+
 ## 同步任务按类型并发（2026-10-18）
 
 范围：`internal/config/config.go`（新增 `settings.concurrency`）、`internal/runs/runs.go`（固定 2 个 worker 改为按类型调度）、`web/src/features/settings/Settings.vue`、`web/src/app/types.ts`、`configs/config.example.yaml`、README/DESIGN；测试 `internal/config/config_test.go`、新增 `internal/runs/concurrency_test.go`、`web/e2e/mirrordock.spec.ts`。
