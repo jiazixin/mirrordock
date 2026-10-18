@@ -274,7 +274,7 @@ test('management pagination covers complete history, filtering, page sizes, jump
     await expect(page.getByRole('columnheader', { name: '耗时', exact: true })).toBeVisible()
     await expect(page.getByRole('columnheader', { name: '数据量', exact: true })).toBeVisible()
     await expect(page.locator('tbody tr').first().locator('td').nth(4)).toHaveText('1.0 MiB')
-    const centered = ['center', 'left', 'center', 'center', 'center', 'center', 'center']
+    const centered = Array(7).fill('center')
     expect(await aligns('thead th')).toEqual(centered)
     expect(await aligns('tbody tr:first-child td')).toEqual(centered)
     await page.screenshot({ path: testInfo.outputPath('records-columns.png'), fullPage: false })
@@ -298,7 +298,7 @@ test('management pagination covers complete history, filtering, page sizes, jump
     await expect(pager).toContainText('共 0 条记录')
     expect(await aligns('thead th')).toEqual([
       'center',
-      'left',
+      'center',
       'center',
       'center',
       'center',

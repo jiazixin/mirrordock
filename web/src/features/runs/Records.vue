@@ -104,7 +104,7 @@ async function clear() {
           <thead>
             <tr>
               <th class="center">时间</th>
-              <th>同步源</th>
+              <th class="center">同步源</th>
               <th class="center">状态</th>
               <th class="center">耗时</th>
               <th class="center">数据量</th>
@@ -125,7 +125,7 @@ async function clear() {
                   :datetime="run.created_at"
                 />
               </td>
-              <td>
+              <td class="center">
                 <strong>{{ run.name }}</strong
                 ><small>{{ sourceType(run.type) }} · #{{ run.id }}</small>
               </td>
