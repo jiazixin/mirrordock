@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import SelectField from '../../components/SelectField.vue'
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { Plus, Trash2, Save } from '@lucide/vue'
 import Modal from '../../components/Modal.vue'
 import OptionCard from '../../components/OptionCard.vue'
 import type { Source } from '../../app/types'
 import { clone, state, saveConfiguration } from '../../app/state'
+import GitHubBatch from './GitHubBatch.vue'
+import { splitPatterns, staggerCrons, validateRows, type BatchRow } from './githubBatch'
 const props = defineProps<{ source?: Source }>()
 const emit = defineEmits<{ close: [] }>()
 function blank(): Source {
@@ -55,7 +57,16 @@ const keys = ref((draft.value.reposync.gpg_keys ?? []).join('\n'))
 const architectures = ref((draft.value.reposync.architectures ?? []).join(', '))
 const error = ref('')
 const busy = ref(false)
+const batchMode = ref(false)
+const batchRows = ref<BatchRow[]>([])
+const batch = computed(
+  () => batchMode.value && !props.source && draft.value.type === 'github_release',
+)
 const revision = state.config?.revision
+const title = computed(() => {
+  if (props.source) return '编辑同步源'
+  return batch.value ? '批量新增同步源' : '新增同步源'
+})
 const flags = [
   { key: 'preserve_links', label: '保留符号链接', description: '保留链接结构' },
   { key: 'preserve_times', label: '保留修改时间', description: '沿用上游时间' },
@@ -90,6 +101,26 @@ function number(key: 'uid' | 'gid', event: Event) {
   const raw = (event.target as HTMLInputElement).value
   draft.value.rsync[key] = raw === '' ? null : Number(raw)
 }
+// batchSources expands the shared draft into one source per preview row;
+// the whole batch is written in a single revision-checked save.
+function batchSources(shared: Source, existing: Source[]): Source[] {
+  const rows = batchRows.value
+  if (!rows.length) throw new Error('请至少填写一个 GitHub 仓库')
+  if (validateRows(rows, existing).some((errors) => Object.keys(errors).length))
+    throw new Error('请先修正预览表中标红的项')
+  const crons = staggerCrons(shared.schedule.cron, rows.length)?.crons
+  return rows.map((row, index) => {
+    const source = clone(shared)
+    source.id = row.id
+    source.name = row.name.trim()
+    source.dest = row.dest
+    const patterns = splitPatterns(row.patterns)
+    source.github_release.repository = row.repository
+    if (patterns.length) source.github_release.asset_patterns = patterns
+    source.schedule.cron = crons?.[index] ?? shared.schedule.cron
+    return source
+  })
+}
 async function save() {
   if (!state.config) return
   busy.value = true
@@ -110,9 +141,12 @@ async function save() {
       .map((v) => v.trim())
       .filter(Boolean)
     const config = clone(state.config.config)
-    const index = config.sources.findIndex((item) => item.id === props.source?.id)
-    if (index >= 0) config.sources[index] = source
-    else config.sources.push(source)
+    if (batch.value) config.sources.push(...batchSources(source, config.sources))
+    else {
+      const index = config.sources.findIndex((item) => item.id === props.source?.id)
+      if (index >= 0) config.sources[index] = source
+      else config.sources.push(source)
+    }
     await saveConfiguration(config, undefined, undefined, revision)
     emit('close')
   } catch (e) {
@@ -124,7 +158,7 @@ async function save() {
 </script>
 <template>
   <Modal
-    :title="source ? '编辑同步源' : '新增同步源'"
+    :title="title"
     wide
     @close="emit('close')"
     ><form
@@ -132,12 +166,12 @@ async function save() {
       @submit.prevent="save"
     >
       <div class="form-grid">
-        <label
+        <label v-if="!batch"
           >源名称<input
             v-model="draft.name"
             required
             placeholder="例如 RockyLinux 9" /></label
-        ><label
+        ><label v-if="!batch"
           >唯一标识<input
             v-model="draft.id"
             required
@@ -155,13 +189,23 @@ async function save() {
                 { value: 'github_release', label: 'GitHub Release' },
               ] satisfies { value: Source['type']; label: string }[]
             " /></label
-        ><label
+        ><label v-if="!batch"
           >目的目录 · dest<input
             v-model="draft.dest"
             required
             placeholder="rockylinux/9"
           /><small>镜像地址：/{{ draft.dest || 'dest' }}/</small></label
         >
+      </div>
+      <div
+        v-if="!source && draft.type === 'github_release'"
+        class="batch-switch"
+      >
+        <OptionCard
+          v-model="batchMode"
+          label="批量添加"
+          description="一次填入多个仓库，共用下方的 Release 数量、附件规则与运行计划"
+        />
       </div>
       <section class="form-section">
         <h3>运行计划</h3>
@@ -269,8 +313,14 @@ async function save() {
         class="form-section"
       >
         <h3>Release 附件</h3>
+        <GitHubBatch
+          v-if="batch"
+          v-model:rows="batchRows"
+          :cron="draft.schedule.cron"
+          :shared-patterns="lines(patterns)"
+        />
         <div class="form-grid">
-          <label
+          <label v-if="!batch"
             >GitHub 仓库<input
               v-model="draft.github_release.repository"
               required
@@ -285,7 +335,8 @@ async function save() {
           >
         </div>
         <label
-          >附件 glob<textarea
+          >{{ batch ? '共用附件 glob' : '附件 glob'
+          }}<textarea
             v-model="patterns"
             rows="3"
             placeholder="一行一条，例如 *linux*amd64*"
@@ -359,6 +410,9 @@ async function save() {
 </template>
 
 <style scoped>
+.batch-switch {
+  margin-top: 18px;
+}
 .source-option-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

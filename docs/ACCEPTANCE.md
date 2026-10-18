@@ -1,5 +1,23 @@
 # 验收记录
 
+## GitHub Release 批量新增同步源（2026-10-18）
+
+范围：`web/src/features/sources/SourceEditor.vue`、新增 `web/src/features/sources/GitHubBatch.vue`、`web/src/features/sources/githubBatch.ts`、`web/e2e/github-batch.spec.ts`、README 一句说明。后端与配置协议未改动。
+
+- 仅在“新增同步源”且同步方式为 GitHub Release 时出现“批量添加”开关；编辑已有源不出现。开启后隐藏单个源的名称/唯一标识/dest/仓库输入，改为多行仓库输入（换行、空格或逗号分隔；接受 `owner/repo`、`github.com` 链接、`git@github.com:` 地址，去掉 `.git` 与 `?`/`#`，大小写不敏感去重；无法识别的条目单独提示并忽略）。
+- 预览表每行可改唯一标识、源名称、dest、附件 glob（逗号分隔，留空沿用共用 glob）。id 依次尝试仓库名、`owner-repo`、`owner-repo-N`，取 id 与 dest 均不冲突的第一个；dest 为“前缀/slug”，前缀默认 `github`，只改动用户未手动编辑的 dest。前端按后端规则提示 id 格式/重复、名称为空、dest 非规范/保留/与已有源或其他行重复或嵌套；有错误时拒绝保存。
+- Release 数量、共用 glob、Cron、启用状态共用；Cron 分钟字段为单个数字时按 `min(10, max(1, ⌊60/N⌋))` 分钟间隔递增（对 60 取模，小时等字段不变），否则全部使用同一 Cron 并提示。
+- 保存时把全部新源追加到配置，经一次 `PUT /api/config`（revision 检查、原子写回）写入；后端校验失败则整批不写入。
+
+| 检查 | 结果 |
+| --- | --- |
+| `npm --prefix web run format:check` / `npm --prefix web run build`（含 `vue-tsc`） | 通过 |
+| E2E 全量（scratchpad 临时二进制，修复前） | 16 通过，2 跳过（`mirrordock.spec.ts`、`public-directory.spec.ts` 首例需 `MIRRORDOCK_TEST_RSYNC`，本机仅有 openrsync） |
+| E2E `github-batch.spec.ts` + `preflight.spec.ts`（审查修复后） | 9/9 通过 |
+| 截图核对（1440 宽弹窗、375 宽） | 桌面预览表不再横向溢出；窄屏表格在 `.table-scroll` 内横向滚动 |
+| open-code-review | 托管模式，未调用外部 LLM；`ocr delegate preview/rule` 选出 3/3 可审文件（SourceEditor.vue、GitHubBatch.vue、githubBatch.ts），由当前会话审查；排除的 `web/e2e/github-batch.spec.ts`（default_path）已人工核对。发现并修复：`gitlab.com/a/b` 被误识别为仓库 `gitlab.com/a`（现拒绝含 `.` 的 owner）、GitHub 链接带查询串/片段无法识别、标题嵌套三元改为计算属性；均补入 E2E |
+| 未执行 | 需现代 rsync 的两例 E2E；Go 测试（无 Go 改动）；真实 GitHub 同步（测试源均未运行） |
+
 ## 运行记录与计划管理表格居中（2026-10-18）
 
 范围：`web/src/features/runs/Records.vue`、`web/src/features/schedules/Schedules.vue`、`web/src/styles/global.css`、`web/e2e/pagination.spec.ts`。
