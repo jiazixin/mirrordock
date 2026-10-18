@@ -324,26 +324,6 @@ const nextPlan = computed(
       .map((lane) => ({ name: lane.source.name, t: upcoming(lane.source)! }))
       .sort((a, b) => a.t - b.t)[0],
 )
-const headline = computed(() =>
-  running.value.length
-    ? `${running.value.length} 个任务运行中`
-    : queued.value.length
-      ? `${queued.value.length} 个任务排队中`
-      : attention.value.length
-        ? `${attention.value.length} 项需要处理`
-        : '全部正常',
-)
-const tone = computed(() =>
-  running.value.length
-    ? 'live'
-    : queued.value.length
-      ? ''
-      : attention.value.length
-        ? attention.value.some((item) => !held.includes(item.run.state))
-          ? 'bad'
-          : 'warn'
-        : 'good',
-)
 const kpis = computed(() => {
   const list = sources.value
   const { succeeded, failed, timedOut, evaluated } = counts.value
@@ -401,10 +381,6 @@ const kpis = computed(() => {
     </div>
 
     <header class="overview-hero">
-      <div class="hero-line">
-        <strong :class="tone">{{ headline }}</strong
-        ><span>{{ day(now) }} {{ clock(now) }} · {{ state.info?.timezone ?? '—' }}</span>
-      </div>
       <div class="hero-stats">
         <article
           v-for="item in kpis"
@@ -788,36 +764,10 @@ const kpis = computed(() => {
   border-radius: var(--radius);
   background: var(--tint);
 }
-.hero-line {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 4px 14px;
-}
-.hero-line strong {
-  font-size: 17px;
-  font-weight: 700;
-}
-.hero-line strong.good {
-  color: var(--ok);
-}
-.hero-line strong.live {
-  color: var(--blue);
-}
-.hero-line strong.warn {
-  color: var(--amb);
-}
-.hero-line strong.bad {
-  color: var(--red);
-}
-.hero-line span {
-  font-size: 13px;
-  color: var(--t3);
-}
 .hero-stats {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  margin: 14px 0 12px;
+  margin: 0 0 12px;
 }
 .hero-stats article {
   display: flex;
