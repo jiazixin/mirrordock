@@ -1,11 +1,27 @@
 # 验收记录
 
+## 公开目录目录行去掉尾部斜杠、悬停下划线可见（2026-10-18）
+
+范围：修改 `internal/mirrors/listing.html`、`listing.css`、DESIGN；测试 `listing_test.go`、`public-directory.spec.ts`。用户要求：目录名后不带“/”，改为常见的鼠标移入时名称下方出现横线。
+
+- 目录行只渲染名称；删除 `.dir-slash`。`tr.is-dir` 保留，用于手机布局取消图标占位。
+- 原悬停下划线颜色为 `--line-strong`，且 `.filename` 行盒仅 17px、`overflow:hidden` 把位移 3px 的下划线裁掉，实际看不到。改为随文字颜色、1px 粗，并给 `.filename` 设 22px 行高留出空间；文件行同样受益。
+
+| 检查 | 结果 |
+| --- | --- |
+| `npm --prefix web run format:check` / `npm --prefix web run build` | 通过 |
+| `go vet ./internal/mirrors/`、`go test -count=1 ./internal/mirrors/ ./internal/app/` | 通过；断言目录行为 `title="folder"><span class="filename">folder</span>`、无文件夹图标 |
+| `public-directory.spec.ts`（scratchpad 临时二进制） | GitHub 项目用例通过，375px 截图核对；依赖现代 rsync 的首例**跳过未执行** |
+| 悬停 | 临时渲染混合目录，Playwright 悬停目录名：计算样式为 underline，截图可见横线（修复行高前同一截图看不到） |
+| open-code-review | 托管模式，未调用外部 LLM；`ocr delegate preview/rule` 选出 2/2 可审文件（通用组），覆盖率 100%；排除的 DESIGN、`listing_test.go`、`public-directory.spec.ts` 已人工核对。无发现 |
+| 未执行 | 依赖现代 rsync 的 E2E；其余 E2E 未全量重跑 |
+
 ## 公开目录页头管理入口与目录行去图标（2026-10-18）
 
 范围：修改 `internal/mirrors/listing.html`、`listing.css`、`listing.go`、DESIGN；测试 `internal/mirrors/listing_test.go`、`web/e2e/public-directory.spec.ts`。用户要求：前台右上角“软件源镜像”改为进入后台的入口，未登录到登录页；目录行不要文件夹图标，文件图标保留。
 
 - 页头：静态文字改为指向 `/admin/` 的“管理后台”链接（悬停浅绿底）。管理台未登录时本来就显示登录表单，后端与路由未改。
-- 目录行：不再渲染 `file-icon folder`，改为名称后接浅色、`aria-hidden` 的“/”（与常见镜像站一致，链接可访问名仍为目录名）；`tr.is-dir` 在手机卡片布局中取消 34px 图标占位，使第二行与名称对齐。文件行的 Phosphor 图标与配色不变；空目录提示的文件夹插图保留。
+- 目录行（已被上一条替代：现不带“/”）：不再渲染 `file-icon folder`，改为名称后接浅色、`aria-hidden` 的“/”（与常见镜像站一致，链接可访问名仍为目录名）；`tr.is-dir` 在手机卡片布局中取消 34px 图标占位，使第二行与名称对齐。文件行的 Phosphor 图标与配色不变；空目录提示的文件夹插图保留。
 
 | 检查 | 结果 |
 | --- | --- |

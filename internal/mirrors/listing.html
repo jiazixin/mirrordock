@@ -102,8 +102,8 @@
     data-modified="{{.Timestamp}}" data-status="{{.Status}}" data-last="{{.LastTimestamp}}" data-next="{{.NextTimestamp}}">
   <td class="name">
     <a href="{{.URL}}" title="{{.Name}}">
-      {{- if .Dir}}<span class="filename">{{.Name}}</span><span class="dir-slash" aria-hidden="true">/</span>
-      {{- else}}<span class="file-icon {{.Icon}}">{{template "icon" .Icon}}</span><span class="filename">{{.Name}}</span>{{end -}}
+      {{- if not .Dir}}<span class="file-icon {{.Icon}}">{{template "icon" .Icon}}</span>{{end -}}
+      <span class="filename">{{.Name}}</span>
     </a>
   </td>
 {{- if $.Projects}}

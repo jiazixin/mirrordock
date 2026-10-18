@@ -394,21 +394,17 @@ tbody tr:hover {
   font-size:14px;
   font-weight:600
 }
+/* Tall enough that overflow:hidden does not clip the hover underline. */
 .filename {
+  line-height:22px;
   overflow:hidden;
   text-overflow:ellipsis;
   white-space:nowrap
 }
-/* Directories follow the mirror convention of a trailing slash instead of an icon. */
-.dir-slash {
-  margin-left:-10px;
-  font-weight:500;
-  color:var(--t3)
-}
 .name a:hover .filename {
   text-decoration:underline;
   text-underline-offset:3px;
-  text-decoration-color:var(--line-strong)
+  text-decoration-thickness:1px
 }
 .file-icon {
   display:grid;

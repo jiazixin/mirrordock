@@ -209,7 +209,7 @@ test('public directory layout, icons, search, sorting, unpaginated and safe file
       const rows = publicPage.locator('#file-rows tr:visible')
       await expect(rows).toHaveCount(15)
       await expect(rows.first()).toContainText('docs')
-      await expect(publicPage.locator('tr.is-dir .dir-slash')).toHaveCount(3)
+      await expect(publicPage.locator('tr.is-dir')).toHaveCount(3)
       await expect(publicPage.locator('tr.is-dir .file-icon')).toHaveCount(0)
       await expect(publicPage.locator('.file-icon.package')).toHaveCount(2)
       await expect(publicPage.locator('.file-icon.archive')).toHaveCount(3)

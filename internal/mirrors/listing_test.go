@@ -55,7 +55,7 @@ func TestListingEscapingBreadcrumbsAndScriptPolicy(t *testing.T) {
 			t.Errorf("missing escaped content: %s", want)
 		}
 	}
-	for _, want := range []string{`<a class="admin-link" href="/admin/">`, `<tr class="is-dir" data-name="folder"`, `<span class="filename">folder</span><span class="dir-slash" aria-hidden="true">/</span>`} {
+	for _, want := range []string{`<a class="admin-link" href="/admin/">`, `<tr class="is-dir" data-name="folder"`, `title="folder"><span class="filename">folder</span>`} {
 		if !strings.Contains(html, want) {
 			t.Errorf("missing directory or header markup: %s", want)
 		}
