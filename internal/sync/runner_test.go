@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"mirrordock/internal/config"
 	"net"
 	"net/http"
@@ -143,7 +144,7 @@ func TestSystemRsyncProtocol(t *testing.T) {
 
 func TestIncrementalScanDoesNotClaimCompleteProgress(t *testing.T) {
 	p, ok := ParseProgress("1,000 100% 1.00MB/s 0:00:01 (xfr#1, ir-chk=9/20)")
-	if !ok || p.Phase != "transfer" || p.Percent != nil || p.ETA != nil {
+	if !ok || p.Phase != "transfer" || p.Percent == nil || *p.Percent != incrementalPercentCap || p.ETA != nil || p.Total != 0 {
 		t.Fatal(p, ok)
 	}
 	if _, ok = ParseProgress(strings.Repeat("9", 1000) + " 100% 1.00MB/s 0:00:01"); ok {
@@ -244,8 +245,9 @@ func TestIncrementalRecursionStaysInTransfer(t *testing.T) {
 		t.Fatal(seen)
 	}
 	for i, p := range seen {
-		// The first line arrives before rsync reveals incremental recursion.
-		if p.Phase != "transfer" || i > 0 && (p.Percent != nil || p.ETA != nil || p.Total != 0) {
+		// The first line arrives before rsync reveals incremental recursion;
+		// later lines keep rsync's approximate percent without total or ETA.
+		if p.Phase != "transfer" || p.Percent == nil || *p.Percent != 8 || i > 0 && (p.ETA != nil || p.Total != 0) {
 			t.Fatal(i, p)
 		}
 	}
@@ -255,8 +257,54 @@ func TestIncrementalRecursionStaysInTransfer(t *testing.T) {
 	seen = nil
 	out = processOutput{name: "rsync", log: io.Discard, cancel: cancel, emit: func(p Progress) { seen = append(seen, p) }}
 	out.scan(strings.NewReader("5,000 50% 1.00MB/s 0:00:05\n5,500 55% 1.00MB/s 0:00:02 (xfr#2, to-chk=8/20)\n"))
-	if len(seen) != 2 || seen[1].Percent == nil || *seen[1].Percent != 55 || seen[1].ETA == nil || *seen[1].ETA != 5 {
-		t.Fatal("complete file list lost percent or ETA", seen)
+	if len(seen) != 2 || seen[1].Percent == nil || *seen[1].Percent != 55 {
+		t.Fatal("complete file list lost percent", seen)
+	}
+}
+
+func TestRsyncETAUsesWindowThroughput(t *testing.T) {
+	_, cancel := context.WithCancelCause(t.Context())
+	defer cancel(nil)
+	now := time.Unix(1_000_000, 0)
+	var seen []Progress
+	out := processOutput{name: "rsync", log: io.Discard, cancel: cancel, now: func() time.Time { return now },
+		emit: func(p Progress) { seen = append(seen, p) }}
+	feed := func(line string) Progress {
+		out.scan(strings.NewReader(line + "\n"))
+		return seen[len(seen)-1]
+	}
+	// Incremental recursion hides the estimate but still records throughput.
+	feed("0 0% 0.00kB/s 0:00:00 (xfr#1, ir-chk=10/20)")
+	now = now.Add(20 * time.Second)
+	if p := feed("20,971,520 1% 4.00MB/s 0:00:10 (xfr#2, ir-chk=5/20)"); p.ETA != nil {
+		t.Fatal("estimate during incremental recursion", p)
+	}
+	// The complete file list restores estimates. rsync's instantaneous 10 MiB/s
+	// over 100 MiB remaining would claim 10 s; the window average is 1 MiB/s.
+	now = now.Add(20 * time.Second)
+	feed("41,943,040 29% 1.00MB/s 0:00:40 (xfr#3, to-chk=4/20)")
+	p := feed("41,943,040 29% 10.00MB/s 0:00:10")
+	if p.ETA == nil || math.Abs(*p.ETA-100) > 0.5 {
+		t.Fatal("window throughput not used", p.ETA)
+	}
+	// File-completion lines report elapsed time and keep the last estimate.
+	if p = feed("41,943,040 29% 1.00MB/s 0:00:40 (xfr#4, to-chk=3/20)"); p.ETA == nil || math.Abs(*p.ETA-100) > 0.5 {
+		t.Fatal("completion line replaced the estimate", p.ETA)
+	}
+	// Samples older than the window are dropped: the last two minutes ran at
+	// 2 MiB/s, while the whole run averaged 1.75 MiB/s.
+	now = now.Add(2 * time.Minute)
+	if p = feed("293,601,280 80% 1.00MB/s 0:00:40"); p.ETA == nil || math.Abs(*p.ETA-20) > 0.5 {
+		t.Fatal("stale samples kept", p.ETA, out.samples)
+	}
+	// Less than etaMinimum of history gives no estimate.
+	fresh := processOutput{name: "rsync", log: io.Discard, cancel: cancel, now: func() time.Time { return now },
+		emit: func(p Progress) { seen = append(seen, p) }}
+	fresh.scan(strings.NewReader("1,000 1% 1.00MB/s 0:01:00\n"))
+	now = now.Add(10 * time.Second)
+	fresh.scan(strings.NewReader("2,000 2% 1.00MB/s 0:01:00\n"))
+	if p = seen[len(seen)-1]; p.ETA != nil {
+		t.Fatal("estimate from a short window", p.ETA)
 	}
 }
 

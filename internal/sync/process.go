@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -79,16 +80,28 @@ func ParseProgress(line string) (Progress, bool) {
 		Speed:   speed,
 		ETA:     new(remaining),
 	}
-	// File-completion lines report elapsed time, not ETA. With ir-chk the
-	// file list is still growing, so percent and total cover only part of it.
+	// File-completion lines report elapsed time, not ETA.
 	if strings.Contains(line, "-chk=") {
 		p.ETA = nil
 	}
 	if strings.Contains(line, "ir-chk=") {
-		p.Total = 0
-		p.Percent = nil
+		incrementalProgress(&p)
 	}
 	return p, true
+}
+
+// incrementalPercentCap bounds the percent reported while incremental
+// recursion is still growing the file list: rsync divides by the part of the
+// list known so far, so its percent can read 100 early and fall back later.
+const incrementalPercentCap = 99
+
+// incrementalProgress keeps rsync's approximate percent below completion and
+// drops the total and ETA, which cover only part of the file list.
+func incrementalProgress(p *Progress) {
+	p.Total, p.ETA = 0, nil
+	if p.Percent != nil {
+		p.Percent = new(min(*p.Percent, incrementalPercentCap))
+	}
 }
 
 func splitCR(data []byte, atEOF bool) (int, []byte, error) {
@@ -114,6 +127,63 @@ type processOutput struct {
 	cancel        context.CancelCauseFunc
 	progress      Progress
 	incremental   bool
+	samples       []progressSample
+	now           func() time.Time
+}
+
+// progressSample records processed bytes at one point in time; samples are
+// taken at most once per second and cover the last etaWindow.
+type progressSample struct {
+	at    time.Time
+	bytes int64
+}
+
+// rsync derives its ETA from roughly the last five seconds of throughput, so
+// the estimate swings with every burst. Throughput over etaWindow steadies it;
+// no estimate is shown until etaMinimum of history exists.
+const (
+	etaWindow  = 2 * time.Minute
+	etaMinimum = 30 * time.Second
+)
+
+func (o *processOutput) clock() time.Time {
+	if o.now != nil {
+		return o.now()
+	}
+	return time.Now()
+}
+
+// sample adds bytes to the throughput history and drops samples no longer
+// needed: the oldest kept sample is the newest one at least etaWindow old.
+func (o *processOutput) sample(bytes int64) {
+	now := o.clock()
+	if n := len(o.samples); n > 0 && bytes < o.samples[n-1].bytes {
+		o.samples = o.samples[:0]
+	}
+	if n := len(o.samples); n == 0 || now.Sub(o.samples[n-1].at) >= time.Second {
+		o.samples = append(o.samples, progressSample{at: now, bytes: bytes})
+	}
+	drop := 0
+	for drop+1 < len(o.samples) && now.Sub(o.samples[drop+1].at) >= etaWindow {
+		drop++
+	}
+	o.samples = slices.Delete(o.samples, 0, drop)
+}
+
+// smoothETA divides the remaining bytes by the throughput across the sample
+// window. It returns nil until the window is long enough or while no bytes
+// moved, rather than an estimate built on a few seconds of data.
+func (o *processOutput) smoothETA(bytes int64, remaining float64) *float64 {
+	if len(o.samples) == 0 || remaining <= 0 {
+		return nil
+	}
+	first := o.samples[0]
+	elapsed := o.clock().Sub(first.at)
+	if elapsed < etaMinimum || bytes <= first.bytes {
+		return nil
+	}
+	rate := float64(bytes-first.bytes) / elapsed.Seconds()
+	return new(remaining / rate)
 }
 
 func (o *processOutput) scan(reader io.Reader) {
@@ -146,10 +216,22 @@ func (o *processOutput) scan(reader io.Reader) {
 			} else if strings.Contains(line, "to-chk=") {
 				o.incremental = false
 			}
-			if o.incremental {
-				p.Total, p.Percent, p.ETA = 0, nil, nil
-			} else if p.ETA == nil {
+			// Throughput is sampled during incremental recursion too, so an
+			// estimate is available as soon as the file list is complete.
+			o.sample(p.Bytes)
+			switch {
+			case o.incremental:
+				incrementalProgress(&p)
+			case p.ETA == nil:
 				p.ETA = o.progress.ETA
+			default:
+				// rsync's ETA is remaining bytes over its own rate; recover the
+				// remaining bytes from it, as the integer percent is too coarse.
+				remaining := *p.ETA * p.Speed
+				if remaining <= 0 && p.Total > p.Bytes {
+					remaining = float64(p.Total - p.Bytes)
+				}
+				p.ETA = o.smoothETA(p.Bytes, remaining)
 			}
 			p.ReceivedBytes = o.progress.ReceivedBytes
 			p.Files = o.progress.Files

@@ -8,7 +8,7 @@ import { RefreshCw, Pause, Play, X, Info, Layers3, RotateCcw } from '@lucide/vue
 import StatusBadge from '../../components/StatusBadge.vue'
 import RunDetail from './RunDetail.vue'
 import { state, refresh, perform, runAction, rerunSource } from '../../app/state'
-import { time, duration, bytes, phases, sourceType, runStage, runStages } from '../../app/format'
+import { time, duration, bytes, phases, sourceType, runStage } from '../../app/format'
 import type { Run, SourceType } from '../../app/types'
 function received(progress: Run['progress']) {
   return progress.received_bytes == null ? '未统计' : bytes(progress.received_bytes)
@@ -20,14 +20,11 @@ function transferDescription(type: SourceType) {
       ? '累计 Rsync 报告的 Total bytes received，包含协议数据；命令结束后更新。缺少统计的尝试不会推算。'
       : 'DNF 尚未提供可靠的接收字节统计。'
 }
-// Without an overall percent, keep finished stages solid and animate only the
-// current stage, so 传输 does not look like the 准备 animation.
-function stageBar(phase: string) {
-  const stage = runStage(phase)
-  const size = 100 / runStages.length
-  return stage < 0
-    ? { done: 0, left: 0, width: 100 }
-    : { done: stage * size, left: stage * size, width: size }
+// One continuous bar: the executor's percent while it has one, otherwise empty
+// before transfer and full once verification or publishing has started.
+function barPercent(progress: Run['progress']) {
+  if (progress.percent !== null) return Math.min(100, Math.max(0, progress.percent))
+  return runStage(progress.phase) >= 2 ? 100 : 0
 }
 const selectedState = ref('')
 const selectedSource = ref('')
@@ -169,22 +166,14 @@ const groups = computed(() => {
                 class="progress-line"
               >
                 <div
-                  v-if="run.progress.percent === null"
-                  class="progress-track staged"
-                >
-                  <span :style="{ width: stageBar(run.progress.phase).done + '%' }"></span
-                  ><i
-                    :style="{
-                      left: stageBar(run.progress.phase).left + '%',
-                      width: stageBar(run.progress.phase).width + '%',
-                    }"
-                  ></i>
-                </div>
-                <div
-                  v-else
                   class="progress-track"
+                  role="progressbar"
+                  aria-label="同步进度"
+                  :aria-valuenow="barPercent(run.progress)"
+                  :aria-valuemin="0"
+                  :aria-valuemax="100"
                 >
-                  <span :style="{ width: run.progress.percent + '%' }"></span>
+                  <span :style="{ width: barPercent(run.progress) + '%' }"></span>
                 </div>
                 <span>{{
                   run.progress.percent === null

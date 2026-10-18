@@ -1,5 +1,21 @@
 # 验收记录
 
+## Rsync 剩余时间平滑与连续整体进度条（2026-10-18）
+
+范围：`internal/sync/process.go`、`internal/sync/runner_test.go`、`web/src/features/runs/Batches.vue`、`web/src/styles/global.css`、`docs/DESIGN.md`；`web/e2e/mirrordock.spec.ts` 只把 favicon 期望从 `?v=2` 改为 `?v=3`（跟随 671208a 的有意改动）。配置协议与 API 字段未改动。
+
+- Rsync 剩余时间 = rsync 报告的剩余字节（其 ETA × 其速率）÷ 最近 2 分钟平均处理速率；每秒最多一个采样，增量递归期间也采样但不显示估算，采样不足 30 秒显示“—”；文件完成行沿用上一次估算。
+- 已核对 rsync 3.5.1 源码：`stats.total_transferred_size` 只在实际接收文件时累加（`receiver.c:976`），总量含全部文件（`flist.c:999`）。增量同步中未变化文件使剩余字节偏大、估算偏长，百分比在传输结束时也可能远低于 100%；窗口平均不能修正这一点。
+- 增量递归期间不再隐藏百分比：保留 rsync 基于已知文件列表的近似值，封顶 99%（列表增长时可能回落），总量与剩余时间仍隐藏。批次列表去掉分段/滑动动画，始终是一条连续进度条；无百分比时准备/扫描/等待为空条，校验与发布为满条。进度条补充 `role="progressbar"` 与 aria 数值。
+
+| 检查 | 结果 |
+| --- | --- |
+| `go vet ./...` / `go test -race -count=1 ./...`（`MIRRORDOCK_TEST_RSYNC=.cache/rsync/rsync-3.5.1/rsync`） | 通过；新增 `TestRsyncETAUsesWindowThroughput` 用假时钟覆盖增量期间隐藏估算、窗口平均替代瞬时速率、完成行沿用、过期采样丢弃与 30 秒下限；增量递归测试改为断言保留百分比且封顶 99 |
+| `npm --prefix web run format:check` / `npm --prefix web run build` | 通过 |
+| E2E 全量（scratchpad 临时二进制，rsync 3.5.1） | 19 通过、0 跳过。首轮曾因 `mirrordock.spec.ts` 的 favicon 期望仍为 `?v=2` 失败（671208a 遗留，此前因跳过未暴露），修正后通过；2026-10-18 并发设置记录中未执行的 E2E 步骤此次已执行 |
+| open-code-review | 托管模式，未调用外部 LLM；`ocr delegate preview/rule` 选出 3/3 可审文件（process.go、Batches.vue、global.css），由当前会话审查；排除的 ACCEPTANCE/DESIGN（unsupported_ext）、runner_test.go 与 mirrordock.spec.ts（default_path）已人工核对。未发现正确性、安全性或性能问题 |
+| 未执行 | 运行中进度条无 E2E 断言与截图（运行中状态难以稳定构造）；真实长时间 rsync 下的估算与百分比效果；Linux 实机验证 |
+
 ## 概览时间轴按同步方式筛选（2026-10-18）
 
 范围：`web/src/features/overview/Overview.vue`、新增 `web/e2e/overview-filter.spec.ts`、README 一句说明。后端与配置协议未改动。

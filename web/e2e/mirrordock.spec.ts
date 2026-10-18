@@ -537,7 +537,7 @@ test('real configuration, rsync failover, publication, records and responsive UI
     expect(iconBytes.equals(await adminIcon.body())).toBeTruthy()
     expect([...iconBytes.subarray(0, 6)]).toEqual([0, 0, 1, 0, 6, 0])
     expect(await page.locator('link[rel="icon"]').getAttribute('href')).toBe(
-      '/admin/favicon.ico?v=2',
+      '/admin/favicon.ico?v=3',
     )
     await page.screenshot({ path: testInfo.outputPath('sources.png'), fullPage: true })
     expect(errors).toEqual([])
