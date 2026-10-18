@@ -196,10 +196,10 @@ async function save() {
           <span class="setting-index">02 · 重试</span>
           <h3>失败自动重试</h3>
           <p>网络断开或上游临时不可用时自动再试。</p>
-          <small
-            >适用于 Rsync、Reposync 和 GitHub Release；Rsync 先尝试备用来源。等待从 5
-            秒开始逐次翻倍，最多 80 秒，共享累计超时。磁盘、权限和配置错误直接停止。</small
-          >
+          <small>适用于 Rsync、Reposync 和 GitHub Release。</small>
+          <small>Rsync 会先切换到备用来源再重试。</small>
+          <small>重试间隔从 5 秒起逐次翻倍，最长 80 秒，计入累计超时。</small>
+          <small>磁盘、权限和配置错误不重试，直接停止。</small>
         </div>
         <div class="setting-controls">
           <label
@@ -218,10 +218,9 @@ async function save() {
           <span class="setting-index">03 · 并发</span>
           <h3>同类型并发数</h3>
           <p>每种同步类型最多同时执行的任务数。</p>
-          <small
-            >各类型独立计数，Rsync 大仓库不会占用 GitHub Release
-            的名额；超出的任务按触发顺序排队。保存后立即生效，已在执行的任务不受影响。</small
-          >
+          <small>各类型独立计数，互不占用名额。</small>
+          <small>超出上限的任务按触发顺序排队，有空位即开始。</small>
+          <small>保存后立即生效，已在执行的任务不受影响。</small>
         </div>
         <div class="setting-controls">
           <label
@@ -247,7 +246,7 @@ async function save() {
               min="1"
               max="16"
               step="1"
-            /><small>每种 1–16 个，默认 4 个。</small></label
+            /><small>每种类型可填 1–16，默认 4。</small></label
           >
         </div>
       </article>
