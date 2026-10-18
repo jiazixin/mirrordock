@@ -199,17 +199,21 @@ code {
   font-size: 12.5px;
 }
 
-/* Shell: a white sidebar with grouped navigation; collapses to a top bar + drawer. */
+/* Shell: a white sidebar with grouped navigation; collapses to a top bar + drawer.
+   On desktop the shell is pinned to the viewport and only the main column scrolls, so wheel
+   input over the sidebar never moves the page and overscroll bounce stays inside the content. */
 .app-shell {
-  min-height: 100vh;
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
   display: grid;
   grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
 }
 .sidebar {
-  position: sticky;
-  top: 0;
+  position: relative;
   z-index: 40;
-  height: 100vh;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   gap: 18px;
@@ -253,6 +257,7 @@ code {
   flex-direction: column;
   gap: 2px;
   overflow-y: auto;
+  overscroll-behavior-y: contain;
   min-height: 0;
 }
 .nav-group {
@@ -387,6 +392,10 @@ code {
 }
 .main-shell {
   min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  scrollbar-gutter: stable;
 }
 .page-content {
   max-width: 1560px;
@@ -1816,10 +1825,19 @@ tbody tr:hover td.empty-state {
   }
 }
 @media (max-width: 900px) {
+  /* Narrow screens scroll the document so mobile browsers can collapse their toolbars. */
   .app-shell {
     display: block;
+    height: auto;
+    overflow: visible;
+  }
+  .main-shell {
+    overflow: visible;
+    scrollbar-gutter: auto;
   }
   .sidebar {
+    position: sticky;
+    top: 0;
     flex-direction: row;
     align-items: center;
     height: var(--header-height);

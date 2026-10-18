@@ -925,3 +925,16 @@ OCR 排除原因：default_path 18（测试与锁文件），unsupported_ext 17�
 - `npm --prefix web run format:check`、Web 构建（含类型检查）通过；以本轮构建的临时二进制运行 E2E：toasts、notifications 2/2 通过，并查看 toasts 用例输出的桌面、375px、320px 截图，布局正常。
 - OCR 托管审查：`ocr delegate preview` 为 workspace 模式，reviewable 1/1 reviewed，无排除文件，规则为默认组。审查发现：首版用垂直居中，多行错误时图标会悬在中间；已改回顶部对齐并去掉最小高度，修复后重跑上述检查。未调用外部 OCR LLM。
 - 未执行：其余 E2E 未涉及该组件，本轮未跑；无 Go 改动，未跑 Go 测试；多行长错误提示仅按样式推算，未截图实测。
+
+## 2026-10-18：桌面侧栏固定，只有内容区滚动
+
+现象：在运行记录、数据分析等长页面，鼠标停在左侧导航上滚动滚轮，右侧内容也跟着滚；左侧栏在滚到顶/底时随页面一起上下回弹。原因：整页使用文档滚动，侧栏只是 `position: sticky` 贴在视口上。侧栏本身不可滚动，滚轮事件沿祖先链交给文档，于是滚动的是整页；macOS 的回弹作用于整个文档，侧栏也跟着动。
+
+当前范围：web/src/styles/global.css、web/src/layouts/Shell.vue，新增 web/e2e/shell-scroll.spec.ts。宽度大于 900px 时，外壳固定为视口高度（`100dvh`，`100vh` 兜底）并隐藏溢出，滚动只发生在 `.main-shell`；内容区与侧栏导航设 `overscroll-behavior-y: contain`，滚动不再外传，回弹只限于内容区。纵向限定是为了保留触控板左右轻扫的前进/后退手势。内容区设 `scrollbar-gutter: stable`，内容长短变化时宽度不跳动。新页面进入（过渡 `before-enter`）时内容区回到顶部；数据分析的类型切换共用同一视图，不重置。900px 及以下仍用文档滚动和吸顶顶栏，以便移动浏览器收起工具栏。弹窗都 Teleport 到 body，遮罩上的滚轮不会传到内容区，原有的 body 溢出锁保持不变。
+
+- 在内置浏览器中，用临时配置（隔离端口、临时目录、测试密码）运行本轮构建，800×600 视口：侧栏上滚轮后内容区 scrollTop 和 window.scrollY 都是 0，侧栏 top 为 0；在内容区滚动后内容区 scrollTop 大于 0，window.scrollY 仍为 0。从已滚到底的数据分析切换到运行记录，scrollTop 归 0。375px 宽度仍为文档滚动，顶栏吸顶，没有横向溢出。
+- 新增 E2E `shell-scroll.spec.ts` 覆盖以上桌面与窄屏行为。用修复前的构建运行该用例会失败，修复后通过。
+- `npm --prefix web run format:check`、Web 构建（含类型检查）、`go vet ./web/` 通过。以本轮构建的临时二进制和 `.cache/rsync/rsync-3.5.1` 运行全量 E2E：共 17 个用例全部通过（先在不设 rsync 的情况下 15 通过、2 跳过，再设置 `MIRRORDOCK_TEST_RSYNC` 补跑 mirrordock.spec 与 public-directory 共 3 个，均通过）。
+- OCR 托管审查：`ocr delegate preview` 为 workspace 模式，reviewable 2/2 reviewed（global.css、Shell.vue），排除 shell-scroll.spec.ts（default_path），已人工完整复核，总覆盖 3/3。审查发现并已修复：侧栏不是滚动容器，在它上面写 `overscroll-behavior` 没有作用，已删除；内容区原先两个方向都设了 `contain`，会拦掉横向返回手势，已改为只限纵向。修复后重跑上述检查。未调用外部 OCR LLM。
+- 已知差异：页面加载后还没点击内容区时，若焦点在 body 上，PageDown 或空格是否滚动内容区取决于浏览器怎么选滚动目标，未逐一验证。
+- 未执行：Safari、Firefox 和 macOS 触控板的回弹实测（Playwright 只驱动了 Chromium 的滚轮事件）；无 Go 业务代码改动，未跑 Go 测试。

@@ -82,6 +82,11 @@ const current = (link: NavLink) =>
 // Routes sharing one view (analytics kinds) keep the component mounted and skip the page transition.
 const viewKey = (view: RouteLocationNormalizedLoaded) =>
   typeof view.meta.view === 'string' ? view.meta.view : view.path
+const main = ref<HTMLElement>()
+// The main column is the desktop scroll container, so a newly entered page starts at its top.
+function resetScroll() {
+  main.value?.scrollTo({ top: 0 })
+}
 </script>
 
 <template>
@@ -197,12 +202,16 @@ const viewKey = (view: RouteLocationNormalizedLoaded) =>
       class="nav-scrim"
       @click="mobile = false"
     ></div>
-    <main class="main-shell">
+    <main
+      ref="main"
+      class="main-shell"
+    >
       <div class="page-content">
         <RouterView v-slot="{ Component, route: view }">
           <Transition
             name="page"
             mode="out-in"
+            @before-enter="resetScroll"
           >
             <div
               v-if="Component"
