@@ -304,32 +304,11 @@ code {
   margin-top: auto;
   padding-top: 12px;
 }
-.live-status {
+.sidebar-foot .mirror-link {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
   padding: 14px 8px;
   border-top: 1px solid var(--line);
   font-size: 13.5px;
-  color: var(--t2);
-}
-.live-status > span {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-}
-.live-status > span::before {
-  content: '';
-  width: 8px;
-  height: 8px;
-  flex-shrink: 0;
-  border-radius: 50%;
-  background: var(--t3);
-}
-.live-status.on > span::before {
-  background: var(--ok);
 }
 .header-link {
   display: inline-flex;
@@ -2073,8 +2052,7 @@ tbody tr:hover td.empty-state {
 }
 @media (forced-colors: active) {
   .badge-dot,
-  .timeline-dot,
-  .live-status > span::before {
+  .timeline-dot {
     forced-color-adjust: none;
     background: CanvasText;
   }

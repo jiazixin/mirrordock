@@ -1,5 +1,19 @@
 # 验收记录
 
+## 概览进行中统计对齐与侧栏底部精简（2026-10-18）
+
+范围：修改 `web/src/features/overview/Overview.vue`、`web/src/layouts/Shell.vue`、`web/src/styles/global.css`、DESIGN；测试 `web/e2e/overview-filter.spec.ts`。用户要求：首页“进行中”的实际接收/已运行/预算剩余/进度四项摊开；侧栏底部去掉“实时推送已连接”，只留“镜像目录”跳转。
+
+- 统计：`.live-figures` 由 flex 换行（间距 32px）改为 4 等分网格，列间距与阶段条相同（6px），每项正好在“准备/传输/校验/发布”下方。`.live-run` 设为 inline-size 容器，内容宽度不足 420px 时改为两列，使“1023.9 GiB”等长值不折行。
+- 侧栏：删除连接状态文字与圆点（含 forced-colors 下的样式），保留 `href="/"`、新标签打开的“镜像目录”链接，占整行并沿用原分隔线；`state.connected` 仍用于事件流与列表合并，不受影响。
+
+| 检查 | 结果 |
+| --- | --- |
+| `npm --prefix web run format:check` / `npm --prefix web run build`（含 `vue-tsc`） | 通过 |
+| `overview-filter.spec.ts`（scratchpad 临时二进制，模拟一条传输中的批次） | 通过：1440px 下四项统计与四个阶段左边缘差 < 1.5px；375px 下四个值各占一行；侧栏底部链接文字为“镜像目录”、href 为 `/`。反向验证：去掉两列规则重建后该用例失败（“1023.9 GiB”折成两行） |
+| open-code-review | 托管模式，未调用外部 LLM；`ocr delegate preview/rule` 选出 3/3 可审文件（通用规则组），由当前会话审查；排除的 `web/e2e/overview-filter.spec.ts`（default_path）已人工核对。发现 1 项：初版只按视口 ≤600px 改两列，而两栏布局下卡片最窄约 440px，四列时长字节值会折行；改为按卡片宽度的容器查询 |
+| 未执行 | `mirrordock.spec.ts` 等依赖现代 rsync 的 E2E（本机仅有 openrsync，跳过）；其余 E2E 未全量重跑；Go 测试未运行（未改 Go 代码） |
+
 ## 分析页签、刷新与弹窗动效（2026-10-18）
 
 范围：新增 `web/src/components/{RefreshButton,ModalTransition}.vue`、`web/src/lib/motion/tabIndicator.ts`；修改 `web/src/components/{Modal,ConfirmDialog}.vue`、`web/src/layouts/Shell.vue`、`web/src/styles/global.css`、`web/src/features/analytics/Analytics.vue`、`web/src/features/{overview/Overview,runs/Batches,runs/Records,runs/RunDetail,schedules/Schedules,settings/Settings,settings/EnvironmentChecks,settings/Notifications,sources/Sources}.vue`、DESIGN；测试 `web/e2e/shell-scroll.spec.ts`。用户要求：数据分析三个页签切换加线性动画，所有刷新给图标转一圈，按钮弹出的窗口加动画。

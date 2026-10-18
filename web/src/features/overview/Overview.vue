@@ -1107,6 +1107,7 @@ button.segment:focus-visible {
   gap: 18px;
   padding: 20px 22px 22px;
   border-top: 1px solid var(--line);
+  container-type: inline-size;
 }
 .live-title {
   display: flex;
@@ -1183,17 +1184,25 @@ button.segment:focus-visible {
   font-weight: 600;
 }
 .live-figures {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px 32px;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px 6px;
 }
 .live-figures > div {
   display: flex;
   flex-direction: column;
+  gap: 2px;
+  min-width: 0;
 }
 .live-figures strong {
   font-size: 18px;
   font-weight: 650;
+}
+/* Four columns line up with the stages; a narrow card keeps long byte counts readable. */
+@container (max-width: 420px) {
+  .live-figures {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 .live-actions {
   display: flex;

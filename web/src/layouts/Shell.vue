@@ -164,19 +164,13 @@ function resetScroll() {
           </template>
         </nav>
         <div class="sidebar-foot">
-          <div
-            class="live-status"
-            :class="{ on: state.connected }"
-          >
-            <span>{{ state.connected ? '实时推送已连接' : '实时连接已断开，正在重连' }}</span
-            ><a
-              class="header-link"
-              href="/"
-              target="_blank"
-              rel="noopener"
-              >镜像目录<ArrowUpRight :size="15"
-            /></a>
-          </div>
+          <a
+            class="header-link mirror-link"
+            href="/"
+            target="_blank"
+            rel="noopener"
+            >镜像目录<ArrowUpRight :size="15"
+          /></a>
           <div class="account">
             <span
               class="avatar"

@@ -67,12 +67,71 @@ test('overview timeline filters lanes by sync type and remembers the choice', as
     await page.route('**/api/events', (route) =>
       route.fulfill({ contentType: 'text/event-stream', body: '' }),
     )
-    await page.route('**/api/runs?*', (route) => route.fulfill({ json: { items: [], total: 0 } }))
+    // One running transfer exercises the live card layout.
+    const running = {
+      id: 20,
+      source_id: 'alma',
+      name: 'AlmaLinux',
+      type: 'rsync',
+      state: 'running',
+      trigger: 'manual',
+      created_at: new Date().toISOString(),
+      elapsed_seconds: 195,
+      budget_seconds: 28800,
+      progress: {
+        phase: 'transfer',
+        bytes: 0,
+        received_bytes: 1023.9 * 1024 ** 3,
+        percent: 3,
+        success: 0,
+        failed: 0,
+        skipped: 0,
+      },
+      attempts: [],
+      events: [],
+      snapshot: {},
+    }
+    await page.route('**/api/runs?*', (route) =>
+      route.fulfill({ json: { items: [running], total: 1 } }),
+    )
     await page.goto(`${base}/admin/overview`)
     await page.getByLabel('用户名', { exact: true }).fill('admin')
     await page.getByLabel('管理员密码').fill('overview-filter-fixture-password')
     await page.getByRole('button', { name: '登录管理台' }).click()
     await expect(page.getByRole('heading', { name: '同步时间轴' })).toBeVisible()
+
+    // Live figures sit in the same columns as the stage labels above them.
+    const liveRun = page.locator('.live-run')
+    await expect(liveRun.locator('.live-figures > div')).toHaveCount(4)
+    const lefts = (selector: string) =>
+      liveRun
+        .locator(selector)
+        .evaluateAll((items) => items.map((item) => item.getBoundingClientRect().left))
+    const stepXs = await lefts('.live-steps li')
+    const figureXs = await lefts('.live-figures > div')
+    figureXs.forEach((x, index) => expect(Math.abs(x - stepXs[index]!)).toBeLessThan(1.5))
+    await liveRun.screenshot({ path: testInfo.outputPath('live-run.png') })
+    // A narrow card wraps to two columns so long values stay on one line.
+    await page.setViewportSize({ width: 375, height: 1000 })
+    await page.reload()
+    await expect(liveRun.locator('.live-figures strong').first()).toHaveText('1023.9 GiB')
+    const lineCounts = await liveRun.locator('.live-figures strong').evaluateAll((items) =>
+      items.map((item) => {
+        const range = document.createRange()
+        range.selectNodeContents(item)
+        return new Set([...range.getClientRects()].map((rect) => Math.round(rect.top))).size
+      }),
+    )
+    expect(lineCounts).toEqual([1, 1, 1, 1])
+    await liveRun.screenshot({ path: testInfo.outputPath('live-run-narrow.png') })
+    await page.setViewportSize({ width: 1440, height: 1000 })
+    // The sidebar footer is just the public directory link.
+    const mirrorLink = page.locator('.sidebar-foot .mirror-link')
+    await expect(mirrorLink).toHaveText('镜像目录')
+    await expect(mirrorLink).toHaveAttribute('href', '/')
+    await page
+      .locator('.sidebar-foot')
+      .screenshot({ path: testInfo.outputPath('sidebar-foot.png') })
 
     const lanes = page.locator('.lane:not(.lane-head)')
     const filter = page.getByRole('combobox', { name: '按同步方式筛选时间轴' })
