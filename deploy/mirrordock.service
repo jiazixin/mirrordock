@@ -18,6 +18,11 @@ NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+LockPersonality=yes
+RestrictRealtime=yes
 ReadWritePaths=/etc/mirrordock /var/lib/mirrordock /srv/mirrors
 
 [Install]

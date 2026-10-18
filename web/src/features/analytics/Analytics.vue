@@ -81,6 +81,15 @@ const ring = computed(() => {
     })
     .join(',')})`
 })
+// Share of verified assets that were newly transferred versus fully reused.
+const assetShares = computed(() => {
+  const summary = data.value?.summary
+  if (!summary?.completed) return { transferred: 0, reused: 0 }
+  return {
+    transferred: (100 * (summary.completed - summary.reused)) / summary.completed,
+    reused: (100 * summary.reused) / summary.completed,
+  }
+})
 const largestSource = computed(() => Math.max(1, ...(data.value?.sources.map((s) => s.runs) ?? [])))
 const largestError = computed(() => Math.max(1, ...(data.value?.errors.map((e) => e.count) ?? [])))
 async function load() {
@@ -332,16 +341,13 @@ onBeforeUnmount(() => {
             <div
               class="asset-track"
               role="img"
-              :aria-label="`新增或续传 ${data.summary.completed - data.summary.reused} 项，完整复用 ${data.summary.reused} 项`"
+              :aria-label="
+                `新增或续传 ${data.summary.completed - data.summary.reused} 项，` +
+                `完整复用 ${data.summary.reused} 项`
+              "
             >
-              <span
-                :style="{
-                  width: `${data.summary.completed ? (100 * (data.summary.completed - data.summary.reused)) / data.summary.completed : 0}%`,
-                }"
-              /><span
-                :style="{
-                  width: `${data.summary.completed ? (100 * data.summary.reused) / data.summary.completed : 0}%`,
-                }"
+              <span :style="{ width: `${assetShares.transferred}%` }" /><span
+                :style="{ width: `${assetShares.reused}%` }"
               />
             </div>
             <div class="asset-labels">

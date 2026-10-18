@@ -25,11 +25,15 @@ import (
 	"path"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 )
+
+// maxEventStreams bounds concurrent SSE connections of the admin console.
+const maxEventStreams = 8
 
 type App struct {
 	connections *connections
@@ -76,105 +80,135 @@ func OpenConfig(cfg *config.Manager) (*App, error) {
 		lock.Close()
 		return nil, errors.New("该数据目录已被另一程序实例占用")
 	}
-	fail := func() { lock.Close() }
+	// Resources opened so far are released in reverse order on failure.
+	cleanups := []func(){func() { lock.Close() }}
+	fail := func(err error) (*App, error) {
+		for _, cleanup := range slices.Backward(cleanups) {
+			cleanup()
+		}
+		return nil, err
+	}
 	store, err := database.Open(data)
 	if err != nil {
-		fail()
-		return nil, err
+		return fail(err)
 	}
+	cleanups = append(cleanups, func() { store.Close() })
 	m, err := mirrors.New(config.Resolve(cfg.File(), c.MirrorRoot), store, c.Sources)
 	if err != nil {
-		store.Close()
-		fail()
-		return nil, err
+		return fail(err)
 	}
+	cleanups = append(cleanups, func() { m.Close() })
 	// A previous instance killed with SIGKILL may leave executor descendants
 	// writing into task work directories. Stop them before any run recovers.
-	if n, err := syncer.TerminateStrays(filepath.Join(m.Root, ".mirrordock", "work")); err != nil {
-		slog.Error("terminate leftover executor processes", "count", n, "error", err)
-	} else if n > 0 {
-		slog.Warn("terminated leftover executor processes", "count", n)
+	workRoot := filepath.Join(m.Root, ".mirrordock", "work")
+	if count, err := syncer.TerminateStrays(workRoot); err != nil {
+		slog.Error("terminate leftover executor processes", "count", count, "error", err)
+	} else if count > 0 {
+		slog.Warn("terminated leftover executor processes", "count", count)
 	}
 	location := startupLocation()
 	engine, err := runs.New(cfg, store, m, syncer.SystemRunner{}, location)
 	if err != nil {
-		m.Close()
-		store.Close()
-		fail()
-		return nil, err
+		return fail(err)
 	}
+	cleanups = append(cleanups, engine.Close)
 	auth, err := newAuth(c.Auth)
 	if err != nil {
-		engine.Close()
-		m.Close()
-		store.Close()
-		fail()
-		return nil, err
+		return fail(err)
 	}
 	notifier, err := notifications.New(cfg, store)
 	if err != nil {
-		engine.Close()
-		m.Close()
-		store.Close()
-		fail()
-		return nil, err
+		return fail(err)
 	}
 	engine.ConfigValidator = notifier.ValidateConfig
 	engine.ConfigApplied = notifier.Sync
-	a := &App{Version: "dev", Config: cfg, Store: store, Mirrors: m, Runs: engine, Notifications: notifier, auth: auth, location: location, lock: lock, sse: make(chan struct{}, 8), closing: make(chan struct{}), connections: &connections{entries: map[net.Conn]*connection{}, limit: connectionLimit()}}
-	m.ListingInfo = func(ctx context.Context) map[string]mirrors.SourceListingInfo {
-		data, err := a.listing.get(ctx, func(ctx context.Context) ([]byte, error) {
-			latest, err := engine.Latest(ctx)
-			if err != nil {
-				return nil, err
-			}
-			infos := map[string]mirrors.SourceListingInfo{}
-			schedules := engine.ScheduleInfo()
-			for _, run := range latest {
-				infos[run.SourceID] = mirrors.SourceListingInfo{State: run.State, Last: run.EndedAt, Next: schedules[run.SourceID]}
-			}
-			missing := []string{}
-			for id, info := range infos {
-				if info.Last.IsZero() {
-					missing = append(missing, id)
-				}
-			}
-			if len(missing) > 0 {
-				queryCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-				completed, err := store.LatestSuccessfulRunsContext(queryCtx, missing)
-				cancel()
-				if err != nil {
-					return nil, err
-				}
-				for _, data := range completed {
-					var run runs.Run
-					if err := json.Unmarshal(data, &run); err != nil {
-						return nil, err
-					}
-					info := infos[run.SourceID]
-					info.Last = run.EndedAt
-					infos[run.SourceID] = info
-				}
-			}
-			for id, next := range schedules {
-				info := infos[id]
-				info.Next = next
-				infos[id] = info
-			}
-			return json.Marshal(infos)
-		})
-		if err != nil {
-			return nil
-		}
-		var infos map[string]mirrors.SourceListingInfo
-		_ = json.Unmarshal(data, &infos)
-		return infos
+	a := &App{
+		Version:       "dev",
+		Config:        cfg,
+		Store:         store,
+		Mirrors:       m,
+		Runs:          engine,
+		Notifications: notifier,
+		auth:          auth,
+		location:      location,
+		lock:          lock,
+		sse:           make(chan struct{}, maxEventStreams),
+		closing:       make(chan struct{}),
+		connections:   &connections{entries: map[net.Conn]*connection{}, limit: connectionLimit()},
 	}
-
-	a.Server = &http.Server{Addr: net.JoinHostPort(c.Listen, strconv.Itoa(c.Port)), Handler: a.Handler(), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 90 * time.Second, MaxHeaderBytes: 64 << 10, TLSConfig: &tls.Config{MinVersion: tls.VersionTLS12}, ConnState: a.connections.state, ErrorLog: slog.NewLogLogger(slog.Default().Handler(), slog.LevelError)}
+	m.ListingInfo = a.listingInfo
+	a.Server = &http.Server{
+		Addr:              net.JoinHostPort(c.Listen, strconv.Itoa(c.Port)),
+		Handler:           a.Handler(),
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       90 * time.Second,
+		MaxHeaderBytes:    64 << 10,
+		TLSConfig:         &tls.Config{MinVersion: tls.VersionTLS12},
+		ConnState:         a.connections.state,
+		ErrorLog:          slog.NewLogLogger(slog.Default().Handler(), slog.LevelError),
+	}
 	a.workers.Go(a.watchConnections)
 	return a, nil
 }
+
+// listingInfo reports the latest state, last success and next schedule of
+// each source for the public directory, shared through a one-second frame.
+func (a *App) listingInfo(ctx context.Context) map[string]mirrors.SourceListingInfo {
+	encoded, err := a.listing.get(ctx, a.readListingInfo)
+	if err != nil {
+		return nil
+	}
+	var infos map[string]mirrors.SourceListingInfo
+	_ = json.Unmarshal(encoded, &infos)
+	return infos
+}
+
+func (a *App) readListingInfo(ctx context.Context) ([]byte, error) {
+	latest, err := a.Runs.Latest(ctx)
+	if err != nil {
+		return nil, err
+	}
+	schedules := a.Runs.ScheduleInfo()
+	infos := map[string]mirrors.SourceListingInfo{}
+	for _, run := range latest {
+		infos[run.SourceID] = mirrors.SourceListingInfo{
+			State: run.State,
+			Last:  run.EndedAt,
+			Next:  schedules[run.SourceID],
+		}
+	}
+	// A source whose latest run is still active shows its last success.
+	unfinished := []string{}
+	for id, info := range infos {
+		if info.Last.IsZero() {
+			unfinished = append(unfinished, id)
+		}
+	}
+	if len(unfinished) > 0 {
+		queryCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		completed, err := a.Store.LatestSuccessfulRunsContext(queryCtx, unfinished)
+		cancel()
+		if err != nil {
+			return nil, err
+		}
+		for _, document := range completed {
+			var run runs.Run
+			if err := json.Unmarshal(document, &run); err != nil {
+				return nil, err
+			}
+			info := infos[run.SourceID]
+			info.Last = run.EndedAt
+			infos[run.SourceID] = info
+		}
+	}
+	for id, next := range schedules {
+		info := infos[id]
+		info.Next = next
+		infos[id] = info
+	}
+	return json.Marshal(infos)
+}
+
 func (a *App) Serve() error {
 	a.serveMu.Lock()
 	select {
@@ -192,7 +226,9 @@ func (a *App) Serve() error {
 	c := a.Config.Startup()
 	// Load certificates and bind before any queued task can leave the queue.
 	if c.TLS.Cert != "" {
-		certificate, err := tls.LoadX509KeyPair(config.Resolve(a.Config.File(), c.TLS.Cert), config.Resolve(a.Config.File(), c.TLS.Key))
+		certFile := config.Resolve(a.Config.File(), c.TLS.Cert)
+		keyFile := config.Resolve(a.Config.File(), c.TLS.Key)
+		certificate, err := tls.LoadX509KeyPair(certFile, keyFile)
 		if err != nil {
 			return err
 		}
@@ -212,6 +248,7 @@ func (a *App) Serve() error {
 	}
 	return a.Server.Serve(listener)
 }
+
 func (a *App) Close(ctx context.Context) error {
 	var err error
 	a.once.Do(func() {
@@ -229,6 +266,7 @@ func (a *App) Close(ctx context.Context) error {
 	})
 	return err
 }
+
 func (a *App) Handler() http.Handler {
 	mux := http.NewServeMux()
 	api := http.NewServeMux()
@@ -290,6 +328,7 @@ func (a *App) Handler() http.Handler {
 	mux.Handle("/", a.Mirrors)
 	return mux
 }
+
 func respond(w http.ResponseWriter, status int, value any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
@@ -297,11 +336,13 @@ func respond(w http.ResponseWriter, status int, value any) {
 		slog.Error("write JSON", "error", err)
 	}
 }
+
 func decode(w http.ResponseWriter, r *http.Request, out any) error {
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	defer r.Body.Close()
 	return json.UnmarshalRead(r.Body, out, json.RejectUnknownMembers(true))
 }
+
 func failure(w http.ResponseWriter, err error) {
 	status := 400
 	if errors.Is(err, config.ErrConflict) {
@@ -309,6 +350,7 @@ func failure(w http.ResponseWriter, err error) {
 	}
 	respond(w, status, map[string]string{"error": err.Error()})
 }
+
 func (a *App) login(w http.ResponseWriter, r *http.Request) {
 	if a.auth.limited(clientIP(r)) {
 		respond(w, 429, map[string]string{"error": "尝试过多，一分钟后重试"})
@@ -328,14 +370,30 @@ func (a *App) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.auth.resetLimit(clientIP(r))
-	http.SetCookie(w, &http.Cookie{Name: "mirrordock_session", Value: token, Path: "/api/", HttpOnly: true, Secure: r.TLS != nil, SameSite: http.SameSiteStrictMode, MaxAge: 43200})
+	http.SetCookie(w, sessionCookieFor(r, token, int(sessionLifetime/time.Second)))
 	respond(w, 200, map[string]any{"ok": true, "username": a.auth.username})
 }
+
+// sessionCookieFor scopes the session to the API, hides it from scripts and
+// never sends it cross-site. A negative maxAge deletes the cookie.
+func sessionCookieFor(r *http.Request, value string, maxAge int) *http.Cookie {
+	return &http.Cookie{
+		Name:     sessionCookie,
+		Value:    value,
+		Path:     "/api/",
+		HttpOnly: true,
+		Secure:   r.TLS != nil,
+		SameSite: http.SameSiteStrictMode,
+		MaxAge:   maxAge,
+	}
+}
+
 func (a *App) logout(w http.ResponseWriter, r *http.Request) {
 	a.auth.logout(r)
-	http.SetCookie(w, &http.Cookie{Name: "mirrordock_session", Value: "", Path: "/api/", HttpOnly: true, Secure: r.TLS != nil, SameSite: http.SameSiteStrictMode, MaxAge: -1})
+	http.SetCookie(w, sessionCookieFor(r, "", -1))
 	respond(w, 200, map[string]bool{"ok": true})
 }
+
 func (a *App) saveConfig(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Config      config.Config `json:"config"`
@@ -355,6 +413,7 @@ func (a *App) saveConfig(w http.ResponseWriter, r *http.Request) {
 	_ = a.Store.SetState("last_config_change", time.Now().UTC().Format(time.RFC3339))
 	a.configApplied(w, err)
 }
+
 func (a *App) reload(w http.ResponseWriter, r *http.Request) {
 	err := a.Runs.Reload()
 	if _, partial := errors.AsType[*runs.PartialApplyError](err); err != nil && !partial {
@@ -377,6 +436,7 @@ func (a *App) configApplied(w http.ResponseWriter, warning error) {
 	}
 	respond(w, 200, result)
 }
+
 func (a *App) listRuns(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	if q.Get("latest") == "1" {
@@ -422,6 +482,7 @@ func (a *App) listRuns(w http.ResponseWriter, r *http.Request) {
 	}
 	respond(w, 200, map[string]any{"items": rows, "total": total})
 }
+
 func (a *App) getRun(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	run, err := a.Runs.GetContext(r.Context(), id)
@@ -435,6 +496,7 @@ func (a *App) getRun(w http.ResponseWriter, r *http.Request) {
 	}
 	respond(w, 200, run)
 }
+
 func (a *App) enqueue(w http.ResponseWriter, r *http.Request) {
 	run, err := a.Runs.Enqueue(r.PathValue("id"), "manual")
 	if err != nil {
@@ -443,6 +505,7 @@ func (a *App) enqueue(w http.ResponseWriter, r *http.Request) {
 	}
 	respond(w, 201, run)
 }
+
 func (a *App) action(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err := a.Runs.Action(id, r.PathValue("action")); err != nil {
@@ -451,6 +514,7 @@ func (a *App) action(w http.ResponseWriter, r *http.Request) {
 	}
 	respond(w, 200, map[string]bool{"ok": true})
 }
+
 func (a *App) logs(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	attempt, _ := strconv.Atoi(r.URL.Query().Get("attempt"))
@@ -477,14 +541,20 @@ func (a *App) logs(w http.ResponseWriter, r *http.Request) {
 	}
 	respond(w, 200, map[string]any{"text": text, "next_offset": next})
 }
+
 func (a *App) clearLogs(w http.ResponseWriter, r *http.Request) {
 	count, err := a.Runs.ClearLogsContext(r.Context())
 	if err != nil {
-		respond(w, http.StatusServiceUnavailable, map[string]any{"error": syncer.CleanLog(err.Error()), "cleared": count})
+		// Report removals that already happened even when cleanup stopped.
+		respond(w, http.StatusServiceUnavailable, map[string]any{
+			"error":   syncer.CleanLog(err.Error()),
+			"cleared": count,
+		})
 		return
 	}
 	respond(w, 200, map[string]int{"cleared": count})
 }
+
 func (a *App) info(w http.ResponseWriter, r *http.Request) {
 	_, offset := time.Now().In(a.location).Zone()
 	c := a.Config.Startup()
@@ -496,25 +566,44 @@ func (a *App) info(w http.ResponseWriter, r *http.Request) {
 		}
 		return config.Resolve(file, value)
 	}
-	respond(w, 200, map[string]any{
-		"timezone": a.location.String(), "utc_offset_seconds": offset, "version": a.Version,
-		"go": strings.TrimPrefix(runtime.Version(), "go"), "os": runtime.GOOS, "arch": runtime.GOARCH, "cpus": runtime.NumCPU(),
-		"tls": c.TLS.Cert != "", "publications": a.Mirrors.Publications(), "downloads": a.Mirrors.Stats(), "schedules": a.Runs.ScheduleInfo(),
-		"deployment": map[string]any{
-			"listen": net.JoinHostPort(c.Listen, strconv.Itoa(c.Port)), "data": data,
-			"database": filepath.Join(data, "data.sqlite"), "mirror_root": a.Mirrors.Root,
-			"log": map[string]string{"level": c.Log.Level, "format": c.Log.Format, "path": resolveOptional(c.Log.Path)},
-			"tls": map[string]string{"cert": resolveOptional(c.TLS.Cert), "key": resolveOptional(c.TLS.Key)},
+	deployment := map[string]any{
+		"listen":      net.JoinHostPort(c.Listen, strconv.Itoa(c.Port)),
+		"data":        data,
+		"database":    filepath.Join(data, "data.sqlite"),
+		"mirror_root": a.Mirrors.Root,
+		"log": map[string]string{
+			"level":  c.Log.Level,
+			"format": c.Log.Format,
+			"path":   resolveOptional(c.Log.Path),
 		},
+		"tls": map[string]string{
+			"cert": resolveOptional(c.TLS.Cert),
+			"key":  resolveOptional(c.TLS.Key),
+		},
+	}
+	respond(w, 200, map[string]any{
+		"timezone":           a.location.String(),
+		"utc_offset_seconds": offset,
+		"version":            a.Version,
+		"go":                 strings.TrimPrefix(runtime.Version(), "go"),
+		"os":                 runtime.GOOS,
+		"arch":               runtime.GOARCH,
+		"cpus":               runtime.NumCPU(),
+		"tls":                c.TLS.Cert != "",
+		"publications":       a.Mirrors.Publications(),
+		"downloads":          a.Mirrors.Stats(),
+		"schedules":          a.Runs.ScheduleInfo(),
+		"deployment":         deployment,
 	})
 }
+
 func (a *App) checks(w http.ResponseWriter, r *http.Request) {
 	out := map[string]any{}
 	for _, name := range []string{"rsync", "dnf", "rpmkeys"} {
 		ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
-		b, err := exec.CommandContext(ctx, name, "--version").CombinedOutput()
+		output, err := exec.CommandContext(ctx, name, "--version").CombinedOutput()
 		cancel()
-		text := string(b)
+		text := string(output)
 		if len(text) > 2048 {
 			text = text[:2048]
 		}
@@ -529,16 +618,18 @@ func (a *App) checks(w http.ResponseWriter, r *http.Request) {
 	out["github_proxy_configured"] = a.Config.View().ProxyConfigured
 	respond(w, 200, out)
 }
+
 func checkWritable(dir string) bool {
-	f, err := os.CreateTemp(dir, ".mirrordock-check-*")
+	probe, err := os.CreateTemp(dir, ".mirrordock-check-*")
 	if err != nil {
 		return false
 	}
-	name := f.Name()
-	f.Close()
+	name := probe.Name()
+	probe.Close()
 	os.Remove(name)
 	return true
 }
+
 func (a *App) events(w http.ResponseWriter, r *http.Request) {
 	select {
 	case a.sse <- struct{}{}:
@@ -547,7 +638,7 @@ func (a *App) events(w http.ResponseWriter, r *http.Request) {
 		respond(w, 503, map[string]string{"error": "事件连接数量已满"})
 		return
 	}
-	f, ok := w.(http.Flusher)
+	flusher, ok := w.(http.Flusher)
 	if !ok {
 		respond(w, 500, map[string]string{"error": "SSE unavailable"})
 		return
@@ -561,20 +652,14 @@ func (a *App) events(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		changed := a.progress.changes()
-		b, err := a.progress.get(r.Context(), func(ctx context.Context) ([]byte, error) {
-			items, err := a.Runs.Latest(ctx)
-			if err != nil {
-				return nil, err
-			}
-			return json.Marshal(map[string]any{"runs": items, "downloads": a.Mirrors.Stats(), "publications": a.Mirrors.Publications(), "schedules": a.Runs.ScheduleInfo()})
-		})
+		frame, err := a.progress.get(r.Context(), a.readProgress)
 		if err != nil {
 			return
 		}
-		if _, err = fmt.Fprintf(w, "event: progress\ndata: %s\n\n", b); err != nil {
+		if _, err = fmt.Fprintf(w, "event: progress\ndata: %s\n\n", frame); err != nil {
 			return
 		}
-		f.Flush()
+		flusher.Flush()
 		select {
 		case <-a.closing:
 			return
@@ -585,6 +670,35 @@ func (a *App) events(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 }
+
+// readProgress builds one SSE frame shared by every connected client.
+func (a *App) readProgress(ctx context.Context) ([]byte, error) {
+	items, err := a.Runs.Latest(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(map[string]any{
+		"runs":         items,
+		"downloads":    a.Mirrors.Stats(),
+		"publications": a.Mirrors.Publications(),
+		"schedules":    a.Runs.ScheduleInfo(),
+	})
+}
+
+// adminContentSecurityPolicy allows only the embedded bundle. Inline styles
+// stay allowed for Vue style bindings; scripts must come from the bundle.
+var adminContentSecurityPolicy = strings.Join([]string{
+	"default-src 'self'",
+	"script-src 'self'",
+	"style-src 'self' 'unsafe-inline'",
+	"img-src 'self' data:",
+	"font-src 'self'",
+	"connect-src 'self'",
+	"frame-ancestors 'none'",
+	"base-uri 'self'",
+	"form-action 'self'",
+}, "; ")
+
 func (a *App) frontend(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "GET" && r.Method != "HEAD" {
 		http.Error(w, "method not allowed", 405)
@@ -593,7 +707,7 @@ func (a *App) frontend(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("X-Frame-Options", "DENY")
 	w.Header().Set("Referrer-Policy", "same-origin")
-	w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'")
+	w.Header().Set("Content-Security-Policy", adminContentSecurityPolicy)
 	name := strings.TrimPrefix(r.URL.Path, "/admin/")
 	if r.URL.Path == "/favicon.ico" {
 		name = "favicon.ico"

@@ -80,7 +80,7 @@ Rsync 使用 `src1`、`src2` 等按数字升序尝试；各来源应为同一仓
 
 Reposync 使用单个 `src1`，生成任务私有 repo、缓存和密钥库，不修改 `/etc/yum.repos.d`。`download_metadata=false` 为仅包文件模式，可发布下载文件，但不能直接用作 DNF 仓库，并会去除上次遗留的 repodata。完整镜像要求下载元数据，并拒绝 `download_metadata=true` 与 `newest_only=true` 组合。GPG 包签名检查不等于仓库元数据签名验证；参数和真实发行版安装仍须在目标 EL 验收。
 
-配置中的来源地址和 `gpg_keys` 为公开地址，不支持 URL 鉴权，不能包含用户信息、查询参数或片段；这些地址会作为运行事实保存。GitHub 从 API 获取的临时签名资产 URL 不受此配置限制。新运行快照仍防御性脱敏。1.0 使用全新数据库结构，不包含发布前测试数据库的兼容迁移；首次上线使用新的数据目录。未来需要兼容已上线数据库的结构变更时，必须先设计迁移和版本标记，不能沿用无迁移假设。
+配置中的来源地址和 `gpg_keys` 为公开地址，不支持 URL 鉴权，不能包含用户信息、查询参数或片段；这些地址会作为运行事实保存。GitHub 从 API 获取的临时签名资产 URL 不受此配置限制。运行快照仍防御性脱敏。数据库结构版本记录在 SQLite `PRAGMA user_version`（1.0 为 1）；程序拒绝打开版本更高的数据库。以后改变表结构必须提升版本并附带显式迁移步骤。
 
 GitHub 按发布时间选最近 N 个符合条件的 Release，仅下载 assets，不下载自动源码 ZIP/TAR。源内 `release_count: 0` 继承系统值；glob 可筛选附件。tag 和附件不得使用 `.mirrordock*`、`.rsync-partial`、`.~tmp~` 或 `*.part` 等内部保留名称。大小、身份及可用 digest 校验后才复用或续传，Range 不兼容时重新下载。正文读取连续 5 分钟无数据会中止并保留 `.part`，允许有限重试/续传。开启旧版本清理后，仅在所有选中附件下载成功后清除旧版本及保留版本内已删除、改名或不再匹配的附件。为保证发布时间选择及附件完整性，仍分页查询 Release 和附件，超过 100 页明确失败。
 
@@ -90,9 +90,9 @@ GitHub Token 直接存放 `settings.github.token`，读取 API 仅返回存在�
 
 顶层 `log`：level 为 debug/info/warn/error，默认 info；format 为 json/text，默认 json；path 为空输出标准输出，非空为相对配置目录的追加文件。程序不自动轮转；可停机归档或使用 logrotate copytruncate。日志不能位于镜像根，不能覆盖配置、数据库、锁、通知密钥或 TLS 文件；任务日志子目录保留给原始输出。页面清理仅处理成功/失败/超时/取消四种终态任务日志，保留记录和错误摘要；可恢复的 interrupted 不清理。删除后保存失败也返回实际删除数量。
 
-手动清理以开始时的任务编号为上界，每页最多 100 条；文件删除和保存不占用整个运行引擎锁。相同任务的继续/取消等待该任务清理结束，其他任务的控制、进度与检查点继续执行。请求取消或服务退出停止后续清理，已保存的完成标记保留，失败可重试；已打开的日志下载仍读取打开时的完整长度。历史原始日志和外部备份不自动改写；若部署过带鉴权地址的旧版本，应手动清理相关终态日志并轮换已泄露凭据。
+手动清理以开始时的任务编号为上界，每页最多 100 条；文件删除和保存不占用整个运行引擎锁。相同任务的继续/取消等待该任务清理结束，其他任务的控制、进度与检查点继续执行。请求取消或服务退出停止后续清理，已保存的完成标记保留，失败可重试；已打开的日志下载仍读取打开时的完整长度。外部备份中的日志不受页面清理影响。
 
-TLS cert/key 同时留空提供 HTTP，填齐且匹配提供同端口 HTTPS，改动后重启。Go TLS 支持 HTTP/2，HTTPS 不宣称 sendfile。生产管理会话需要保密时启用 TLS。当前不信任 `X-Forwarded-*`，不支持“代理终止 HTTPS、后端使用 HTTP”的管理部署；可采用 TLS 透传或代理到启用 TLS 的后端并保留外部 Host/Origin。登录按实际连接 IP（IPv6 按 /64 前缀）每分钟最多 10 次，成功后重置，最多 4096 个限流桶，满额时淘汰最早的窗口而不是拒绝新客户端；同一反向代理后的客户端仍共用代理 IP，需在代理侧补充限流。出现 `field auth not found` 表示部署了旧二进制，应重新构建、替换实际程序并重启。
+TLS cert/key 同时留空提供 HTTP，填齐且匹配提供同端口 HTTPS，改动后重启。Go TLS 支持 HTTP/2，HTTPS 不宣称 sendfile。生产管理会话需要保密时启用 TLS。当前不信任 `X-Forwarded-*`，不支持“代理终止 HTTPS、后端使用 HTTP”的管理部署；可采用 TLS 透传或代理到启用 TLS 的后端并保留外部 Host/Origin。登录按实际连接 IP（IPv6 按 /64 前缀）每分钟最多 10 次，成功后重置，最多 4096 个限流桶，满额时淘汰最早的窗口而不是拒绝新客户端；同一反向代理后的客户端仍共用代理 IP，需在代理侧补充限流。
 
 ## 管理界面与统计
 
@@ -124,7 +124,7 @@ Rsync / Reposync / Release 分析按任务创建日期聚合完整历史，支�
 
 同步要求镜像目录实测支持 reflink：Linux 使用 FICLONE（生产 XFS 必须开启 reflink），macOS 开发环境使用 APFS 原生克隆；published 与 work 必须位于允许克隆的同一文件系统。克隆失败停止任务，不回退完整复制。多代中未变化的文件共享数据块，新增/替换的文件及被旧代保留的内容仍实际占用空间；首次同步仍需整套镜像容量。只有工作树元数据与修改身份均未变化才复用当前代，不生成新代；这一检查不读取文件正文。Rsync 保留单文件临时替换与 partial-dir，保护内部标记，不使用 delay-updates 或 inplace。
 
-安全余量为文件系统总量的 1% 与 1 GiB 取大，任务启动另为每个活动 worker（含新任务）预留 512 MiB。空间不足时保持排队且不消耗运行预算，恢复后自动执行；运行中每 5 秒检查，低于安全余量停止任务并保留上一发布；已进入发布阶段的任务不再停止，因为发布只是同一文件系统内的改名、不需要新空间。此机制不是硬配额，检查间隔内的突增或外部写入仍可能触发 ENOSPC。容量探测异常会记录错误并让新任务保持排队（不消耗预算、恢复后自动执行），不等同于磁盘不足而取消正在运行的任务。DNF 私有数据放在任务 work 的隐藏子目录，启动清理旧式 DNF 临时目录和遗留 reflink 探测目录。持久化的成功任务清理 work；失败/超时/取消任务的 work 若已完成准备，则作为该源下次同步的起点保留 7 天（每源只留最新一份，磁盘不足导致的失败、源被删除或改类型/dest 时不保留），下次任务直接改名接手、不复制，rsync 跳过已完成文件并从 `.rsync-partial` 续传；有任务因空间不足排队时，按结束时间从旧到新回收其他源的保留目录，直到可以放行，排队源自己的保留目录不回收。暂停/中断及未知目录保留；服务启动、终态及每 5 分钟触发回收，过期旧代仍遵守引用保护。系统设置的环境检查显示 reflink 支持/不支持/探测失败及原因，并显示实际文件系统容量、余量和目录数量；刷新会重新实测，不将各代逻辑大小相加当作物理占用。
+安全余量为文件系统总量的 1% 与 1 GiB 取大，任务启动另为每个活动 worker（含新任务）预留 512 MiB。空间不足时保持排队且不消耗运行预算，恢复后自动执行；运行中每 5 秒检查，低于安全余量停止任务并保留上一发布；已进入发布阶段的任务不再停止，因为发布只是同一文件系统内的改名、不需要新空间。此机制不是硬配额，检查间隔内的突增或外部写入仍可能触发 ENOSPC。容量探测异常会记录错误并让新任务保持排队（不消耗预算、恢复后自动执行），不等同于磁盘不足而取消正在运行的任务。DNF 私有数据放在任务 work 的隐藏子目录；启动时清理上次未完成的 reflink 探测目录和待删除工作目录（`.discard-*`）。持久化的成功任务清理 work；失败/超时/取消任务的 work 若已完成准备，则作为该源下次同步的起点保留 7 天（每源只留最新一份，磁盘不足导致的失败、源被删除或改类型/dest 时不保留），下次任务直接改名接手、不复制，rsync 跳过已完成文件并从 `.rsync-partial` 续传；有任务因空间不足排队时，按结束时间从旧到新回收其他源的保留目录，直到可以放行，排队源自己的保留目录不回收。暂停/中断及未知目录保留；服务启动、终态及每 5 分钟触发回收，过期旧代仍遵守引用保护。系统设置的环境检查显示 reflink 支持/不支持/探测失败及原因，并显示实际文件系统容量、余量和目录数量；刷新会重新实测，不将各代逻辑大小相加当作物理占用。
 
 公开目录可搜索/排序，不分页，最多列出文件系统遍历得到的前 1000 个可见项并提示截断；搜索/排序只作用于已列出项，不代表全目录分页；隐藏项不占名额。其他文件仍可用完整路径下载。无 JavaScript 时仍有已列出的链接。项目行展示状态、公开文件逻辑大小和上次/下次同步；状态读取使用最多两次批量索引查询及一秒共享缓存，绑定请求取消，正文下载仍不访问数据库；GitHub 版本行展示大小。符号链接不回显目标，私有标记不可下载。
 
@@ -153,11 +153,28 @@ PATH=/path/to/modern-rsync:$PATH MIRRORDOCK_TEST_RSYNC=/path/to/modern-rsync/rsy
 
 未设置测试 rsync 时部分协议测试会跳过；测试通过不代表跳过项已验证。报告位于根 `test-results/` 和 `web/test-results/`，均忽略。项目未连接外部 CI，不宣称运行远程流水线。
 
+### 依赖来源校验
+
+依赖版本由 `go.sum` 与 `web/package-lock.json` 固定。上线或升级依赖前从源头核验，不依赖第三方代理的缓存：
+
+```sh
+# 用全新模块缓存直接从各模块源仓库拉取，并对照官方校验数据库 sum.golang.org
+GOMODCACHE=$(mktemp -d) GOPROXY=direct GOSUMDB=sum.golang.org go mod download all
+go mod verify
+go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+# npm：锁文件 integrity 来自 registry.npmjs.org，并校验注册表签名与来源证明
+npm --prefix web ci --ignore-scripts
+npm --prefix web audit signatures
+npm --prefix web audit
+```
+
+`go mod download all` 在全新缓存下可能向 `go.sum` 追加未参与构建的模块校验行，核验后用 `git checkout go.sum` 还原。Dockerfile 的三个基础镜像按 digest 固定，更新时先用 `docker buildx imagetools inspect <镜像:tag>` 取得官方摘要并评审变更。
+
 ## 部署与目录
 
-`docker build --build-arg VERSION=v1.1.0 -t mirrordock .` 使用先 Vue 后 Go 的多阶段构建；VERSION 示例必须替换为与源码对应的真实版本，构建上下文无 `.git`，无法自动核对版本或 dirty 状态。EL9 运行层先应用已发布安全更新，再安装 rsync/DNF。Docker 与真实 EL 验收以当前验收文档为准。配置中的 path 和 mirror_root 可设为 `/var/lib/mirrordock` 与 `/srv/mirrors`。
+`docker build --build-arg VERSION=v1.1.0 -t mirrordock .` 使用先 Vue 后 Go 的多阶段构建；VERSION 示例必须替换为与源码对应的真实版本，构建上下文无 `.git`，无法自动核对版本或 dirty 状态。三个基础镜像（Node、Go、Rocky Linux 官方发布的 `rockylinux/rockylinux:9`）均按 digest 固定；Web 依赖以 `npm ci --ignore-scripts` 安装，Go 模块下载后执行 `go mod verify`。运行层先应用已发布安全更新，再安装 rsync/DNF。Docker 与真实 EL 验收以当前验收文档为准。配置中的 path 和 mirror_root 可设为 `/var/lib/mirrordock` 与 `/srv/mirrors`。
 
-国内网络可使用 `docker build --build-arg VERSION=v1.1.0 --build-arg GOPROXY=https://goproxy.cn --build-arg ROCKY_MIRROR=https://mirror.nju.edu.cn/rocky -t mirrordock .`（同样替换示例版本）。参数选择构建依赖下载源，默认仍为 Go 官方代理和 Rocky 镜像列表，保留 Go 校验数据库与 RPM 签名检查；Rocky 源保留在镜像的软件源配置中，应用同步仍使用任务私有仓库。基础镜像加速由 Docker 引擎的 `registry-mirrors` 设置，例如按 [毫秒镜像说明](https://1ms.run/guide) 配置用户选择的源；这些设置不写入应用 YAML。
+国内网络可使用 `docker build --build-arg VERSION=v1.1.0 --build-arg GOPROXY=https://goproxy.cn --build-arg ROCKY_MIRROR=https://mirror.nju.edu.cn/rocky -t mirrordock .`（同样替换示例版本）。参数选择构建依赖下载源，默认仍为 Go 官方代理和 Rocky 镜像列表，保留 Go 校验数据库（`GOSUMDB=sum.golang.org`）与 RPM 签名检查；`ROCKY_MIRROR` 必须是 `https://` 地址，只允许 URL 安全字符；Rocky 源保留在镜像的软件源配置中，应用同步仍使用任务私有仓库。基础镜像加速由 Docker 引擎的 `registry-mirrors` 设置，例如按 [毫秒镜像说明](https://1ms.run/guide) 配置用户选择的源；这些设置不写入应用 YAML。
 
 ```sh
 docker run --rm --name mirrordock -p 8080:8080 -e TZ=Asia/Shanghai \
@@ -166,7 +183,7 @@ docker run --rm --name mirrordock -p 8080:8080 -e TZ=Asia/Shanghai \
   -v /absolute/mirror-dir:/srv/mirrors mirrordock
 ```
 
-容器可加 `--user UID:GID` 以非 root 运行；配置目录、state、镜像卷须预先授予该身份读写权限，GPG 临时数据目录也须可写。映射其他 UID/GID 或绑定低端口可能需要额外权限。未内置固定 HEALTHCHECK，因为端口、HTTP/TLS 由 YAML 决定；部署方应针对实际入口配置健康探测。
+镜像默认以非 root 用户 `mirrordock`（UID/GID 10001，可用 `--build-arg MIRRORDOCK_UID=` 调整）运行；挂载的配置目录、state、镜像卷须预先授予该身份读写权限，例如 `chown -R 10001:10001 <目录>`。也可用 `--user UID:GID` 指定其他身份。映射其他 UID/GID 或绑定低端口需要额外权限。未内置固定 HEALTHCHECK，因为端口、HTTP/TLS 由 YAML 决定；部署方应针对实际入口配置健康探测。
 
 systemd 模板见 [deploy/mirrordock.service](deploy/mirrordock.service)，部署前创建服务用户、目录并赋权，按实际位置调整路径。低端口另需绑定权限。
 
@@ -179,7 +196,7 @@ web/                     唯一 npm/Vite 边界；Vue、E2E、embed.go
 configs/                 注释案例；本地实例忽略
 deploy/                  systemd 定义
 scripts/                 构建、favicon 与目录图标生成工具
-docs/                    当前设计、实施、验收；archive/plans 为历史计划
+docs/                    当前设计、实施与验收
 bin/ data/ .cache/        忽略的本机二进制、状态与缓存
 test-results/            忽略的 Go/OCR/构建报告
 ```

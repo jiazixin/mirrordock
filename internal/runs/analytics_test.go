@@ -129,6 +129,7 @@ func TestAnalyticsReposyncFactsAndTypeIsolation(t *testing.T) {
 		t.Fatal(filtered, err)
 	}
 }
+
 func TestAnalyticsDSTAndBoundedRanking(t *testing.T) {
 	store, err := database.Open(t.TempDir())
 	if err != nil {

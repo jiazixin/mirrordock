@@ -76,8 +76,8 @@ function choose(index: number) {
 
 function move(step: number) {
   const length = props.options.length
-  for (let i = 1; i <= length; i++) {
-    const index = (active.value + step * i + length) % length
+  for (let distance = 1; distance <= length; distance++) {
+    const index = (active.value + step * distance + length) % length
     if (!props.options[index]?.disabled) {
       active.value = index
       break

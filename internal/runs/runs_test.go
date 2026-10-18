@@ -74,6 +74,7 @@ func TestLogSnapshotExcludesLaterWritesAndSurvivesCleanup(t *testing.T) {
 func (f runnerFunc) Run(ctx context.Context, task syncer.Task, emit func(syncer.Progress), log io.Writer) error {
 	return f(ctx, task, emit, log)
 }
+
 func testEngine(t *testing.T, timeout string, runner syncer.Runner, options ...func(*Engine)) (*Engine, *config.Manager, *database.Store, *mirrors.Manager) {
 	t.Helper()
 	dir := t.TempDir()
@@ -107,6 +108,7 @@ func testEngine(t *testing.T, timeout string, runner syncer.Runner, options ...f
 	t.Cleanup(e.Close)
 	return e, cfg, store, m
 }
+
 func waitState(t *testing.T, e *Engine, id int64, state string) *Run {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
@@ -124,6 +126,7 @@ func waitState(t *testing.T, e *Engine, id int64, state string) *Run {
 	t.Fatalf("wanted %s, got %+v", state, r)
 	return nil
 }
+
 func TestFailoverUsesOneRunAndRedactsLogs(t *testing.T) {
 	var calls atomic.Int32
 	e, _, store, m := testEngine(t, "2s", runnerFunc(func(ctx context.Context, task syncer.Task, emit func(syncer.Progress), log io.Writer) error {
@@ -164,6 +167,7 @@ func TestFailoverUsesOneRunAndRedactsLogs(t *testing.T) {
 		t.Fatal(r, err)
 	}
 }
+
 func TestFailoverSharesTimeoutAndLocalErrorsDoNotSwitch(t *testing.T) {
 	for _, retry := range []bool{false, true} {
 		t.Run(fmt.Sprint(retry), func(t *testing.T) {
@@ -198,6 +202,7 @@ func TestFailoverSharesTimeoutAndLocalErrorsDoNotSwitch(t *testing.T) {
 		})
 	}
 }
+
 func TestPausePreservesBudgetAndReservesDestination(t *testing.T) {
 	started := make(chan struct{}, 4)
 	e, cfg, _, _ := testEngine(t, "400ms", runnerFunc(func(ctx context.Context, task syncer.Task, emit func(syncer.Progress), log io.Writer) error {
@@ -242,6 +247,7 @@ func TestPausePreservesBudgetAndReservesDestination(t *testing.T) {
 		t.Fatalf("incorrect resumed budget: %+v", r)
 	}
 }
+
 func TestRestartKeepsInterruptedRun(t *testing.T) {
 	started := make(chan struct{}, 1)
 	runner := runnerFunc(func(ctx context.Context, task syncer.Task, emit func(syncer.Progress), log io.Writer) error {

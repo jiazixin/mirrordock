@@ -84,19 +84,20 @@ func summarizeDirectory(ctx context.Context, dir, kind string) (*DirectorySummar
 		tag, _, nested := strings.Cut(filepath.ToSlash(rel), "/")
 		if d.IsDir() {
 			if summary.Releases != nil && !nested && len(summary.Releases) < 1000 {
-				r := ReleaseSummary{}
-				f, e := root.OpenFile(filepath.Join(rel, ".mirrordock-release-sync"), os.O_RDONLY|unix.O_NONBLOCK|unix.O_NOFOLLOW, 0)
-				if e == nil {
-					// Bound marker reads, including malformed legacy/imported markers.
-					if st, err := f.Stat(); err == nil && st.Mode().IsRegular() {
-						b, err := io.ReadAll(io.LimitReader(f, 128))
+				release := ReleaseSummary{}
+				markerFlags := os.O_RDONLY | unix.O_NONBLOCK | unix.O_NOFOLLOW
+				marker, err := root.OpenFile(filepath.Join(rel, ".mirrordock-release-sync"), markerFlags, 0)
+				if err == nil {
+					// Bound marker reads, including malformed or imported markers.
+					if info, err := marker.Stat(); err == nil && info.Mode().IsRegular() {
+						stamp, err := io.ReadAll(io.LimitReader(marker, 128))
 						if err == nil {
-							r.SyncedAt, _ = time.Parse(time.RFC3339Nano, string(b))
+							release.SyncedAt, _ = time.Parse(time.RFC3339Nano, string(stamp))
 						}
 					}
-					f.Close()
+					marker.Close()
 				}
-				summary.Releases[tag] = r
+				summary.Releases[tag] = release
 			}
 			return nil
 		}
@@ -108,9 +109,9 @@ func summarizeDirectory(ctx context.Context, dir, kind string) (*DirectorySummar
 			return nil
 		}
 		summary.Bytes += info.Size()
-		if r, ok := summary.Releases[tag]; nested && ok {
-			r.Bytes += info.Size()
-			summary.Releases[tag] = r
+		if release, ok := summary.Releases[tag]; nested && ok {
+			release.Bytes += info.Size()
+			summary.Releases[tag] = release
 		}
 		return nil
 	})

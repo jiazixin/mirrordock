@@ -36,9 +36,19 @@ var listing = template.Must(template.New("listing.html").Funcs(template.FuncMap{
 	"minusOne": func(n int) int { return n - 1 },
 }).Parse(listingHTML + listingIconsHTML))
 
+// listingCSP permits only the embedded script, by its hash. Inline styles
+// carry the embedded stylesheet; nothing else may load or be framed.
 var listingCSP = func() string {
 	sum := sha256.Sum256([]byte(listingJS))
-	return "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; script-src 'sha256-" + base64.StdEncoding.EncodeToString(sum[:]) + "'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'"
+	return strings.Join([]string{
+		"default-src 'none'",
+		"img-src 'self'",
+		"style-src 'unsafe-inline'",
+		"script-src 'sha256-" + base64.StdEncoding.EncodeToString(sum[:]) + "'",
+		"base-uri 'none'",
+		"frame-ancestors 'none'",
+		"form-action 'none'",
+	}, "; ")
 }()
 
 type listingItem struct {
@@ -146,9 +156,19 @@ func projectItem(item listingItem, p Publication, info SourceListingInfo) listin
 	return item
 }
 
-func newListingItem(name, u string, dir bool, info os.FileInfo) listingItem {
+func newListingItem(name, link string, dir bool, info os.FileInfo) listingItem {
 	kind, group, icon := fileKind(name)
-	item := listingItem{Name: name, URL: u, Kind: kind, Group: group, Icon: icon, Size: "—", Modified: "—", Timestamp: "", Bytes: -1, Dir: dir}
+	item := listingItem{
+		Name:     name,
+		URL:      link,
+		Kind:     kind,
+		Group:    group,
+		Icon:     icon,
+		Size:     "—",
+		Modified: "—",
+		Bytes:    -1,
+		Dir:      dir,
+	}
 	if dir {
 		item.Kind, item.Group, item.Icon = "目录", "folder", "folder"
 	}
@@ -167,9 +187,16 @@ func newListingItem(name, u string, dir bool, info os.FileInfo) listingItem {
 	return item
 }
 
+// archiveExtensions lists compound extensions before their suffixes.
+var archiveExtensions = []string{
+	"tar.gz", "tar.xz", "tar.bz2", "tar.zst", "tar.lz", "tar.lzma",
+	"tgz", "txz", "tbz2", "zip", "7z", "rar",
+	"tar", "gz", "xz", "bz2", "zst", "lz", "lzma",
+}
+
 func fileKind(name string) (kind, group, icon string) {
 	lower := strings.ToLower(name)
-	for _, ext := range []string{"tar.gz", "tar.xz", "tar.bz2", "tar.zst", "tar.lz", "tar.lzma", "tgz", "txz", "tbz2", "zip", "7z", "rar", "tar", "gz", "xz", "bz2", "zst", "lz", "lzma"} {
+	for _, ext := range archiveExtensions {
 		if strings.HasSuffix(lower, "."+ext) {
 			return strings.ToUpper(ext), "archive", "archive"
 		}
@@ -258,17 +285,17 @@ func renderListing(w http.ResponseWriter, r *http.Request, items []listingItem, 
 		}
 		return strings.Compare(a.Name, b.Name)
 	})
-	if len(items) > 1000 {
-		items, more = items[:1000], true
+	if len(items) > maxListedEntries {
+		items, more = items[:maxListedEntries], true
 	}
 	crumbs := []listingCrumb{{Name: "镜像目录", URL: "/"}}
-	u := "/"
+	link := "/"
 	for segment := range strings.SplitSeq(strings.Trim(r.URL.Path, "/"), "/") {
 		if segment == "" {
 			continue
 		}
-		u += url.PathEscape(segment) + "/"
-		crumbs = append(crumbs, listingCrumb{Name: segment, URL: u})
+		link += url.PathEscape(segment) + "/"
+		crumbs = append(crumbs, listingCrumb{Name: segment, URL: link})
 	}
 	title, heading := "镜像目录", "镜像目录"
 	if len(crumbs) > 1 {

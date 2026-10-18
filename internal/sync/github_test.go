@@ -34,6 +34,37 @@ func assetClient(t *testing.T, handler http.HandlerFunc) (*github.Client, *httpt
 	}
 	return client, server
 }
+
+// testDownload builds a direct asset download with the production idle limit.
+func testDownload(
+	client *github.Client,
+	httpClient *http.Client,
+	id AssetIdentity,
+	target string,
+	received ...func(int64),
+) assetDownload {
+	download := assetDownload{
+		client:     client,
+		httpClient: httpClient,
+		owner:      "owner",
+		repo:       "repo",
+		identity:   id,
+		target:     target,
+		idle:       assetIdleTimeout,
+		progress:   func(int64) {},
+	}
+	if len(received) > 0 {
+		download.received = received[0]
+	}
+	return download
+}
+
+func testDownloadIdle(client *github.Client, httpClient *http.Client, id AssetIdentity, target string, idle time.Duration) assetDownload {
+	download := testDownload(client, httpClient, id, target)
+	download.idle = idle
+	return download
+}
+
 func TestAssetReplacementCannotReuseOldSameSize(t *testing.T) {
 	client, _ := assetClient(t, func(w http.ResponseWriter, r *http.Request) { http.Error(w, "failure", 503) })
 	target := filepath.Join(t.TempDir(), "asset.bin")
@@ -43,7 +74,7 @@ func TestAssetReplacementCannotReuseOldSameSize(t *testing.T) {
 	config.AtomicWrite(identityFile(target), b, 0600)
 	next := AssetIdentity{ID: 2, Size: 3}
 	for range 2 {
-		reused, err := downloadAsset(t.Context(), client, http.DefaultClient, "owner", "repo", 2, next, target, func(int64) {}, "")
+		reused, err := testDownload(client, http.DefaultClient, next, target).run(t.Context())
 		if err == nil || reused {
 			t.Fatal("reused old bytes for replaced asset")
 		}
@@ -52,6 +83,7 @@ func TestAssetReplacementCannotReuseOldSameSize(t *testing.T) {
 		t.Fatal("failed download changed completed identity")
 	}
 }
+
 func TestAssetResumeAndInvalidRangeRestart(t *testing.T) {
 	for _, badRange := range []bool{false, true} {
 		t.Run(fmt.Sprint(badRange), func(t *testing.T) {
@@ -87,7 +119,7 @@ func TestAssetResumeAndInvalidRangeRestart(t *testing.T) {
 			b, _ := json.Marshal(id)
 			config.AtomicWrite(identityFile(target+".part"), b, 0600)
 			received := int64(0)
-			reused, err := downloadAsset(t.Context(), client, server.Client(), "owner", "repo", 1, id, target, func(int64) {}, "", func(n int64) { received += n })
+			reused, err := testDownload(client, server.Client(), id, target, func(n int64) { received += n }).run(t.Context())
 			if err != nil || reused {
 				t.Fatal(reused, err)
 			}
@@ -109,7 +141,7 @@ func TestAssetResumeAndInvalidRangeRestart(t *testing.T) {
 			if downloads.Load() != want {
 				t.Fatal(downloads.Load())
 			}
-			reused, err = downloadAsset(t.Context(), client, server.Client(), "owner", "repo", 1, id, target, func(int64) {}, "", func(n int64) { received += n })
+			reused, err = testDownload(client, server.Client(), id, target, func(n int64) { received += n }).run(t.Context())
 			if received != expectedBytes {
 				t.Fatal("reuse counted as download", received)
 			}
@@ -119,6 +151,7 @@ func TestAssetResumeAndInvalidRangeRestart(t *testing.T) {
 		})
 	}
 }
+
 func TestGitHubSelectsNewestAssetsWithoutSourceArchives(t *testing.T) {
 	var assetURL string
 	client, server := assetClient(t, func(w http.ResponseWriter, r *http.Request) {
@@ -293,11 +326,11 @@ func TestTruncatedAssetCanResumeAfterNetworkFailure(t *testing.T) {
 	assetURL = server.URL + "/asset"
 	target := filepath.Join(t.TempDir(), "asset.bin")
 	id := AssetIdentity{ID: 1, Size: 9}
-	_, err := downloadAsset(t.Context(), client, server.Client(), "o", "r", 1, id, target, func(int64) {}, "")
+	_, err := testDownload(client, server.Client(), id, target).run(t.Context())
 	if err == nil || !AsFailure(err).Retryable {
 		t.Fatal("truncation not retryable", err)
 	}
-	if _, err = downloadAsset(t.Context(), client, server.Client(), "o", "r", 1, id, target, func(int64) {}, ""); err != nil {
+	if _, err = testDownload(client, server.Client(), id, target).run(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	b, err := os.ReadFile(target)
@@ -319,7 +352,11 @@ func TestFailedAssetRetainsBytesSinceLastProgressTick(t *testing.T) {
 	})
 	assetURL = server.URL + "/asset"
 	var received, latest int64
-	_, err := downloadAsset(t.Context(), client, server.Client(), "o", "r", 1, AssetIdentity{ID: 1, Size: 102400}, filepath.Join(t.TempDir(), "asset.bin"), func(n int64) { latest = n }, "", func(n int64) { received += n })
+	_, err := func() (bool, error) {
+		download := testDownload(client, server.Client(), AssetIdentity{ID: 1, Size: 102400}, filepath.Join(t.TempDir(), "asset.bin"), func(n int64) { received += n })
+		download.progress = func(n int64) { latest = n }
+		return download.run(t.Context())
+	}()
 	if err == nil || received != int64(len(payload)) || latest != received {
 		t.Fatal(err, received, latest)
 	}
@@ -413,7 +450,7 @@ func TestAssetIdleTimeoutRetainsPartialAndRetries(t *testing.T) {
 	assetURL = server.URL + "/asset"
 	target := filepath.Join(t.TempDir(), "asset.bin")
 	id := AssetIdentity{ID: 1, Size: 6}
-	_, err := downloadAssetIdle(t.Context(), client, server.Client(), "o", "r", 1, id, target, func(int64) {}, "", 30*time.Millisecond)
+	_, err := testDownloadIdle(client, server.Client(), id, target, 30*time.Millisecond).run(t.Context())
 	f := AsFailure(err)
 	if f.Code != "DOWNLOAD_IDLE" || !f.Retryable {
 		t.Fatal(err)
@@ -423,7 +460,7 @@ func TestAssetIdleTimeoutRetainsPartialAndRetries(t *testing.T) {
 		t.Fatal(string(b), err)
 	}
 	finish.Store(true)
-	if _, err := downloadAssetIdle(t.Context(), client, server.Client(), "o", "r", 1, id, target, func(int64) {}, "", time.Second); err != nil {
+	if _, err := testDownloadIdle(client, server.Client(), id, target, time.Second).run(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	b, err = os.ReadFile(target)

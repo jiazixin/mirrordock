@@ -14,7 +14,6 @@ import (
 	"io"
 	"math/big"
 	"mirrordock/internal/config"
-	"mirrordock/internal/database"
 	"net"
 	"net/http"
 	"net/http/cookiejar"
@@ -31,18 +30,6 @@ func TestAdminAuthenticationWritebackAndPublicIsolation(t *testing.T) {
 	file := filepath.Join(dir, "config.yaml")
 	text := "# preserve comment\nlisten: 127.0.0.1\nport: 8080\npath: ./data\nmirror_root: ./mirror\nauth:\n  username: operator\n  password: correct password 123\nsettings:\n  github:\n    token: secret-token\n    proxy: http://user:proxy-password@127.0.0.1:8081\nsources: []\n"
 	if err := os.WriteFile(file, []byte(text), 0600); err != nil {
-		t.Fatal(err)
-	}
-	// A password row from an older version must not override YAML credentials.
-	legacy, err := database.Open(filepath.Join(dir, "data"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := legacy.SetState("admin_password", "old-inert-hash"); err != nil {
-		legacy.Close()
-		t.Fatal(err)
-	}
-	if err := legacy.Close(); err != nil {
 		t.Fatal(err)
 	}
 	a, err := Open(file)

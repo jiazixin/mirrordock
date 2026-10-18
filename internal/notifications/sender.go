@@ -26,9 +26,28 @@ type Message struct {
 	Body  string `json:"body"`
 }
 
+// maxResponseBytes bounds both response headers and bodies of receivers.
+const maxResponseBytes = 64 << 10
+
+// newClient connects directly (no environment proxy) and never follows a
+// redirect, so a receiver cannot bounce credentials to another host.
 func newClient() *http.Client {
-	return &http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{Proxy: nil, MaxResponseHeaderBytes: 64 << 10, MaxIdleConns: 5, MaxIdleConnsPerHost: 1, IdleConnTimeout: 30 * time.Second}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	transport := &http.Transport{
+		Proxy:                  nil,
+		MaxResponseHeaderBytes: maxResponseBytes,
+		MaxIdleConns:           5,
+		MaxIdleConnsPerHost:    1,
+		IdleConnTimeout:        30 * time.Second,
+	}
+	return &http.Client{
+		Timeout:   10 * time.Second,
+		Transport: transport,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
 }
+
 func send(ctx context.Context, client *http.Client, kind string, c config.Notification, m Message) error {
 	endpoint := c.Endpoint
 	text := m.Title + "\n" + m.Body
@@ -37,33 +56,32 @@ func send(ctx context.Context, client *http.Client, kind string, c config.Notifi
 	case "wecom", "dingtalk":
 		payload = map[string]any{"msgtype": "text", "text": map[string]string{"content": text}}
 		if kind == "dingtalk" && c.Secret != "" {
-			u, err := url.Parse(endpoint)
+			signed, err := dingTalkSigned(endpoint, c.Secret, time.Now())
 			if err != nil {
-				return errors.New("推送地址无效")
+				return err
 			}
-			stamp := strconv.FormatInt(time.Now().UnixMilli(), 10)
-			mac := hmac.New(sha256.New, []byte(c.Secret))
-			_, _ = mac.Write([]byte(stamp + "\n" + c.Secret))
-			q := u.Query()
-			q.Set("timestamp", stamp)
-			q.Set("sign", base64.StdEncoding.EncodeToString(mac.Sum(nil)))
-			u.RawQuery = q.Encode()
-			endpoint = u.String()
+			endpoint = signed
 		}
 	case "telegram":
 		endpoint = "https://api.telegram.org/bot" + c.Token + "/sendMessage"
 		payload = map[string]string{"chat_id": c.ChatID, "text": text}
 	case "bark":
-		u, err := url.Parse(endpoint)
+		address, err := url.Parse(endpoint)
 		if err != nil {
 			return errors.New("Bark 地址无效")
 		}
-		key, err := barkURL(u)
+		key, err := barkURL(address)
 		if err != nil {
 			return err
 		}
-		endpoint = u.String()
-		payload = map[string]any{"device_key": key, "title": m.Title, "body": m.Body, "group": Project, "isArchive": "1"}
+		endpoint = address.String()
+		payload = map[string]any{
+			"device_key": key,
+			"title":      m.Title,
+			"body":       m.Body,
+			"group":      Project,
+			"isArchive":  "1",
+		}
 	case "webhook":
 		payload = m
 	default:
@@ -86,11 +104,11 @@ func send(ctx context.Context, client *http.Client, kind string, c config.Notifi
 		return errors.New("通知网络请求失败或超时，请检查网络和配置")
 	}
 	defer response.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(response.Body, (64<<10)+1))
+	body, err := io.ReadAll(io.LimitReader(response.Body, maxResponseBytes+1))
 	if err != nil {
 		return errors.New("通知响应读取失败")
 	}
-	if len(body) > 64<<10 {
+	if len(body) > maxResponseBytes {
 		return errors.New("通知响应超过 64 KiB")
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
@@ -122,4 +140,21 @@ func send(ctx context.Context, client *http.Client, kind string, c config.Notifi
 		}
 	}
 	return nil
+}
+
+// dingTalkSigned appends the HMAC-SHA256 timestamp signature required by a
+// DingTalk robot with signing enabled.
+func dingTalkSigned(endpoint, secret string, now time.Time) (string, error) {
+	address, err := url.Parse(endpoint)
+	if err != nil {
+		return "", errors.New("推送地址无效")
+	}
+	stamp := strconv.FormatInt(now.UnixMilli(), 10)
+	mac := hmac.New(sha256.New, []byte(secret))
+	_, _ = mac.Write([]byte(stamp + "\n" + secret))
+	query := address.Query()
+	query.Set("timestamp", stamp)
+	query.Set("sign", base64.StdEncoding.EncodeToString(mac.Sum(nil)))
+	address.RawQuery = query.Encode()
+	return address.String(), nil
 }

@@ -16,6 +16,7 @@ type connection struct {
 	bytes      uint64
 	progressed time.Time
 }
+
 type connections struct {
 	mu      sync.Mutex
 	entries map[net.Conn]*connection
@@ -55,6 +56,7 @@ func (c *connections) state(conn net.Conn, state http.ConnState) {
 		delete(c.entries, conn)
 	}
 }
+
 func (c *connections) check(now time.Time) {
 	c.mu.Lock()
 	stalled := []net.Conn{}
@@ -79,6 +81,7 @@ func (c *connections) check(now time.Time) {
 		_ = conn.Close()
 	}
 }
+
 func (a *App) watchConnections() {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()

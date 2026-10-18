@@ -25,14 +25,12 @@ import (
 	"strings"
 )
 
-// Validate checks repository indexes and referenced file sizes without hashing
-// each package during every download. The upstream package signatures remain
-// the responsibility of reposync/client signature verification.
 // ValidationError describes inconsistent upstream repository data. Local I/O
 // and cancellation errors remain distinguishable to the execution engine.
 type ValidationError struct{ Err error }
 
 func (e *ValidationError) Error() string { return e.Err.Error() }
+
 func (e *ValidationError) Unwrap() error { return e.Err }
 
 func ValidateSource(ctx context.Context, dir string, source config.Source) error {
@@ -43,6 +41,9 @@ func ValidateSource(ctx context.Context, dir string, source config.Source) error
 	return Validate(ctx, dir, kind)
 }
 
+// Validate checks repository indexes and referenced file sizes without hashing
+// each package during every download. The upstream package signatures remain
+// the responsibility of reposync/client signature verification.
 func Validate(ctx context.Context, dir, kind string) error {
 	root, err := os.OpenRoot(dir)
 	if err != nil {
@@ -81,10 +82,11 @@ func Validate(ctx context.Context, dir, kind string) error {
 		}
 		if (d.Name() == "Release" || d.Name() == "InRelease") && aptReleasePath(filepath.ToSlash(rel)) {
 			if d.Name() == "Release" {
-				if _, e := root.Stat(path.Join(path.Dir(filepath.ToSlash(rel)), "InRelease")); e == nil {
+				inRelease := path.Join(path.Dir(filepath.ToSlash(rel)), "InRelease")
+				if _, err := root.Stat(inRelease); err == nil {
 					return nil
-				} else if !errors.Is(e, os.ErrNotExist) {
-					return e
+				} else if !errors.Is(err, os.ErrNotExist) {
+					return err
 				}
 			}
 			repos++
@@ -103,10 +105,12 @@ func Validate(ctx context.Context, dir, kind string) error {
 	}
 	return nil
 }
+
 func aptReleasePath(name string) bool {
 	parts := strings.Split(name, "/")
 	return len(parts) == 1 || (len(parts) >= 3 && parts[len(parts)-3] == "dists")
 }
+
 func repositoryError(err error) error {
 	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return err
@@ -116,30 +120,34 @@ func repositoryError(err error) error {
 	}
 	return &ValidationError{err}
 }
+
 func checkFile(root *os.Root, p string, size int64) error {
 	if hidden(p) {
 		return errors.New("metadata references private file")
 	}
-	f, err := root.Open(p)
+	file, err := root.Open(p)
 	if err != nil {
 		return fmt.Errorf("仓库引用文件缺失 %s: %w", p, err)
 	}
-	defer f.Close()
-	st, err := f.Stat()
+	defer file.Close()
+	info, err := file.Stat()
 	if err != nil {
 		return err
 	}
-	if !st.Mode().IsRegular() || (size >= 0 && st.Size() != size) {
+	if !info.Mode().IsRegular() || (size >= 0 && info.Size() != size) {
 		return fmt.Errorf("仓库引用文件大小/类型错误: %s", p)
 	}
 	return nil
 }
+
+// validateRPM checks every index listed by repomd.xml and the packages of
+// its primary index.
 func validateRPM(ctx context.Context, root *os.Root, p string) error {
-	f, err := root.Open(p)
+	file, err := root.Open(p)
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer file.Close()
 	var doc struct {
 		Data []struct {
 			Type     string `xml:"type,attr"`
@@ -153,25 +161,25 @@ func validateRPM(ctx context.Context, root *os.Root, p string) error {
 			} `xml:"checksum"`
 		} `xml:"data"`
 	}
-	if err = xml.NewDecoder(io.LimitReader(f, 8<<20)).Decode(&doc); err != nil {
+	if err = xml.NewDecoder(io.LimitReader(file, 8<<20)).Decode(&doc); err != nil {
 		return err
 	}
 	base := path.Dir(path.Dir(p))
 	primary := false
-	for _, d := range doc.Data {
+	for _, index := range doc.Data {
 		if err = ctx.Err(); err != nil {
 			return err
 		}
-		file := path.Join(base, d.Location.Href)
-		if err = checkFile(root, file, d.Size); err != nil {
+		file := path.Join(base, index.Location.Href)
+		if err = checkFile(root, file, index.Size); err != nil {
 			return err
 		}
-		if d.Checksum.Value != "" {
-			if err = checkHash(ctx, root, file, d.Checksum.Type, strings.TrimSpace(d.Checksum.Value)); err != nil {
+		if index.Checksum.Value != "" {
+			if err = checkHash(ctx, root, file, index.Checksum.Type, strings.TrimSpace(index.Checksum.Value)); err != nil {
 				return err
 			}
 		}
-		if d.Type == "primary" {
+		if index.Type == "primary" {
 			primary = true
 			if err = validatePrimary(ctx, root, base, file); err != nil {
 				return err
@@ -185,77 +193,88 @@ func validateRPM(ctx context.Context, root *os.Root, p string) error {
 }
 
 func checkHash(ctx context.Context, root *os.Root, name, kind, want string) error {
-	var h hash.Hash
+	var digest hash.Hash
 	switch kind {
 	case "sha", "sha1":
-		// Legacy metadata consistency only; this is not signature authentication.
-		h = sha1.New()
+		// SHA-1 checks old repository metadata for consistency only; it is
+		// not signature authentication.
+		digest = sha1.New()
 	case "sha256":
-		h = sha256.New()
+		digest = sha256.New()
 	case "sha512":
-		h = sha512.New()
+		digest = sha512.New()
 	default:
 		return fmt.Errorf("不支持元数据校验算法 %s", kind)
 	}
-	f, err := root.Open(name)
+	file, err := root.Open(name)
 	if err != nil {
 		return err
 	}
-	defer f.Close()
-	buf := make([]byte, 64<<10)
+	defer file.Close()
+	buffer := make([]byte, 64<<10)
 	for {
 		if err = ctx.Err(); err != nil {
 			return err
 		}
-		n, e := f.Read(buf)
-		if n > 0 {
-			_, _ = h.Write(buf[:n])
+		count, readErr := file.Read(buffer)
+		if count > 0 {
+			_, _ = digest.Write(buffer[:count])
 		}
-		if e == io.EOF {
+		if readErr == io.EOF {
 			break
 		}
-		if e != nil {
-			return e
+		if readErr != nil {
+			return readErr
 		}
 	}
-	if hex.EncodeToString(h.Sum(nil)) != strings.ToLower(want) {
+	if hex.EncodeToString(digest.Sum(nil)) != strings.ToLower(want) {
 		return fmt.Errorf("元数据校验和不匹配: %s", name)
 	}
 	return nil
 }
+
+// compressed opens p and decompresses it by extension. Decoder memory is
+// bounded so a crafted index cannot exhaust RAM.
 func compressed(root *os.Root, p string) (io.ReadCloser, error) {
-	f, err := root.Open(p)
+	file, err := root.Open(p)
 	if err != nil {
 		return nil, err
 	}
 	switch {
 	case strings.HasSuffix(p, ".gz"):
-		g, err := gzip.NewReader(f)
+		reader, err := gzip.NewReader(file)
 		if err != nil {
-			f.Close()
+			file.Close()
 			return nil, err
 		}
-		return &closer{Reader: g, close: func() error { return errors.Join(g.Close(), f.Close()) }}, nil
+		return &closer{Reader: reader, close: func() error { return errors.Join(reader.Close(), file.Close()) }}, nil
 	case strings.HasSuffix(p, ".bz2"):
-		return &closer{Reader: bzip2.NewReader(f), close: f.Close}, nil
+		return &closer{Reader: bzip2.NewReader(file), close: file.Close}, nil
 	case strings.HasSuffix(p, ".xz"):
-		x, err := (xz.ReaderConfig{DictCap: 64 << 20}).NewReader(f)
+		reader, err := (xz.ReaderConfig{DictCap: decoderMemory}).NewReader(file)
 		if err != nil {
-			f.Close()
+			file.Close()
 			return nil, err
 		}
-		return &closer{Reader: x, close: f.Close}, nil
+		return &closer{Reader: reader, close: file.Close}, nil
 	case strings.HasSuffix(p, ".zst"):
-		z, err := zstd.NewReader(f, zstd.WithDecoderConcurrency(1), zstd.WithDecoderMaxMemory(64<<20))
+		reader, err := zstd.NewReader(file, zstd.WithDecoderConcurrency(1), zstd.WithDecoderMaxMemory(decoderMemory))
 		if err != nil {
-			f.Close()
+			file.Close()
 			return nil, err
 		}
-		return &closer{Reader: z, close: func() error { z.Close(); return f.Close() }}, nil
+		closeAll := func() error {
+			reader.Close()
+			return file.Close()
+		}
+		return &closer{Reader: reader, close: closeAll}, nil
 	default:
-		return f, nil
+		return file, nil
 	}
 }
+
+// decoderMemory bounds the xz dictionary and zstd window of index files.
+const decoderMemory = 64 << 20
 
 type closer struct {
 	io.Reader
@@ -263,15 +282,17 @@ type closer struct {
 }
 
 func (c *closer) Close() error { return c.close() }
+
+// validatePrimary streams primary.xml and checks every package size.
 func validatePrimary(ctx context.Context, root *os.Root, base, p string) error {
-	f, err := compressed(root, p)
+	reader, err := compressed(root, p)
 	if err != nil {
 		return err
 	}
-	defer f.Close()
-	dec := xml.NewDecoder(f)
+	defer reader.Close()
+	decoder := xml.NewDecoder(reader)
 	for {
-		tok, err := dec.Token()
+		token, err := decoder.Token()
 		if err == io.EOF {
 			return nil
 		}
@@ -281,7 +302,7 @@ func validatePrimary(ctx context.Context, root *os.Root, base, p string) error {
 		if err = ctx.Err(); err != nil {
 			return err
 		}
-		if start, ok := tok.(xml.StartElement); ok && start.Name.Local == "package" {
+		if start, ok := token.(xml.StartElement); ok && start.Name.Local == "package" {
 			var pkg struct {
 				Location struct {
 					Href string `xml:"href,attr"`
@@ -290,7 +311,7 @@ func validatePrimary(ctx context.Context, root *os.Root, base, p string) error {
 					Package int64 `xml:"package,attr"`
 				} `xml:"size"`
 			}
-			if err = dec.DecodeElement(&pkg, &start); err != nil {
+			if err = decoder.DecodeElement(&pkg, &start); err != nil {
 				return err
 			}
 			if err = checkFile(root, path.Join(base, pkg.Location.Href), pkg.Size.Package); err != nil {
@@ -299,23 +320,26 @@ func validatePrimary(ctx context.Context, root *os.Root, base, p string) error {
 		}
 	}
 }
+
+// validateAPT checks the SHA256 section of a Release file against the
+// listed indexes and the packages they reference.
 func validateAPT(ctx context.Context, root *os.Root, p string) error {
 	const maxReleaseBytes = 8 << 20
-	f, err := root.Open(p)
+	file, err := root.Open(p)
 	if err != nil {
 		return err
 	}
-	defer f.Close()
-	b, err := io.ReadAll(io.LimitReader(f, maxReleaseBytes+1))
+	defer file.Close()
+	release, err := io.ReadAll(io.LimitReader(file, maxReleaseBytes+1))
 	if err != nil {
 		return err
 	}
-	if len(b) > maxReleaseBytes {
+	if len(release) > maxReleaseBytes {
 		return errors.New("APT Release 超过 8 MiB 校验上限")
 	}
 	inHashes := false
 	declared, checked := 0, 0
-	for line := range strings.SplitSeq(string(b), "\n") {
+	for line := range strings.SplitSeq(string(release), "\n") {
 		if err = ctx.Err(); err != nil {
 			return err
 		}
@@ -356,7 +380,9 @@ func validateAPT(ctx context.Context, root *os.Root, p string) error {
 		if err = checkHash(ctx, root, name, "sha256", fields[0]); err != nil {
 			return err
 		}
-		if base := strings.TrimSuffix(path.Base(name), path.Ext(name)); path.Base(name) == "Packages" || base == "Packages" {
+		// Packages, Packages.gz, Packages.xz …: check every referenced package.
+		baseName := path.Base(name)
+		if baseName == "Packages" || strings.TrimSuffix(baseName, path.Ext(name)) == "Packages" {
 			if err = validatePackages(ctx, root, name); err != nil {
 				return err
 			}
@@ -367,17 +393,20 @@ func validateAPT(ctx context.Context, root *os.Root, p string) error {
 	}
 	return nil
 }
+
+// validatePackages checks the size of every package a Packages index lists.
+// Packages indexes use repository-root-relative filenames.
 func validatePackages(ctx context.Context, root *os.Root, p string) error {
-	f, err := compressed(root, p)
+	reader, err := compressed(root, p)
 	if err != nil {
 		return err
 	}
-	defer f.Close() // Packages indexes use repository-root-relative filenames.
+	defer reader.Close()
 	base := ""
 	if before, _, ok := strings.Cut(p, "dists/"); ok {
 		base = before
 	}
-	scanner := bufio.NewScanner(f)
+	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 64<<10), 1<<20)
 	filename := ""
 	size := int64(-1)
@@ -395,11 +424,11 @@ func validatePackages(ctx context.Context, root *os.Root, p string) error {
 		if err = ctx.Err(); err != nil {
 			return err
 		}
-		if v, ok := strings.CutPrefix(line, "Filename: "); ok {
-			filename = v
+		if value, ok := strings.CutPrefix(line, "Filename: "); ok {
+			filename = value
 		}
-		if v, ok := strings.CutPrefix(line, "Size: "); ok {
-			size, err = strconv.ParseInt(v, 10, 64)
+		if value, ok := strings.CutPrefix(line, "Size: "); ok {
+			size, err = strconv.ParseInt(value, 10, 64)
 			if err != nil {
 				return err
 			}

@@ -24,13 +24,38 @@ func ValidateNotifications(channels map[string]Notification) error {
 			return errors.New("不支持的通知渠道")
 		}
 		for _, value := range []string{c.Endpoint, c.Token, c.Secret} {
-			if value != "" && (!strings.HasPrefix(value, "enc:v1:") || len(value) > 16384) {
+			encrypted := strings.HasPrefix(value, "enc:v1:") && len(value) <= 16384
+			if value != "" && !encrypted {
 				return errors.New("通知凭据必须通过通知设置加密保存")
 			}
 		}
-		if kind != "telegram" && (c.Token != "" || c.ChatID != "") || kind != "dingtalk" && c.Secret != "" || kind == "telegram" && c.Endpoint != "" {
+		fields := ChannelFields{
+			Endpoint: c.Endpoint != "",
+			Token:    c.Token != "",
+			ChatID:   c.ChatID != "",
+			Secret:   c.Secret != "",
+		}
+		if !fields.AllowedFor(kind) {
 			return errors.New("通知字段与渠道不匹配")
 		}
 	}
 	return nil
+}
+
+// ChannelFields records which credential fields a channel update carries.
+type ChannelFields struct {
+	Endpoint, Token, ChatID, Secret bool
+}
+
+// AllowedFor reports whether every present field belongs to kind: Telegram
+// uses a bot token and chat ID instead of an endpoint, and only DingTalk
+// signs requests with a secret.
+func (f ChannelFields) AllowedFor(kind string) bool {
+	if kind == "telegram" {
+		return !f.Endpoint && !f.Secret
+	}
+	if f.Token || f.ChatID {
+		return false
+	}
+	return kind == "dingtalk" || !f.Secret
 }

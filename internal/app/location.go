@@ -33,9 +33,16 @@ func runTimeRange(key string, now time.Time, location *time.Location) (time.Time
 	case "month":
 		return time.Date(local.Year(), local.Month(), 1, 0, 0, 0, 0, location), time.Time{}, nil
 	}
-	durations := map[string]time.Duration{"1h": time.Hour, "12h": 12 * time.Hour, "24h": 24 * time.Hour, "3d": 72 * time.Hour, "7d": 168 * time.Hour, "30d": 720 * time.Hour}
-	if d, ok := durations[key]; ok {
-		return now.Add(-d), time.Time{}, nil
+	durations := map[string]time.Duration{
+		"1h":  time.Hour,
+		"12h": 12 * time.Hour,
+		"24h": 24 * time.Hour,
+		"3d":  3 * 24 * time.Hour,
+		"7d":  7 * 24 * time.Hour,
+		"30d": 30 * 24 * time.Hour,
+	}
+	if duration, ok := durations[key]; ok {
+		return now.Add(-duration), time.Time{}, nil
 	}
 	return time.Time{}, time.Time{}, fmt.Errorf("无效的时间范围: %s", key)
 }

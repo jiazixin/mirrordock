@@ -9,8 +9,8 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "check": "vue-tsc --noEmit",
-    "format": "prettier --write src e2e *.ts index.html package.json .prettierrc.json",
-    "format:check": "prettier --check src e2e *.ts index.html package.json .prettierrc.json",
+    "format": "prettier --write src e2e *.ts index.html package.json tsconfig.json .prettierrc.json",
+    "format:check": "prettier --check src e2e *.ts index.html package.json tsconfig.json .prettierrc.json",
     "build": "npm run check && vite build",
     "test:e2e": "playwright test"
   },

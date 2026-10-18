@@ -5,7 +5,10 @@ import (
 	"syscall"
 )
 
-func configureProcess(cmd *exec.Cmd) { cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true} }
+func configureProcess(cmd *exec.Cmd) {
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+}
+
 func stopProcess(pid int, force bool) {
 	sig := syscall.SIGTERM
 	if force {
@@ -13,4 +16,7 @@ func stopProcess(pid int, force bool) {
 	}
 	_ = syscall.Kill(-pid, sig)
 }
-func lowerPriority(pid int) { _ = syscall.Setpriority(syscall.PRIO_PROCESS, pid, 10) }
+
+func lowerPriority(pid int) {
+	_ = syscall.Setpriority(syscall.PRIO_PROCESS, pid, 10)
+}

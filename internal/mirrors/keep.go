@@ -135,7 +135,8 @@ func (m *Manager) adoptWork(ctx context.Context, s config.Source, id int64) (int
 // discardLocked renames a work directory out of the numbered namespace so
 // adoption can never see a half-removed tree. Requires workMu.
 func (m *Manager) discardLocked(id int64) (string, error) {
-	target := filepath.Join(m.Root, ".mirrordock", "work", fmt.Sprintf("%s%d-%d", discardPrefix, id, time.Now().UnixNano()))
+	name := fmt.Sprintf("%s%d-%d", discardPrefix, id, time.Now().UnixNano())
+	target := filepath.Join(m.Root, ".mirrordock", "work", name)
 	if err := os.Rename(m.Work(id), target); errors.Is(err, os.ErrNotExist) {
 		return "", nil
 	} else if err != nil {

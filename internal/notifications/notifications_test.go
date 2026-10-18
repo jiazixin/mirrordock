@@ -68,6 +68,7 @@ func TestRecordPage(t *testing.T) {
 		t.Fatalf("empty page: records=%d total=%d err=%v", len(records), total, err)
 	}
 }
+
 func saveChannel(t *testing.T, s *Service, kind string, u Update) {
 	t.Helper()
 	u.Revision = s.cfg.View().Revision
@@ -75,6 +76,7 @@ func saveChannel(t *testing.T, s *Service, kind string, u Update) {
 		t.Fatal(err)
 	}
 }
+
 func createRun(t *testing.T, store *database.Store, state string, failed int) *runs.Run {
 	t.Helper()
 	now := time.Now().UTC()
@@ -84,6 +86,7 @@ func createRun(t *testing.T, store *database.Store, state string, failed int) *r
 	}
 	return r
 }
+
 func TestCredentialPersistenceAndValidation(t *testing.T) {
 	s, cfg, _ := fixture(t)
 	endpoint := "https://oapi.dingtalk.com/robot/send?access_token=fixture-sensitive-token"
@@ -152,6 +155,7 @@ func TestCredentialPersistenceAndValidation(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
 func mustView(t *testing.T, s *Service) SettingsView {
 	t.Helper()
 	v, err := s.View()
@@ -326,6 +330,7 @@ func TestRetriesStopAndRestartRecovery(t *testing.T) {
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
 func TestChannelAdaptersLocalOnly(t *testing.T) {
 	for _, kind := range config.NotificationChannels {
 		t.Run(kind, func(t *testing.T) {
@@ -391,6 +396,7 @@ func TestChannelAdaptersLocalOnly(t *testing.T) {
 		})
 	}
 }
+
 func TestBusinessErrorsLimitsRedirectAndRedaction(t *testing.T) {
 	for _, test := range []struct {
 		kind, body string
@@ -439,6 +445,7 @@ func TestBusinessErrorsLimitsRedirectAndRedaction(t *testing.T) {
 		t.Fatal("cancellation leaked request")
 	}
 }
+
 func TestTimezoneContentAndKeyBackup(t *testing.T) {
 	s, cfg, store := fixture(t)
 	if mustView(t, s).Timezone != "UTC" {
@@ -582,6 +589,7 @@ func TestQueueAndTimezonePersistAcrossDatabaseReopen(t *testing.T) {
 		t.Fatal("recovery attempt/dedup failed", records, err)
 	}
 }
+
 func TestLatestThirtyAndIndependentChannelFailure(t *testing.T) {
 	s, _, store := fixture(t)
 	saveChannel(t, s, "webhook", Update{Endpoint: "http://127.0.0.1:1/fixture", Enabled: true, OnlyFailure: true})

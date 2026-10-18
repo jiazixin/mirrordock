@@ -73,6 +73,7 @@ func testManager(t *testing.T) (*Manager, config.Source) {
 	t.Cleanup(func() { m.Close() })
 	return m, s
 }
+
 func TestPublishedDownloadAndIsolation(t *testing.T) {
 	m, s := testManager(t)
 	work, err := m.Prepare(t.Context(), s, 1)
@@ -128,6 +129,7 @@ func TestPublishedDownloadAndIsolation(t *testing.T) {
 		t.Fatal("legal metadata inaccessible")
 	}
 }
+
 func TestSaturatedDownloadsPreserveMetadataAndHEAD(t *testing.T) {
 	m, s := testManager(t)
 	work, err := m.Prepare(t.Context(), s, 1)
@@ -164,6 +166,7 @@ func TestSaturatedDownloadsPreserveMetadataAndHEAD(t *testing.T) {
 		}
 	}
 }
+
 func TestPublishKeepsOldFile(t *testing.T) {
 	m, s := testManager(t)
 	for i := range 2 {
@@ -187,6 +190,7 @@ func TestPublishKeepsOldFile(t *testing.T) {
 		t.Fatal(w.Code, w.Body.String())
 	}
 }
+
 func TestMissingReferencedPackageRejected(t *testing.T) {
 	dir := t.TempDir()
 	os.Mkdir(filepath.Join(dir, "repodata"), 0755)
@@ -198,6 +202,7 @@ func TestMissingReferencedPackageRejected(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
 func fmtInt(n int) string { return strconv.Itoa(n) }
 
 func TestCollectionRetainsActiveReader(t *testing.T) {

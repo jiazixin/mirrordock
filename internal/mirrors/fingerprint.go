@@ -24,7 +24,7 @@ func readPreparation(work string) preparation {
 	}
 	defer f.Close()
 	var p preparation
-	// Legacy markers deliberately disable the optimization until a new run.
+	// An unreadable marker disables the no-change shortcut for this run.
 	if err := json.UnmarshalRead(io.LimitReader(f, 4096), &p); err != nil {
 		return preparation{}
 	}

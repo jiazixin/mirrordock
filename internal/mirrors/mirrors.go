@@ -8,6 +8,7 @@ import (
 	"io"
 	"io/fs"
 	"log/slog"
+	"maps"
 	"mirrordock/internal/config"
 	"mirrordock/internal/database"
 	"os"
@@ -27,6 +28,7 @@ type Generation struct {
 	RetainUntil time.Time         `json:"retain_until,omitzero"`
 	Summary     *DirectorySummary `json:"summary,omitzero"`
 }
+
 type Publication struct {
 	SourceID string       `json:"source_id"`
 	Type     string       `json:"type"`
@@ -34,13 +36,28 @@ type Publication struct {
 	Current  Generation   `json:"current"`
 	Previous []Generation `json:"previous"`
 }
+
 type opened struct {
 	Publication Publication
 	generations []Generation
 	paths       []string
 	refs        int
 }
+
 type routes struct{ entries map[string]*opened }
+
+// Public serving capacity. Small files (metadata, signatures) have their own
+// slots so large package downloads cannot starve repository clients.
+const (
+	largeDownloadSlots   = 256
+	smallDownloadSlots   = 64
+	smallDownloadBytes   = 256 << 10
+	listingSlots         = 8
+	metadataCacheEntries = 8192
+	maxListedEntries     = 1000
+	generationRetention  = 24 * time.Hour
+)
+
 type Manager struct {
 	probeMu       sync.Mutex
 	collectMu     sync.Mutex
@@ -80,9 +97,19 @@ func New(root string, store *database.Store, sources []config.Source) (*Manager,
 	if err != nil {
 		return nil, err
 	}
-	m := &Manager{Root: canonical, store: store, gates: make(chan struct{}, 256), metadataGates: make(chan struct{}, 64), listingGates: make(chan struct{}, 8), cache: newCache(8192), syncing: map[int64]bool{}, clone: cloneFile, space: diskSpace}
 	files, _ := DescriptorLimits()
-	m.fileGates = make(chan struct{}, files)
+	m := &Manager{
+		Root:          canonical,
+		store:         store,
+		gates:         make(chan struct{}, largeDownloadSlots),
+		metadataGates: make(chan struct{}, smallDownloadSlots),
+		listingGates:  make(chan struct{}, listingSlots),
+		fileGates:     make(chan struct{}, files),
+		cache:         newCache(metadataCacheEntries),
+		syncing:       map[int64]bool{},
+		clone:         cloneFile,
+		space:         diskSpace,
+	}
 	m.table.Store(&routes{entries: map[string]*opened{}})
 	m.roots, err = newRootCache(canonical, rootCacheLimit())
 	if err != nil {
@@ -119,6 +146,7 @@ type SourceError struct {
 }
 
 func (e *SourceError) Error() string { return e.SourceID + ": " + e.Err.Error() }
+
 func (e *SourceError) Unwrap() error { return e.Err }
 
 // SourceIssue is the latest reconciliation failure of one configured source.
@@ -164,9 +192,9 @@ func (m *Manager) Reconcile(ctx context.Context, sources []config.Source) error 
 		return err
 	}
 	byID := map[string]Publication{}
-	for _, b := range records {
+	for _, document := range records {
 		var p Publication
-		if err = json.Unmarshal(b, &p); err != nil {
+		if err = json.Unmarshal(document, &p); err != nil {
 			return err
 		}
 		byID[p.SourceID] = p
@@ -191,7 +219,45 @@ func (m *Manager) Reconcile(ctx context.Context, sources []config.Source) error 
 	return errors.Join(failures...)
 }
 
-func (m *Manager) reconcileSource(ctx context.Context, s config.Source, byID map[string]Publication, configured map[string]bool) error {
+// adoptRemoved finds the publication of a removed source that served the
+// same dest, so re-adding a source (even under a new ID) restores its route.
+// Several removed IDs may retain this destination: prefer the one the
+// current alias points to, otherwise the newest committed generation.
+func (m *Manager) adoptRemoved(
+	s config.Source,
+	byID map[string]Publication,
+	configured map[string]bool,
+) (Publication, bool) {
+	aliasTarget, _ := filepath.EvalSymlinks(filepath.Join(m.Root, filepath.FromSlash(s.Dest)))
+	var chosen Publication
+	found := false
+	for _, previous := range byID {
+		ownedElsewhere := configured[previous.SourceID]
+		otherType := previous.Type != "" && previous.Type != s.Type
+		if previous.Dest != s.Dest || ownedElsewhere || otherType {
+			continue
+		}
+		matchesAlias := previous.Current.Directory == aliasTarget
+		chosenMatchesAlias := chosen.Current.Directory == aliasTarget
+		sameTime := previous.Current.PublishedAt.Equal(chosen.Current.PublishedAt)
+		newer := previous.Current.PublishedAt.After(chosen.Current.PublishedAt) ||
+			(sameTime && previous.SourceID < chosen.SourceID)
+		if !found || (matchesAlias && !chosenMatchesAlias) || (matchesAlias == chosenMatchesAlias && newer) {
+			chosen, found = previous, true
+		}
+	}
+	if found {
+		chosen.SourceID = s.ID
+	}
+	return chosen, found
+}
+
+func (m *Manager) reconcileSource(
+	ctx context.Context,
+	s config.Source,
+	byID map[string]Publication,
+	configured map[string]bool,
+) error {
 	p, ok := byID[s.ID]
 	oldDest := ""
 	if ok && p.Dest != s.Dest {
@@ -199,24 +265,7 @@ func (m *Manager) reconcileSource(ctx context.Context, s config.Source, byID map
 		p.Dest = s.Dest
 	}
 	if !ok {
-		// A removed source may leave a valid publication under the same dest.
-		// Reuse its immutable generation only if it has no other configured owner.
-		aliasTarget, _ := filepath.EvalSymlinks(filepath.Join(m.Root, filepath.FromSlash(s.Dest)))
-		for _, previous := range byID {
-			if previous.Dest != s.Dest || configured[previous.SourceID] || (previous.Type != "" && previous.Type != s.Type) {
-				continue
-			}
-			// Several removed IDs may retain this destination. Prefer the
-			// existing alias, otherwise the newest committed generation.
-			matches, selectedMatches := previous.Current.Directory == aliasTarget, p.Current.Directory == aliasTarget
-			newer := previous.Current.PublishedAt.After(p.Current.PublishedAt) || (previous.Current.PublishedAt.Equal(p.Current.PublishedAt) && previous.SourceID < p.SourceID)
-			if !ok || (matches && !selectedMatches) || (matches == selectedMatches && newer) {
-				p, ok = previous, true
-			}
-		}
-		if ok {
-			p.SourceID = s.ID
-		}
+		p, ok = m.adoptRemoved(s, byID, configured)
 	}
 	// A changed source type keeps serving its retained content; Prepare starts
 	// the new type from an empty tree instead of cloning the other layout.
@@ -224,53 +273,18 @@ func (m *Manager) reconcileSource(ctx context.Context, s config.Source, byID map
 		return nil
 	}
 	if !ok {
-		local := filepath.Join(m.Root, filepath.FromSlash(s.Dest))
-		st, e := os.Stat(local)
-		switch {
-		case e != nil && errors.Is(e, os.ErrNotExist):
-			return nil
-		case e != nil:
-			return e
-		case !st.IsDir():
-			return errors.New("dest 被非目录占用")
+		imported, found, err := m.importDirectory(ctx, s)
+		if err != nil || !found {
+			return err
 		}
-		real, e := filepath.EvalSymlinks(local)
-		if e != nil || !config.Within(m.Root, real) {
-			return errors.New("dest 解析后越出镜像根，拒绝导入")
-		}
-		if config.Within(filepath.Join(m.Root, ".mirrordock"), real) {
-			return errors.New("dest 指向内部发布代但没有对应数据库记录，请恢复数据库备份")
-		}
-		// A pre-created empty destination is a placeholder, not a mirror.
-		// The first successful publication replaces it with the alias.
-		if entries, e := os.ReadDir(real); e != nil {
-			return e
-		} else if len(entries) == 0 {
-			return nil
-		}
-		if e = ValidateSource(ctx, real, s); e != nil {
-			return fmt.Errorf("导入已有目录: %w", e)
-		}
-		g := Generation{ID: uuid.New().String(), PublishedAt: time.Now().UTC()}
-		g.Directory = filepath.Join(m.Root, ".mirrordock", "published", g.ID)
-		// Normalize an imported directory into an immutable generation before
-		// creating its public alias. Never subsequently copy into the live tree.
-		if e = os.Rename(real, g.Directory); e != nil {
-			return e
-		}
-		p = Publication{SourceID: s.ID, Type: s.Type, Dest: s.Dest, Current: g}
-		if e = m.store.SavePublication(s.ID, p); e != nil {
-			// A failed import must leave the original directory available for
-			// the next startup rather than orphaning it in a private generation.
-			return errors.Join(e, os.Rename(g.Directory, real))
-		}
+		p = imported
 	}
 	if p.Type == "" {
 		p.Type = s.Type
 	}
 	if p.Current.Summary == nil {
-		real, e := filepath.EvalSymlinks(p.Current.Directory)
-		if e != nil || !config.Within(m.Root, real) {
+		real, err := filepath.EvalSymlinks(p.Current.Directory)
+		if err != nil || !config.Within(m.Root, real) {
 			return errors.New("publication escaped mirror root")
 		}
 		summary, err := summarizeDirectory(ctx, p.Current.Directory, p.Type)
@@ -296,7 +310,7 @@ func (m *Manager) reconcileSource(ctx context.Context, s config.Source, byID map
 	if oldDest != "" { // Remove only our own stale alias, never user content.
 		oldPath := filepath.Join(m.Root, filepath.FromSlash(oldDest))
 		if target, err := filepath.EvalSymlinks(oldPath); err == nil && target == p.Current.Directory {
-			if st, err := os.Lstat(oldPath); err == nil && st.Mode()&os.ModeSymlink != 0 {
+			if info, err := os.Lstat(oldPath); err == nil && info.Mode()&os.ModeSymlink != 0 {
 				if err := os.Remove(oldPath); err != nil {
 					return err
 				}
@@ -308,15 +322,73 @@ func (m *Manager) reconcileSource(ctx context.Context, s config.Source, byID map
 	}
 	return nil
 }
+
+// importDirectory turns an existing, non-empty dest directory into the first
+// generation of s. It reports false when there is nothing to import.
+func (m *Manager) importDirectory(ctx context.Context, s config.Source) (Publication, bool, error) {
+	local := filepath.Join(m.Root, filepath.FromSlash(s.Dest))
+	info, err := os.Stat(local)
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		return Publication{}, false, nil
+	case err != nil:
+		return Publication{}, false, err
+	case !info.IsDir():
+		return Publication{}, false, errors.New("dest 被非目录占用")
+	}
+	real, err := filepath.EvalSymlinks(local)
+	if err != nil || !config.Within(m.Root, real) {
+		return Publication{}, false, errors.New("dest 解析后越出镜像根，拒绝导入")
+	}
+	if config.Within(filepath.Join(m.Root, ".mirrordock"), real) {
+		return Publication{}, false, errors.New("dest 指向内部发布代但没有对应数据库记录，请恢复数据库备份")
+	}
+	// A pre-created empty destination is a placeholder, not a mirror.
+	// The first successful publication replaces it with the alias.
+	entries, err := os.ReadDir(real)
+	if err != nil || len(entries) == 0 {
+		return Publication{}, false, err
+	}
+	if err = ValidateSource(ctx, real, s); err != nil {
+		return Publication{}, false, fmt.Errorf("导入已有目录: %w", err)
+	}
+	generation := m.newGeneration(nil)
+	// Normalize an imported directory into an immutable generation before
+	// creating its public alias. Never subsequently copy into the live tree.
+	if err = os.Rename(real, generation.Directory); err != nil {
+		return Publication{}, false, err
+	}
+	p := Publication{SourceID: s.ID, Type: s.Type, Dest: s.Dest, Current: generation}
+	if err = m.store.SavePublication(s.ID, p); err != nil {
+		// A failed import must leave the original directory available for
+		// the next startup rather than orphaning it in a private generation.
+		return Publication{}, false, errors.Join(err, os.Rename(generation.Directory, real))
+	}
+	return p, true, nil
+}
+
+// newGeneration names a fresh private generation directory.
+func (m *Manager) newGeneration(summary *DirectorySummary) Generation {
+	id := uuid.New().String()
+	return Generation{
+		ID:          id,
+		Directory:   filepath.Join(m.Root, ".mirrordock", "published", id),
+		PublishedAt: time.Now().UTC(),
+		Summary:     summary,
+	}
+}
+
+// openPublication builds the routing entry of p after checking that the
+// current generation can be opened inside the mirror root.
 func (m *Manager) openPublication(p Publication) (*opened, error) {
-	o := &opened{Publication: p}
-	for _, g := range append([]Generation{p.Current}, p.Previous...) {
-		rel, err := m.generationPath(g)
+	route := &opened{Publication: p}
+	for _, generation := range append([]Generation{p.Current}, p.Previous...) {
+		rel, err := m.generationPath(generation)
 		if err != nil {
 			return nil, err
 		}
-		if g.ID == p.Current.ID {
-			root, err := m.openGeneration(g)
+		if generation.ID == p.Current.ID {
+			root, err := m.openGeneration(generation)
 			if err != nil {
 				return nil, err
 			}
@@ -324,43 +396,42 @@ func (m *Manager) openPublication(p Publication) (*opened, error) {
 				return nil, err
 			}
 		}
-		o.generations = append(o.generations, g)
-		o.paths = append(o.paths, rel)
+		route.generations = append(route.generations, generation)
+		route.paths = append(route.paths, rel)
 	}
-	return o, nil
+	return route, nil
 }
 
-func (m *Manager) generationPath(g Generation) (string, error) {
-	rel, err := filepath.Rel(m.Root, g.Directory)
-	if err != nil || !config.Within(m.Root, g.Directory) {
+func (m *Manager) generationPath(generation Generation) (string, error) {
+	rel, err := filepath.Rel(m.Root, generation.Directory)
+	if err != nil || !config.Within(m.Root, generation.Directory) {
 		return "", errors.New("publication escaped mirror root")
 	}
 	return rel, nil
 }
 
 // Publication validation uses a transient root; requests use the bounded cache.
-func (m *Manager) openGeneration(g Generation) (*os.Root, error) {
-	rel, err := m.generationPath(g)
+func (m *Manager) openGeneration(generation Generation) (*os.Root, error) {
+	rel, err := m.generationPath(generation)
 	if err != nil {
 		return nil, err
 	}
 	return m.roots.anchor.OpenRoot(rel)
 }
-func (m *Manager) installOpened(o *opened) {
-	old := m.table.Load()
-	next := &routes{entries: make(map[string]*opened, len(old.entries)+1)}
-	for k, v := range old.entries {
-		next.entries[k] = v
-	}
-	next.entries[o.Publication.Dest] = o
+
+// installOpened publishes route under its dest in a copied routing table.
+func (m *Manager) installOpened(route *opened) {
+	next := &routes{entries: maps.Clone(m.table.Load().entries)}
+	next.entries[route.Publication.Dest] = route
 	m.install(next)
 }
+
 func (m *Manager) register(p Publication) error {
-	o, err := m.openPublication(p)
+	route, err := m.openPublication(p)
 	if err != nil {
 		return err
 	}
-	m.installOpened(o)
+	m.installOpened(route)
 	return nil
 }
 
@@ -370,23 +441,26 @@ func (m *Manager) install(next *routes) {
 	m.routeMu.Lock()
 	defer m.routeMu.Unlock()
 	old := m.table.Swap(next)
-	for dest, o := range old.entries {
-		if next.entries[dest] == o {
+	for dest, route := range old.entries {
+		if next.entries[dest] == route {
 			continue
 		}
-		if o.refs != 0 {
-			m.retired = append(m.retired, o)
+		if route.refs != 0 {
+			m.retired = append(m.retired, route)
 		}
 	}
 }
-func (m *Manager) release(o *opened) {
+
+// release ends one request lease of route.
+func (m *Manager) release(route *opened) {
 	m.routeMu.Lock()
 	defer m.routeMu.Unlock()
-	o.refs--
-	if o.refs == 0 && slices.Contains(m.retired, o) {
-		m.retired = slices.DeleteFunc(m.retired, func(v *opened) bool { return v == o })
+	route.refs--
+	if route.refs == 0 {
+		m.retired = slices.DeleteFunc(m.retired, func(retired *opened) bool { return retired == route })
 	}
 }
+
 func (m *Manager) alias(p Publication) error {
 	dest := filepath.Join(m.Root, filepath.FromSlash(p.Dest))
 	if filepath.Clean(dest) == filepath.Clean(p.Current.Directory) {
@@ -395,10 +469,10 @@ func (m *Manager) alias(p Publication) error {
 	if err := os.MkdirAll(filepath.Dir(dest), 0755); err != nil {
 		return err
 	}
-	if st, err := os.Lstat(dest); err == nil && st.Mode()&os.ModeSymlink == 0 {
+	if info, err := os.Lstat(dest); err == nil && info.Mode()&os.ModeSymlink == 0 {
 		// Only an empty placeholder directory may be replaced; os.Remove never
 		// deletes a non-empty directory, so user content stays untouched.
-		if !st.IsDir() || os.Remove(dest) != nil {
+		if !info.IsDir() || os.Remove(dest) != nil {
 			return fmt.Errorf("发布链接被非链接文件/目录占用: %s", dest)
 		}
 	}
@@ -416,6 +490,7 @@ func (m *Manager) alias(p Publication) error {
 	}
 	return syncDir(filepath.Dir(dest))
 }
+
 func syncDir(p string) error {
 	f, err := os.Open(p)
 	if err != nil {
@@ -424,9 +499,11 @@ func syncDir(p string) error {
 	defer f.Close()
 	return f.Sync()
 }
+
 func (m *Manager) Work(id int64) string {
 	return filepath.Join(m.Root, ".mirrordock", "work", fmt.Sprint(id))
 }
+
 func (m *Manager) Prepare(ctx context.Context, s config.Source, id int64) (string, error) {
 	work, _, err := m.PrepareReuse(ctx, s, id)
 	return work, err
@@ -442,7 +519,7 @@ func (m *Manager) PrepareReuse(ctx context.Context, s config.Source, id int64) (
 	}
 	work := m.Work(id)
 	marker := filepath.Join(work, ".mirrordock-prepared")
-	if st, err := os.Stat(marker); err == nil && st.Mode().IsRegular() {
+	if info, err := os.Stat(marker); err == nil && info.Mode().IsRegular() {
 		return work, 0, nil
 	}
 	if _, err := os.Lstat(work); errors.Is(err, os.ErrNotExist) {
@@ -457,9 +534,9 @@ func (m *Manager) PrepareReuse(ctx context.Context, s config.Source, id int64) (
 		return "", 0, err
 	}
 	baseGeneration := ""
-	if p := m.table.Load().entries[s.Dest]; p != nil && p.Publication.Type == s.Type {
-		baseGeneration = p.Publication.Current.ID
-		if err := m.copyTree(ctx, p.Publication.Current.Directory, work); err != nil {
+	if route := m.table.Load().entries[s.Dest]; route != nil && route.Publication.Type == s.Type {
+		baseGeneration = route.Publication.Current.ID
+		if err := m.copyTree(ctx, route.Publication.Current.Directory, work); err != nil {
 			return "", 0, err
 		}
 	}
@@ -476,6 +553,7 @@ func (m *Manager) PrepareReuse(ctx context.Context, s config.Source, id int64) (
 	}
 	return work, 0, nil
 }
+
 func (m *Manager) copyTree(ctx context.Context, src, dest string) error {
 	links := map[string]string{}
 	err := filepath.WalkDir(src, func(p string, d fs.DirEntry, err error) error {
@@ -505,7 +583,7 @@ func (m *Manager) copyTree(ctx context.Context, src, dest string) error {
 			if err != nil {
 				return err
 			}
-			if current, e := os.Readlink(target); e == nil && current == link {
+			if current, err := os.Readlink(target); err == nil && current == link {
 				return nil
 			}
 			if err = os.Remove(target); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -513,7 +591,7 @@ func (m *Manager) copyTree(ctx context.Context, src, dest string) error {
 			}
 			return os.Symlink(link, target)
 		case info.Mode().IsRegular():
-			if _, e := os.Lstat(target); e == nil {
+			if _, err := os.Lstat(target); err == nil {
 				if err = os.Remove(target); err != nil {
 					return err
 				}
@@ -574,6 +652,7 @@ func (m *Manager) copyTree(ctx context.Context, src, dest string) error {
 		return os.Chtimes(target, info.ModTime(), info.ModTime())
 	})
 }
+
 func (m *Manager) Publish(ctx context.Context, s config.Source, id int64) (Publication, error) {
 	if err := ctx.Err(); err != nil {
 		return Publication{}, err
@@ -616,12 +695,11 @@ func (m *Manager) Publish(ctx context.Context, s config.Source, id int64) (Publi
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	g := Generation{ID: uuid.New().String(), PublishedAt: time.Now().UTC(), Summary: summary}
-	g.Directory = filepath.Join(m.Root, ".mirrordock", "published", g.ID)
+	g := m.newGeneration(summary)
 	p := Publication{SourceID: s.ID, Type: s.Type, Dest: s.Dest, Current: g}
 	if old := m.table.Load().entries[s.Dest]; old != nil {
 		previous := old.Publication.Current
-		previous.RetainUntil = time.Now().UTC().Add(24 * time.Hour)
+		previous.RetainUntil = time.Now().UTC().Add(generationRetention)
 		p.Previous = append([]Generation{previous}, old.Publication.Previous...)
 	}
 	// Until the durable pointer commits, requests retain the previous roots.
@@ -717,34 +795,46 @@ func flushTree(ctx context.Context, dir string) error {
 	}
 	return nil
 }
+
 func (m *Manager) Publications() []Publication {
 	out := []Publication{}
-	for _, p := range m.table.Load().entries {
-		out = append(out, p.Publication)
+	for _, route := range m.table.Load().entries {
+		out = append(out, route.Publication)
 	}
 	return out
 }
+
 func (m *Manager) Restrict(sources []config.Source) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.restrictLocked(sources)
 }
+
 func (m *Manager) restrictLocked(sources []config.Source) {
 	allowed := map[string]string{}
 	for _, s := range sources {
 		allowed[s.Dest] = s.ID
 	}
 	next := &routes{entries: map[string]*opened{}}
-	for dest, o := range m.table.Load().entries {
-		if allowed[dest] == o.Publication.SourceID {
-			next.entries[dest] = o
+	for dest, route := range m.table.Load().entries {
+		if allowed[dest] == route.Publication.SourceID {
+			next.entries[dest] = route
 		}
 	}
 	m.install(next)
 }
+
 func (m *Manager) Stats() map[string]int64 {
-	return map[string]int64{"active": m.active.Load(), "requests": m.requests.Load(), "bytes": m.bytes.Load(), "capacity": int64(cap(m.gates) + cap(m.metadataGates)), "file_capacity": int64(cap(m.gates)), "metadata_capacity": int64(cap(m.metadataGates))}
+	return map[string]int64{
+		"active":            m.active.Load(),
+		"requests":          m.requests.Load(),
+		"bytes":             m.bytes.Load(),
+		"capacity":          int64(cap(m.gates) + cap(m.metadataGates)),
+		"file_capacity":     int64(cap(m.gates)),
+		"metadata_capacity": int64(cap(m.metadataGates)),
+	}
 }
+
 func (m *Manager) Close() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -755,7 +845,11 @@ func (m *Manager) Close() error {
 // Collect expires logical fallbacks and then removes only private, unreferenced
 // generations. Active requests keep their open roots, including old fallbacks.
 func (m *Manager) Collect(now time.Time) error { return m.CollectContext(context.Background(), now) }
-func (m *Manager) Busy() bool                  { return m.active.Load() > int64(cap(m.gates)*3/4) }
+
+// Busy reports that large downloads use more than three quarters of their
+// slots; queued synchronizations then wait.
+func (m *Manager) Busy() bool { return m.active.Load() > int64(cap(m.gates)*3/4) }
+
 func (m *Manager) CollectContext(ctx context.Context, now time.Time) error {
 	m.collectMu.Lock()
 	defer m.collectMu.Unlock()
@@ -769,10 +863,11 @@ func (m *Manager) CollectContext(ctx context.Context, now time.Time) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	for _, o := range m.table.Load().entries {
-		p := o.Publication
-		p.Previous = slices.DeleteFunc(slices.Clone(p.Previous), func(g Generation) bool { return !g.RetainUntil.IsZero() && !now.Before(g.RetainUntil) })
-		if len(p.Previous) == len(o.Publication.Previous) {
+	expired := func(g Generation) bool { return !g.RetainUntil.IsZero() && !now.Before(g.RetainUntil) }
+	for _, route := range m.table.Load().entries {
+		p := route.Publication
+		p.Previous = slices.DeleteFunc(slices.Clone(p.Previous), expired)
+		if len(p.Previous) == len(route.Publication.Previous) {
 			continue
 		}
 		if err := m.store.SavePublication(p.SourceID, p); err != nil {
@@ -784,14 +879,14 @@ func (m *Manager) CollectContext(ctx context.Context, now time.Time) error {
 	}
 	m.routeMu.RLock()
 	live := map[string]bool{}
-	for _, o := range m.table.Load().entries {
-		for _, g := range o.generations {
-			live[g.ID] = true
+	for _, route := range m.table.Load().entries {
+		for _, generation := range route.generations {
+			live[generation.ID] = true
 		}
 	}
-	for _, o := range m.retired {
-		for _, g := range o.generations {
-			live[g.ID] = true
+	for _, route := range m.retired {
+		for _, generation := range route.generations {
+			live[generation.ID] = true
 		}
 	}
 	m.routeMu.RUnlock()
@@ -807,8 +902,8 @@ func (m *Manager) CollectContext(ctx context.Context, now time.Time) error {
 			return err
 		}
 		live[p.Current.ID] = true
-		for _, g := range p.Previous {
-			live[g.ID] = true
+		for _, generation := range p.Previous {
+			live[generation.ID] = true
 		}
 	}
 	dir := filepath.Join(m.Root, ".mirrordock", "published")
@@ -830,7 +925,7 @@ func (m *Manager) CollectContext(ctx context.Context, now time.Time) error {
 		if err != nil {
 			return err
 		}
-		if !collecting && now.Sub(st.ModTime()) < 24*time.Hour {
+		if !collecting && now.Sub(st.ModTime()) < generationRetention {
 			continue
 		}
 		target := filepath.Join(dir, entry.Name())
@@ -851,6 +946,11 @@ func (m *Manager) CollectContext(ctx context.Context, now time.Time) error {
 	return nil
 }
 
+// removeBatch is the number of entries removed between cooperative yields.
+const removeBatch = 128
+
+// removeGeneration deletes a private tree through os.Root, so a symbolic
+// link inside it can never redirect the removal outside dir.
 func removeGeneration(ctx context.Context, dir string) error {
 	root, err := os.OpenRoot(dir)
 	if err != nil {
@@ -865,15 +965,15 @@ func removeGeneration(ctx context.Context, dir string) error {
 		if err := root.Chmod(relative, 0700); err != nil {
 			return err
 		}
-		f, err := root.Open(relative)
+		directory, err := root.Open(relative)
 		if err != nil {
 			return err
 		}
-		defer f.Close()
+		defer directory.Close()
 		for {
-			entries, e := f.ReadDir(128)
-			if e != nil && !errors.Is(e, io.EOF) {
-				return e
+			entries, readErr := directory.ReadDir(removeBatch)
+			if readErr != nil && !errors.Is(readErr, io.EOF) {
+				return readErr
 			}
 			for _, entry := range entries {
 				if err := ctx.Err(); err != nil {
@@ -891,7 +991,7 @@ func removeGeneration(ctx context.Context, dir string) error {
 			}
 			// Yield between full batches so reclamation remains cooperative
 			// with downloads and can stop promptly during service shutdown.
-			if len(entries) == 128 {
+			if len(entries) == removeBatch {
 				timer := time.NewTimer(time.Millisecond)
 				select {
 				case <-ctx.Done():
@@ -900,7 +1000,7 @@ func removeGeneration(ctx context.Context, dir string) error {
 				case <-timer.C:
 				}
 			}
-			if errors.Is(e, io.EOF) {
+			if errors.Is(readErr, io.EOF) {
 				break
 			}
 		}

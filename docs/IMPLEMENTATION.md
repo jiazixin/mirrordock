@@ -4,7 +4,7 @@
 
 ## 数据与接口
 
-数据库由 `internal/database` 启动建表/索引，1.0 初始 schema（无发布前兼容迁移）。运行数据以单条 JSON 聚合 attempts/events/脱敏快照；发布指针独立存储。历史保留，日志清理不删除事实。WAL/FULL 单写连接，分析走有界只读快照。`runs(source_id,id DESC)` 支持每源最新状态，不能用全局最近 50/100 条代替。
+数据库由 `internal/database` 启动建表/索引并写入结构版本 `PRAGMA user_version = 1`，版本更高的数据库拒绝打开；表结构变化须提升 `schemaVersion` 并编写迁移。运行数据以单条 JSON 聚合 attempts/events/脱敏快照；发布指针独立存储。历史保留，日志清理不删除事实。WAL/FULL 单写连接，分析走有界只读快照。`runs(source_id,id DESC)` 支持每源最新状态，不能用全局最近 50/100 条代替。
 
 | 接口 | 用途 |
 | --- | --- |
@@ -22,14 +22,14 @@
 
 除 auth status/login 外管理 API 均鉴权；写操作同源校验。完整代理 URL 回填是已确认协议例外，Token/密码/通知凭据不返回。运行快照不保存代理/Token/通知密文。
 
-来源 URL 与 GPG 公钥 URL 禁止用户信息、查询参数及片段。`internal/runs/snapshot.go` 负责新快照的防御性脱敏。首次上线使用新的 state；发布前的历史地址迁移代码已删除。run_results 的自增 sequence 表示结果插入顺序，用于通知有界扫描，id 唯一约束继续保留首个不可恢复终态事实（中断不写结果队列）。
+来源 URL 与 GPG 公钥 URL 禁止用户信息、查询参数及片段。`internal/runs/snapshot.go` 负责运行快照的防御性脱敏。run_results 的自增 sequence 表示结果插入顺序，用于通知有界扫描，id 唯一约束继续保留首个不可恢复终态事实（中断不写结果队列）。
 
 ## 源码定位
 
 - 配置及路径：`internal/config/config.go`；所有 dest 同时检查逻辑路径和解析后目录重叠。
 - 任务与重试：`internal/runs/runs.go`；时间范围：`internal/app/location.go`；分析：`internal/runs/analytics.go`。
 - Rsync/DNF 命令：`internal/sync/runner.go`；子进程和进度：`process.go`；GitHub：`github.go`。
-- 文件与发布：`internal/mirrors/{mirrors,http,validate,summary}.go`；克隆/容量/无变化复用：`clone_*.go`、`space_*.go`、`storage.go`、`fingerprint.go`；公开目录：`listing.go` 与 listing HTML/CSS/JS/icons。
+- 文件与发布：`internal/mirrors/{mirrors,http,validate,summary}.go`；克隆/容量/无变化复用：`clone_{linux,darwin}.go`、`space_{linux,darwin}.go`、`storage.go`、`fingerprint.go`；公开目录：`listing.go` 与 listing HTML/CSS/JS/icons（模板按元素分行，行内内容保持单行以免引入可见空白）。
 - 文件句柄：`internal/mirrors/descriptors.go` 与 `internal/app/connections.go` 分配同一进程预算；代根按需打开，不按历史代常驻。文件流与请求引用保持至请求结束。
 - 凭据/发送队列：`internal/notifications`；独立程序日志：`internal/observability`；认证/服务生命周期：`internal/app`。
 - Vue 请求与会话：`web/src/app`；业务页面：`features`；共享控件：`components`；所有页面共享格式化规则。
@@ -42,4 +42,4 @@ GitHub 原始日志有资产结果，当前没有每资产独立数据库检索�
 
 `/api/system/checks` 的 `reflink.status` 为 supported/unsupported/error，`detail` 记录实测结果；`storage` 给出 work 文件系统 total/available/reserve/required（下一任务准入）、workers、当前路由 previous 数与数字 work 目录数，读取失败通过 error 返回。目录数不表示物理空间或所有已删除配置源的留存文件。生产同步要求可用 reflink；容量保护为提前停止策略，首次全量及增量峰值仍需实际容量规划。
 
-已完成计划归档于 `docs/archive/plans/`，历史版本和方案只作追溯，不能当作当前实现。本次完整工作区（含已有改动）的审查与回归记录集中在 ACCEPTANCE，不再追加按会话堆叠的历史段落。
+审查与回归记录集中在 ACCEPTANCE，只描述当前代码的验证结果；更早的会话记录保留在 Git 历史中。

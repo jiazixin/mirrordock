@@ -65,7 +65,7 @@ func (m *Manager) ProbeReflink(ctx context.Context) ReflinkCheck {
 		return m.clone(f, filepath.Join(dest, "clone"))
 	}
 	if err := probe(); err != nil {
-		if errors.Is(err, errors.ErrUnsupported) || errors.Is(err, syscall.EOPNOTSUPP) || errors.Is(err, syscall.ENOTTY) || errors.Is(err, syscall.EXDEV) {
+		if cloneUnsupported(err) {
 			result.Status = "unsupported"
 		}
 		result.Detail = "镜像目录克隆未成功：" + err.Error()
@@ -76,13 +76,28 @@ func (m *Manager) ProbeReflink(ctx context.Context) ReflinkCheck {
 	return result
 }
 
+// cloneUnsupported recognizes errors of a filesystem without reflink, as
+// opposed to a failed probe.
+func cloneUnsupported(err error) bool {
+	for _, unsupported := range []error{errors.ErrUnsupported, syscall.EOPNOTSUPP, syscall.ENOTTY, syscall.EXDEV} {
+		if errors.Is(err, unsupported) {
+			return true
+		}
+	}
+	return false
+}
+
+// safetyReserve is the free space kept on the mirror filesystem: 1% of its
+// size, at least 1 GiB.
+func safetyReserve(space DiskSpace) uint64 { return max(uint64(1<<30), space.Total/100) }
+
 func (m *Manager) StorageInfo() DiskSpace {
 	space, err := m.space(filepath.Join(m.Root, ".mirrordock", "work"))
 	if err != nil {
 		space.Error = err.Error()
 		return space
 	}
-	space.Reserve = max(uint64(1<<30), space.Total/100)
+	space.Reserve = safetyReserve(space)
 	m.storageMu.Lock()
 	space.Workers = len(m.syncing)
 	m.storageMu.Unlock()
@@ -131,8 +146,8 @@ func (m *Manager) admissionShortLocked() (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("读取镜像盘容量：%w", err)
 	}
-	reserve := max(uint64(1<<30), space.Total/100)
-	return space.Available < reserve+workerSpace*uint64(len(m.syncing)+1), nil
+	required := safetyReserve(space) + workerSpace*uint64(len(m.syncing)+1)
+	return space.Available < required, nil
 }
 
 func (m *Manager) EndSync(id int64) {
@@ -146,7 +161,7 @@ func (m *Manager) CheckSpace() error {
 	if err != nil {
 		return fmt.Errorf("读取镜像盘容量：%w", err)
 	}
-	if space.Available < max(uint64(1<<30), space.Total/100) {
+	if space.Available < safetyReserve(space) {
 		return ErrLowSpace
 	}
 	return nil
@@ -185,9 +200,8 @@ func (m *Manager) cleanupStaleTemporary(ctx context.Context) error {
 		}
 		for _, entry := range entries {
 			probe := strings.HasPrefix(entry.Name(), ".reflink-probe-")
-			legacyDNF := area == "work" && strings.HasPrefix(entry.Name(), "dnf-private-")
 			discarded := area == "work" && strings.HasPrefix(entry.Name(), discardPrefix)
-			if entry.IsDir() && (probe || legacyDNF || discarded) {
+			if entry.IsDir() && (probe || discarded) {
 				if err := removeGeneration(ctx, filepath.Join(dir, entry.Name())); err != nil {
 					return err
 				}

@@ -15,6 +15,7 @@ func TestNotificationUsesCumulativeDuration(t *testing.T) {
 		t.Fatalf("累计执行10秒却按开始/结束差显示一小时: %s", m.Body)
 	}
 }
+
 func TestNotificationReuseIsSuccessSubset(t *testing.T) {
 	r := &runs.Run{State: "failed", Type: "github_release", Progress: syncer.Progress{Files: 3, Success: 2, Skipped: 2}}
 	m, _ := resultMessage(r, "UTC")

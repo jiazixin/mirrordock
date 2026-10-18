@@ -124,12 +124,12 @@ const grid = computed(() => {
   const step = 6 * HOUR
   const first = Math.ceil((start.value + offset.value) / step) * step - offset.value
   const lines = []
-  for (let t = first; t < start.value + SPAN; t += step) {
-    const left = position(t)
+  for (let time = first; time < start.value + SPAN; time += step) {
+    const left = position(time)
     lines.push({
-      t,
+      t: time,
       left,
-      label: (t + offset.value) % (24 * HOUR) === 0 ? day(t) : clock(t),
+      label: (time + offset.value) % (24 * HOUR) === 0 ? day(time) : clock(time),
       hidden: Math.abs(left - nowLeft.value) < 11,
     })
   }
@@ -215,8 +215,8 @@ function segments(run: Run): Segment[] {
 const sources = computed(() => state.config?.config.sources ?? [])
 function upcoming(source: Source) {
   if (!source.enabled || !source.schedule.enabled) return undefined
-  const t = parse(state.info?.schedules[source.id])
-  return Number.isNaN(t) ? undefined : t
+  const scheduled = parse(state.info?.schedules[source.id])
+  return Number.isNaN(scheduled) ? undefined : scheduled
 }
 const lanes = computed(() =>
   sources.value.map((source) => {
@@ -315,18 +315,21 @@ const tone = computed(() =>
 const kpis = computed(() => {
   const list = sources.value
   const { succeeded, failed, timedOut, evaluated } = counts.value
+  const enabled = list.filter((source) => source.enabled)
+  const scheduled = enabled.filter((source) => source.schedule.enabled)
+  const heldRuns = attention.value.filter((item) => held.includes(item.run.state))
   return [
     {
       label: '同步源',
       value: String(list.length),
       unit: '个',
-      foot: `${list.filter((s) => s.enabled).length} 个启用 · ${list.filter((s) => s.enabled && s.schedule.enabled).length} 个自动计划`,
+      foot: `${enabled.length} 个启用 · ${scheduled.length} 个自动计划`,
     },
     {
       label: '进行中',
       value: String(running.value.length),
       unit: '个任务',
-      foot: `${queued.value.length} 个排队 · ${attention.value.filter((a) => held.includes(a.run.state)).length} 个暂停或中断`,
+      foot: `${queued.value.length} 个排队 · ${heldRuns.length} 个暂停或中断`,
     },
     {
       label: '24 小时成功率',

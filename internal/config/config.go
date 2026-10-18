@@ -2,6 +2,7 @@ package config
 
 import (
 	"bytes"
+	"cmp"
 	"crypto/sha256"
 	"crypto/tls"
 	"encoding/hex"
@@ -32,20 +33,24 @@ type TLS struct {
 	Cert string `yaml:"cert" json:"cert"`
 	Key  string `yaml:"key" json:"key"`
 }
+
 type Auth struct {
 	Username string `yaml:"username" json:"username"`
 	Password string `yaml:"password" json:"-"`
 }
+
 type Log struct {
 	Level  string `yaml:"level" json:"level"`
 	Path   string `yaml:"path" json:"path"`
 	Format string `yaml:"format" json:"format"`
 }
+
 type RsyncSettings struct {
 	IOTimeout      string  `yaml:"io_timeout" json:"io_timeout"`
 	ConnectTimeout string  `yaml:"connect_timeout" json:"connect_timeout"`
 	LimitMB        float64 `yaml:"limit_mb" json:"limit_mb"`
 }
+
 type GitHubSettings struct {
 	ReleaseCount       int    `yaml:"release_count" json:"release_count"`
 	IncludePrereleases bool   `yaml:"include_prereleases" json:"include_prereleases"`
@@ -76,6 +81,7 @@ type Settings struct {
 	GitHub        GitHubSettings          `yaml:"github" json:"github"`
 	Notifications map[string]Notification `yaml:"notifications,omitempty" json:"-"`
 }
+
 type Rsync struct {
 	PreserveLinks       *bool `yaml:"preserve_links,omitempty" json:"preserve_links"`
 	PreserveTimes       *bool `yaml:"preserve_times,omitempty" json:"preserve_times"`
@@ -85,6 +91,7 @@ type Rsync struct {
 	UID                 *int  `yaml:"uid,omitempty" json:"uid"`
 	GID                 *int  `yaml:"gid,omitempty" json:"gid"`
 }
+
 type RepoSync struct {
 	RepoID           string   `yaml:"repo_id" json:"repo_id"`
 	Releasever       string   `yaml:"releasever" json:"releasever"`
@@ -97,16 +104,19 @@ type RepoSync struct {
 	GPGKeys          []string `yaml:"gpg_keys" json:"gpg_keys"`
 	ModuleHotfixes   bool     `yaml:"module_hotfixes" json:"module_hotfixes"`
 }
+
 type GitHubRelease struct {
 	Repository    string   `yaml:"repository" json:"repository"`
 	ReleaseCount  int      `yaml:"release_count,omitempty" json:"release_count"`
 	AssetPatterns []string `yaml:"asset_patterns" json:"asset_patterns"`
 }
+
 type Schedule struct {
 	Enabled bool   `yaml:"enabled" json:"enabled"`
 	Cron    string `yaml:"cron" json:"cron"`
 	Overlap string `yaml:"overlap" json:"overlap"`
 }
+
 type Source struct {
 	ID            string            `yaml:"id" json:"id"`
 	Name          string            `yaml:"name" json:"name"`
@@ -120,6 +130,7 @@ type Source struct {
 	Schedule      Schedule          `yaml:"schedule" json:"schedule"`
 	Upstreams     map[string]string `yaml:",inline" json:"upstreams"`
 }
+
 type Config struct {
 	Listen     string   `yaml:"listen" json:"listen"`
 	Port       int      `yaml:"port" json:"port"`
@@ -131,6 +142,7 @@ type Config struct {
 	Settings   Settings `yaml:"settings" json:"settings"`
 	Sources    []Source `yaml:"sources" json:"sources"`
 }
+
 type View struct {
 	Config          Config `json:"config"`
 	Revision        string `json:"revision"`
@@ -139,6 +151,7 @@ type View struct {
 	RestartRequired bool   `json:"restart_required"`
 	File            string `json:"file"`
 }
+
 type Manager struct {
 	mu       sync.RWMutex
 	file     string
@@ -160,10 +173,12 @@ func (s Source) MarshalYAML() (any, error) {
 	if err := node.Encode(sourceFields(s)); err != nil {
 		return nil, err
 	}
+	// Only the selected executor's option block is written back to YAML.
+	executorKeys := []string{"rsync", "reposync", "github_release"}
 	fields := []*yaml.Node{}
 	for i := 0; i < len(node.Content); i += 2 {
 		key := node.Content[i].Value
-		if (key == "rsync" && s.Type != "rsync") || (key == "reposync" && s.Type != "reposync") || (key == "github_release" && s.Type != "github_release") {
+		if slices.Contains(executorKeys, key) && key != s.Type {
 			continue
 		}
 		fields = append(fields, node.Content[i], node.Content[i+1])
@@ -171,42 +186,57 @@ func (s Source) MarshalYAML() (any, error) {
 	node.Content = fields
 	return &node, nil
 }
+
 func Defaults() Config {
-	return Config{Listen: "0.0.0.0", Port: 8080, Path: "../data", MirrorRoot: "/srv/mirrors", Log: Log{Level: "info", Format: "json"}, Settings: Settings{RetryCount: 3, TaskTimeout: "8h", Rsync: RsyncSettings{IOTimeout: "5m", ConnectTimeout: "30s"}, GitHub: GitHubSettings{ReleaseCount: 5}}}
+	return Config{
+		Listen:     "0.0.0.0",
+		Port:       8080,
+		Path:       "../data",
+		MirrorRoot: "/srv/mirrors",
+		Log:        Log{Level: "info", Format: "json"},
+		Settings: Settings{
+			RetryCount:  3,
+			TaskTimeout: "8h",
+			Rsync:       RsyncSettings{IOTimeout: "5m", ConnectTimeout: "30s"},
+			GitHub:      GitHubSettings{ReleaseCount: 5},
+		},
+	}
 }
+
 func Clone(c Config) Config {
-	b, _ := json.Marshal(c)
+	encoded, _ := json.Marshal(c)
 	var out Config
-	_ = json.Unmarshal(b, &out)
+	_ = json.Unmarshal(encoded, &out)
 	// Passwords are omitted from JSON, but internal copies retain credentials.
 	out.Auth = c.Auth
 	out.Settings.Notifications = maps.Clone(c.Settings.Notifications)
 	return out
 }
+
 func (s Source) Candidates() []string {
-	keys := make([]string, 0, len(s.Upstreams))
-	for k := range s.Upstreams {
-		keys = append(keys, k)
+	sourceNumber := func(key string) int {
+		number, _ := strconv.Atoi(strings.TrimPrefix(key, "src"))
+		return number
 	}
-	slices.SortFunc(keys, func(a, b string) int {
-		na, _ := strconv.Atoi(strings.TrimPrefix(a, "src"))
-		nb, _ := strconv.Atoi(strings.TrimPrefix(b, "src"))
-		return na - nb
+	keys := slices.SortedFunc(maps.Keys(s.Upstreams), func(a, b string) int {
+		return cmp.Compare(sourceNumber(a), sourceNumber(b))
 	})
-	out := make([]string, 0, len(keys))
-	for _, k := range keys {
-		if s.Upstreams[k] != "" {
-			out = append(out, s.Upstreams[k])
+	addresses := make([]string, 0, len(keys))
+	for _, key := range keys {
+		if s.Upstreams[key] != "" {
+			addresses = append(addresses, s.Upstreams[key])
 		}
 	}
-	return out
+	return addresses
 }
+
 func Resolve(file, p string) string {
 	if filepath.IsAbs(p) {
 		return filepath.Clean(p)
 	}
 	return filepath.Join(filepath.Dir(file), p)
 }
+
 func Canonical(p string) (string, error) {
 	p = filepath.Clean(p)
 	resolved, err := filepath.EvalSymlinks(p)
@@ -220,12 +250,13 @@ func Canonical(p string) (string, error) {
 	if parent == p {
 		return "", err
 	}
-	r, err := Canonical(parent)
+	resolvedParent, err := Canonical(parent)
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(r, filepath.Base(p)), nil
+	return filepath.Join(resolvedParent, filepath.Base(p)), nil
 }
+
 func Within(root, p string) bool {
 	rel, err := filepath.Rel(root, p)
 	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
@@ -235,19 +266,43 @@ func (c Config) Validate(file string) error {
 	if err := ValidateNotifications(c.Settings.Notifications); err != nil {
 		return err
 	}
+	if err := c.validateService(); err != nil {
+		return err
+	}
+	if err := c.Settings.validate(); err != nil {
+		return err
+	}
+	paths, err := c.resolvePaths(file)
+	if err != nil {
+		return err
+	}
+	if c.Log.Path != "" {
+		if err := c.validateLogPath(file, paths); err != nil {
+			return err
+		}
+	}
+	if err := c.validateTLS(file, paths.mirrorRoot); err != nil {
+		return err
+	}
+	return validateSources(c.Sources, paths.mirrorRoot)
+}
+
+// validateService checks the logging, account and listener fields.
+func (c Config) validateService() error {
 	if !slices.Contains([]string{"debug", "info", "warn", "error"}, c.Log.Level) {
 		return errors.New("log.level 只支持 debug、info、warn、error")
 	}
 	if c.Log.Format != "json" && c.Log.Format != "text" {
 		return errors.New("log.format 只支持 json、text")
 	}
-	if strings.TrimSpace(c.Log.Path) != c.Log.Path || strings.IndexFunc(c.Log.Path, unicode.IsControl) >= 0 {
+	if !trimmedPrintable(c.Log.Path) {
 		return errors.New("log.path 不能包含首尾空白或控制字符")
 	}
-	if strings.TrimSpace(c.Auth.Username) == "" || strings.TrimSpace(c.Auth.Username) != c.Auth.Username || len(c.Auth.Username) > 128 || strings.IndexFunc(c.Auth.Username, unicode.IsControl) >= 0 {
+	username := c.Auth.Username
+	if username == "" || len(username) > 128 || !trimmedPrintable(username) {
 		return errors.New("auth.username 必须非空，最多 128 字节，不能包含首尾空白或控制字符")
 	}
-	if strings.TrimSpace(c.Auth.Password) == "" || len(c.Auth.Password) > 72 {
+	if strings.TrimSpace(c.Auth.Password) == "" || len(c.Auth.Password) > maxPasswordBytes {
 		return errors.New("auth.password 必须非空，最多 72 字节")
 	}
 	if net.ParseIP(c.Listen) == nil && c.Listen != "localhost" {
@@ -256,110 +311,164 @@ func (c Config) Validate(file string) error {
 	if c.Port < 1 || c.Port > 65535 {
 		return errors.New("port 必须在 1–65535 之间")
 	}
-	for name, v := range map[string]string{"path": c.Path, "mirror_root": c.MirrorRoot} {
-		if strings.TrimSpace(v) == "" {
-			return fmt.Errorf("%s 不能为空", name)
+	if strings.TrimSpace(c.Path) == "" {
+		return errors.New("path 不能为空")
+	}
+	if strings.TrimSpace(c.MirrorRoot) == "" {
+		return errors.New("mirror_root 不能为空")
+	}
+	return nil
+}
+
+// maxPasswordBytes is the bcrypt input limit.
+const maxPasswordBytes = 72
+
+// trimmedPrintable reports whether v has no surrounding whitespace and no
+// control characters.
+func trimmedPrintable(v string) bool {
+	return strings.TrimSpace(v) == v && strings.IndexFunc(v, unicode.IsControl) < 0
+}
+
+func (s Settings) validate() error {
+	durations := []struct{ name, value string }{
+		{"task_timeout", s.TaskTimeout},
+		{"io_timeout", s.Rsync.IOTimeout},
+		{"connect_timeout", s.Rsync.ConnectTimeout},
+	}
+	for _, field := range durations {
+		duration, err := time.ParseDuration(field.value)
+		if err != nil || duration <= 0 {
+			return fmt.Errorf("%s 必须为正时间长度", field.name)
 		}
 	}
-	for name, v := range map[string]string{"task_timeout": c.Settings.TaskTimeout, "io_timeout": c.Settings.Rsync.IOTimeout, "connect_timeout": c.Settings.Rsync.ConnectTimeout} {
-		d, err := time.ParseDuration(v)
-		if err != nil || d <= 0 {
-			return fmt.Errorf("%s 必须为正时间长度", name)
-		}
-	}
-	if c.Settings.RetryCount < 0 || c.Settings.RetryCount > 10 {
+	if s.RetryCount < 0 || s.RetryCount > 10 {
 		return errors.New("retry_count 必须在 0–10 之间")
 	}
-	if math.IsNaN(c.Settings.Rsync.LimitMB) || math.IsInf(c.Settings.Rsync.LimitMB, 0) || c.Settings.Rsync.LimitMB < 0 {
+	limit := s.Rsync.LimitMB
+	if math.IsNaN(limit) || math.IsInf(limit, 0) || limit < 0 {
 		return errors.New("limit_mb 必须为非负数")
 	}
-	if c.Settings.GitHub.ReleaseCount < 1 || c.Settings.GitHub.ReleaseCount > 100 {
+	if s.GitHub.ReleaseCount < 1 || s.GitHub.ReleaseCount > 100 {
 		return errors.New("release_count 必须在 1–100 之间")
 	}
-	if strings.IndexFunc(c.Settings.GitHub.Token, unicode.IsSpace) >= 0 || strings.IndexFunc(c.Settings.GitHub.Token, unicode.IsControl) >= 0 {
+	token := s.GitHub.Token
+	if strings.IndexFunc(token, unicode.IsSpace) >= 0 || strings.IndexFunc(token, unicode.IsControl) >= 0 {
 		return errors.New("github.token 不能包含空白或控制字符，请只填写 Token 本身")
 	}
-	if _, err := ParseProxyURL(c.Settings.GitHub.Proxy); err != nil {
-		return err
-	}
+	_, err := ParseProxyURL(s.GitHub.Proxy)
+	return err
+}
+
+// resolvedPaths holds canonical deployment paths after symlink resolution.
+type resolvedPaths struct {
+	mirrorRoot string
+	data       string
+	configFile string
+}
+
+func (c Config) resolvePaths(file string) (resolvedPaths, error) {
 	root, err := Canonical(Resolve(file, c.MirrorRoot))
 	if err != nil {
-		return err
+		return resolvedPaths{}, err
 	}
 	data, err := Canonical(Resolve(file, c.Path))
 	if err != nil {
-		return err
+		return resolvedPaths{}, err
 	}
-	cfgFile, err := Canonical(file)
+	configFile, err := Canonical(file)
+	if err != nil {
+		return resolvedPaths{}, err
+	}
+	isolated := !Within(root, data) && !Within(data, root) && !Within(root, configFile)
+	if root == string(filepath.Separator) || !isolated {
+		return resolvedPaths{}, errors.New(
+			"镜像根必须与数据库、日志和配置目录隔离，且不能是文件系统根",
+		)
+	}
+	return resolvedPaths{mirrorRoot: root, data: data, configFile: configFile}, nil
+}
+
+// validateLogPath keeps the program log out of the mirror, the task log
+// directories and every file the service owns.
+func (c Config) validateLogPath(file string, paths resolvedPaths) error {
+	logFile, err := Canonical(Resolve(file, c.Log.Path))
 	if err != nil {
 		return err
 	}
-	if root == string(filepath.Separator) || Within(root, data) || Within(data, root) || Within(root, cfgFile) {
-		return errors.New("镜像根必须与数据库、日志和配置目录隔离，且不能是文件系统根")
+	if Within(paths.mirrorRoot, logFile) {
+		return errors.New("log.path 不能位于镜像根中")
 	}
-	if c.Log.Path != "" {
-		logFile, err := Canonical(Resolve(file, c.Log.Path))
+	taskLogs, err := Canonical(filepath.Join(paths.data, "logs"))
+	if err != nil {
+		return err
+	}
+	if Within(taskLogs, logFile) && filepath.Dir(logFile) != taskLogs {
+		return errors.New("log.path 不能使用任务日志子目录；可使用 <path>/logs/mirrordock.log")
+	}
+	logInfo, err := os.Stat(logFile)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if logInfo != nil && !logInfo.Mode().IsRegular() {
+		return errors.New("log.path 必须是普通文件")
+	}
+	protected := []string{paths.configFile}
+	stateFiles := []string{"data.sqlite", "data.sqlite-wal", "data.sqlite-shm", ".mirrordock.lock", "notification.key"}
+	for _, name := range stateFiles {
+		protected = append(protected, filepath.Join(paths.data, name))
+	}
+	for _, tlsFile := range []string{c.TLS.Cert, c.TLS.Key} {
+		if tlsFile != "" {
+			protected = append(protected, Resolve(file, tlsFile))
+		}
+	}
+	for _, candidate := range protected {
+		candidate, err := Canonical(candidate)
 		if err != nil {
 			return err
 		}
-		if Within(root, logFile) {
-			return errors.New("log.path 不能位于镜像根中")
+		protectedInfo, statErr := os.Stat(candidate)
+		if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
+			return statErr
 		}
-		taskLogs, err := Canonical(filepath.Join(data, "logs"))
-		if err != nil {
-			return err
-		}
-		if Within(taskLogs, logFile) && filepath.Dir(logFile) != taskLogs {
-			return errors.New("log.path 不能使用任务日志子目录；可使用 <path>/logs/mirrordock.log")
-		}
-		logInfo, err := os.Stat(logFile)
-		if err != nil && !errors.Is(err, os.ErrNotExist) {
-			return err
-		}
-		if logInfo != nil && !logInfo.Mode().IsRegular() {
-			return errors.New("log.path 必须是普通文件")
-		}
-		protected := []string{cfgFile, filepath.Join(data, "data.sqlite"), filepath.Join(data, "data.sqlite-wal"), filepath.Join(data, "data.sqlite-shm"), filepath.Join(data, ".mirrordock.lock"), filepath.Join(data, "notification.key")}
-		for _, p := range []string{c.TLS.Cert, c.TLS.Key} {
-			if p != "" {
-				protected = append(protected, Resolve(file, p))
-			}
-		}
-		for _, p := range protected {
-			p, err := Canonical(p)
-			if err != nil {
-				return err
-			}
-			protectedInfo, statErr := os.Stat(p)
-			if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
-				return statErr
-			}
-			if logFile == p || (logInfo != nil && protectedInfo != nil && os.SameFile(logInfo, protectedInfo)) {
-				return errors.New("log.path 不能覆盖配置、数据库、实例锁或 TLS 文件")
-			}
+		sameFile := logInfo != nil && protectedInfo != nil && os.SameFile(logInfo, protectedInfo)
+		if logFile == candidate || sameFile {
+			return errors.New("log.path 不能覆盖配置、数据库、实例锁或 TLS 文件")
 		}
 	}
+	return nil
+}
+
+func (c Config) validateTLS(file, mirrorRoot string) error {
 	if (c.TLS.Cert == "") != (c.TLS.Key == "") {
 		return errors.New("TLS 证书与私钥必须同时填写")
 	}
-	if c.TLS.Cert != "" {
-		for _, p := range []string{c.TLS.Cert, c.TLS.Key} {
-			p, err := Canonical(Resolve(file, p))
-			if err != nil {
-				return err
-			}
-			if Within(root, p) {
-				return errors.New("TLS 文件不能位于镜像根中")
-			}
+	if c.TLS.Cert == "" {
+		return nil
+	}
+	for _, tlsFile := range []string{c.TLS.Cert, c.TLS.Key} {
+		resolved, err := Canonical(Resolve(file, tlsFile))
+		if err != nil {
+			return err
 		}
-		if _, err := tls.LoadX509KeyPair(Resolve(file, c.TLS.Cert), Resolve(file, c.TLS.Key)); err != nil {
-			return fmt.Errorf("TLS 加载失败: %w", err)
+		if Within(mirrorRoot, resolved) {
+			return errors.New("TLS 文件不能位于镜像根中")
 		}
 	}
+	if _, err := tls.LoadX509KeyPair(Resolve(file, c.TLS.Cert), Resolve(file, c.TLS.Key)); err != nil {
+		return fmt.Errorf("TLS 加载失败: %w", err)
+	}
+	return nil
+}
+
+// reservedTopLevel lists the first dest segments owned by the service itself.
+var reservedTopLevel = []string{"admin", "api", "favicon.ico"}
+
+func validateSources(sources []Source, mirrorRoot string) error {
 	ids := map[string]bool{}
 	dests := []string{}
 	resolvedDests := []string{}
-	for _, s := range c.Sources {
+	for _, s := range sources {
 		if !idPattern.MatchString(s.ID) || ids[s.ID] {
 			return fmt.Errorf("源 id 无效或重复: %s", s.ID)
 		}
@@ -367,29 +476,21 @@ func (c Config) Validate(file string) error {
 		if strings.TrimSpace(s.Name) == "" {
 			return fmt.Errorf("%s 缺少 name", s.ID)
 		}
-		if s.Dest == "" || path.Clean(s.Dest) != s.Dest || strings.HasPrefix(s.Dest, "/") || strings.ContainsAny(s.Dest, "\\\x00\r\n") {
-			return fmt.Errorf("%s 的 dest 必须是规范相对目录", s.ID)
+		if err := s.validateDest(); err != nil {
+			return err
 		}
-		first, _, _ := strings.Cut(s.Dest, "/")
-		if first == "admin" || first == "api" || first == "favicon.ico" {
-			return fmt.Errorf("%s 的 dest 包含保留路径", s.ID)
-		}
-		for seg := range strings.SplitSeq(s.Dest, "/") {
-			if seg == ".." || seg == "." || strings.HasPrefix(seg, ".") {
-				return fmt.Errorf("%s 的 dest 包含保留路径", s.ID)
-			}
-		}
-		for _, d := range dests {
-			if d == s.Dest || strings.HasPrefix(d, s.Dest+"/") || strings.HasPrefix(s.Dest, d+"/") {
+		for _, existing := range dests {
+			nested := strings.HasPrefix(existing, s.Dest+"/") || strings.HasPrefix(s.Dest, existing+"/")
+			if existing == s.Dest || nested {
 				return errors.New("dest 目录不能重复或互相嵌套")
 			}
 		}
 		dests = append(dests, s.Dest)
-		target, err := Canonical(filepath.Join(root, filepath.FromSlash(s.Dest)))
+		target, err := Canonical(filepath.Join(mirrorRoot, filepath.FromSlash(s.Dest)))
 		if err != nil {
 			return err
 		}
-		if !Within(root, target) {
+		if !Within(mirrorRoot, target) {
 			return fmt.Errorf("%s 的目标链接越界", s.ID)
 		}
 		for _, existing := range resolvedDests {
@@ -398,100 +499,164 @@ func (c Config) Validate(file string) error {
 			}
 		}
 		resolvedDests = append(resolvedDests, target)
-		for k, v := range s.Upstreams {
-			if !srcPattern.MatchString(k) {
-				return fmt.Errorf("%s: 不支持字段 %s，仅接受 src1/src2…", s.ID, k)
-			}
-			if _, err := strconv.Atoi(strings.TrimPrefix(k, "src")); err != nil {
-				return fmt.Errorf("%s 的 src 编号超出整数范围", s.ID)
-			}
-			if strings.ContainsAny(v, "\x00\r\n") {
-				return errors.New("来源地址包含控制字符")
-			}
-			if err := publicURL(v); err != nil {
-				return err
-			}
+		if err := s.validateAddresses(); err != nil {
+			return err
 		}
-		for _, v := range s.RepoSync.GPGKeys {
-			if err := SourceURL(v); err != nil {
-				return err
-			}
+		if err := s.validateExecutor(); err != nil {
+			return err
 		}
-		switch s.Type {
-		case "rsync":
-			if len(s.Candidates()) == 0 {
-				return fmt.Errorf("%s 缺少 src1", s.ID)
-			}
-			for _, v := range s.Candidates() {
-				u, err := url.Parse(v)
-				if err != nil || u.Scheme != "rsync" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
-					return fmt.Errorf("%s 的来源必须是 rsync:// 地址", s.ID)
-				}
-				remote := strings.Trim(u.Path, "/")
-				if remote == "" || (strings.Contains(remote, "/") && !strings.HasSuffix(u.Path, "/")) {
-					return fmt.Errorf("%s 的 rsync 来源必须包含模块，模块内目录须以 / 结尾", s.ID)
-				}
-			}
-			for _, n := range []*int{s.Rsync.UID, s.Rsync.GID} {
-				if n != nil && (*n < 0 || int64(*n) >= math.MaxUint32) {
-					return errors.New("uid/gid 必须在 0–4294967294 之间")
-				}
-			}
-			for _, p := range s.Exclude {
-				if strings.ContainsAny(p, "\x00\r\n") {
-					return errors.New("exclude 包含控制字符")
-				}
-			}
-		case "reposync":
-			if len(s.Candidates()) != 1 {
-				return errors.New("reposync 当前只接受一个 src1")
-			}
-			if err := SourceURL(s.Upstreams["src1"]); err != nil {
-				return err
-			}
-			if !idPattern.MatchString(s.RepoSync.RepoID) || !idPattern.MatchString(s.RepoSync.Releasever) || !idPattern.MatchString(s.RepoSync.Basearch) {
-				return errors.New("reposync 缺少有效 repo_id/releasever/basearch")
-			}
-			if s.RepoSync.NewestOnly && DefaultBool(s.RepoSync.DownloadMetadata) {
-				return errors.New("完整 metadata 不能搭配 newest_only")
-			}
-			if DefaultBool(s.RepoSync.GPGCheck) && len(s.RepoSync.GPGKeys) == 0 {
-				return errors.New("GPG 检查需要 gpg_keys")
-			}
-			for _, a := range s.RepoSync.Architectures {
-				if !idPattern.MatchString(a) {
-					return errors.New("无效 architecture")
-				}
-			}
-		case "github_release":
-			if !repoPattern.MatchString(s.GitHubRelease.Repository) || s.GitHubRelease.ReleaseCount < 0 || s.GitHubRelease.ReleaseCount > 100 {
-				return errors.New("GitHub 仓库或 Release 数量无效")
-			}
-			for _, p := range s.GitHubRelease.AssetPatterns {
-				if _, err := path.Match(p, "test"); err != nil {
-					return fmt.Errorf("无效 asset glob: %w", err)
-				}
-			}
-		default:
-			return fmt.Errorf("不支持源类型: %s", s.Type)
-		}
-		if s.Schedule.Overlap != "" && s.Schedule.Overlap != "skip" {
-			return errors.New("schedule.overlap 只支持 skip")
-		}
-		if s.Schedule.Enabled {
-			if len(strings.Fields(s.Schedule.Cron)) != 5 {
-				return fmt.Errorf("%s cron 必须为五字段并使用程序启动时区", s.ID)
-			}
-			if _, err := cron.ParseStandard(s.Schedule.Cron); err != nil {
-				return fmt.Errorf("%s cron: %w", s.ID, err)
-			}
+		if err := s.Schedule.validate(s.ID); err != nil {
+			return err
 		}
 	}
 	return nil
 }
+
+func (s Source) validateDest() error {
+	clean := path.Clean(s.Dest) == s.Dest
+	if s.Dest == "" || !clean || strings.HasPrefix(s.Dest, "/") || strings.ContainsAny(s.Dest, "\\\x00\r\n") {
+		return fmt.Errorf("%s 的 dest 必须是规范相对目录", s.ID)
+	}
+	first, _, _ := strings.Cut(s.Dest, "/")
+	if slices.Contains(reservedTopLevel, first) {
+		return fmt.Errorf("%s 的 dest 包含保留路径", s.ID)
+	}
+	for segment := range strings.SplitSeq(s.Dest, "/") {
+		if segment == ".." || segment == "." || strings.HasPrefix(segment, ".") {
+			return fmt.Errorf("%s 的 dest 包含保留路径", s.ID)
+		}
+	}
+	return nil
+}
+
+func (s Source) validateAddresses() error {
+	for key, address := range s.Upstreams {
+		if !srcPattern.MatchString(key) {
+			return fmt.Errorf("%s: 不支持字段 %s，仅接受 src1/src2…", s.ID, key)
+		}
+		if _, err := strconv.Atoi(strings.TrimPrefix(key, "src")); err != nil {
+			return fmt.Errorf("%s 的 src 编号超出整数范围", s.ID)
+		}
+		if strings.ContainsAny(address, "\x00\r\n") {
+			return errors.New("来源地址包含控制字符")
+		}
+		if err := publicURL(address); err != nil {
+			return err
+		}
+	}
+	for _, address := range s.RepoSync.GPGKeys {
+		if err := SourceURL(address); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s Source) validateExecutor() error {
+	switch s.Type {
+	case "rsync":
+		return s.validateRsync()
+	case "reposync":
+		return s.validateRepoSync()
+	case "github_release":
+		return s.validateGitHubRelease()
+	default:
+		return fmt.Errorf("不支持源类型: %s", s.Type)
+	}
+}
+
+func (s Source) validateRsync() error {
+	candidates := s.Candidates()
+	if len(candidates) == 0 {
+		return fmt.Errorf("%s 缺少 src1", s.ID)
+	}
+	for _, candidate := range candidates {
+		address, err := url.Parse(candidate)
+		plain := err == nil && address.User == nil && address.RawQuery == "" && address.Fragment == ""
+		if !plain || address.Scheme != "rsync" || address.Host == "" {
+			return fmt.Errorf("%s 的来源必须是 rsync:// 地址", s.ID)
+		}
+		remote := strings.Trim(address.Path, "/")
+		directoryWithoutSlash := strings.Contains(remote, "/") && !strings.HasSuffix(address.Path, "/")
+		if remote == "" || directoryWithoutSlash {
+			return fmt.Errorf("%s 的 rsync 来源必须包含模块，模块内目录须以 / 结尾", s.ID)
+		}
+	}
+	for _, identity := range []*int{s.Rsync.UID, s.Rsync.GID} {
+		if identity != nil && (*identity < 0 || int64(*identity) >= math.MaxUint32) {
+			return errors.New("uid/gid 必须在 0–4294967294 之间")
+		}
+	}
+	for _, pattern := range s.Exclude {
+		if strings.ContainsAny(pattern, "\x00\r\n") {
+			return errors.New("exclude 包含控制字符")
+		}
+	}
+	return nil
+}
+
+func (s Source) validateRepoSync() error {
+	options := s.RepoSync
+	if len(s.Candidates()) != 1 {
+		return errors.New("reposync 当前只接受一个 src1")
+	}
+	if err := SourceURL(s.Upstreams["src1"]); err != nil {
+		return err
+	}
+	identifiers := []string{options.RepoID, options.Releasever, options.Basearch}
+	if slices.ContainsFunc(identifiers, func(v string) bool { return !idPattern.MatchString(v) }) {
+		return errors.New("reposync 缺少有效 repo_id/releasever/basearch")
+	}
+	if options.NewestOnly && DefaultBool(options.DownloadMetadata) {
+		return errors.New("完整 metadata 不能搭配 newest_only")
+	}
+	if DefaultBool(options.GPGCheck) && len(options.GPGKeys) == 0 {
+		return errors.New("GPG 检查需要 gpg_keys")
+	}
+	for _, architecture := range options.Architectures {
+		if !idPattern.MatchString(architecture) {
+			return errors.New("无效 architecture")
+		}
+	}
+	return nil
+}
+
+func (s Source) validateGitHubRelease() error {
+	release := s.GitHubRelease
+	if !repoPattern.MatchString(release.Repository) || release.ReleaseCount < 0 || release.ReleaseCount > 100 {
+		return errors.New("GitHub 仓库或 Release 数量无效")
+	}
+	for _, pattern := range release.AssetPatterns {
+		if _, err := path.Match(pattern, "test"); err != nil {
+			return fmt.Errorf("无效 asset glob: %w", err)
+		}
+	}
+	return nil
+}
+
+func (schedule Schedule) validate(sourceID string) error {
+	if schedule.Overlap != "" && schedule.Overlap != "skip" {
+		return errors.New("schedule.overlap 只支持 skip")
+	}
+	if !schedule.Enabled {
+		return nil
+	}
+	if len(strings.Fields(schedule.Cron)) != 5 {
+		return fmt.Errorf("%s cron 必须为五字段并使用程序启动时区", sourceID)
+	}
+	if _, err := cron.ParseStandard(schedule.Cron); err != nil {
+		return fmt.Errorf("%s cron: %w", sourceID, err)
+	}
+	return nil
+}
+
 func HTTPURL(v string) error {
-	u, err := url.Parse(v)
-	if err != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http") || u.User != nil || strings.ContainsAny(v, "\x00\r\n") {
+	address, err := url.Parse(v)
+	if err != nil || strings.ContainsAny(v, "\x00\r\n") {
+		return errors.New("需要合法的 HTTP/HTTPS 地址")
+	}
+	httpScheme := address.Scheme == "https" || address.Scheme == "http"
+	if !httpScheme || address.Host == "" || address.User != nil {
 		return errors.New("需要合法的 HTTP/HTTPS 地址")
 	}
 	return nil
@@ -507,8 +672,8 @@ func SourceURL(v string) error {
 }
 
 func publicURL(v string) error {
-	u, err := url.Parse(v)
-	if err != nil || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
+	address, err := url.Parse(v)
+	if err != nil || address.User != nil || address.RawQuery != "" || address.ForceQuery || address.Fragment != "" {
 		return errors.New("来源及 GPG 公钥地址不能包含用户信息、查询参数或片段；不支持 URL 鉴权")
 	}
 	return nil
@@ -519,37 +684,54 @@ func ParseProxyURL(v string) (*url.URL, error) {
 	if v == "" {
 		return nil, nil
 	}
-	u, err := url.Parse(v)
-	if err != nil || len(v) > 4096 || strings.TrimSpace(v) != v || strings.ContainsAny(v, "\x00\r\n\t") || u.Hostname() == "" || u.Opaque != "" || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || (u.Path != "" && u.Path != "/") {
-		return nil, errors.New("github.proxy 必须为合法的代理地址，不能包含路径、查询或片段")
+	invalid := errors.New("github.proxy 必须为合法的代理地址，不能包含路径、查询或片段")
+	if len(v) > 4096 || strings.TrimSpace(v) != v || strings.ContainsAny(v, "\x00\r\n\t") {
+		return nil, invalid
 	}
-	if !slices.Contains([]string{"http", "https", "socks5", "socks5h"}, u.Scheme) {
+	proxy, err := url.Parse(v)
+	if err != nil || proxy.Hostname() == "" || proxy.Opaque != "" {
+		return nil, invalid
+	}
+	if proxy.RawQuery != "" || proxy.ForceQuery || proxy.Fragment != "" || (proxy.Path != "" && proxy.Path != "/") {
+		return nil, invalid
+	}
+	if !slices.Contains([]string{"http", "https", "socks5", "socks5h"}, proxy.Scheme) {
 		return nil, errors.New("github.proxy 只支持 http、https、socks5、socks5h")
 	}
-	if p := u.Port(); p != "" {
-		n, err := strconv.Atoi(p)
-		if err != nil || n < 1 || n > 65535 {
+	if port := proxy.Port(); port != "" {
+		number, err := strconv.Atoi(port)
+		if err != nil || number < 1 || number > 65535 {
 			return nil, errors.New("github.proxy 端口必须在 1–65535 之间")
 		}
 	}
-	if u.User != nil {
-		password, _ := u.User.Password()
-		if strings.ContainsAny(u.User.Username()+password, "\x00\r\n") || ((u.Scheme == "socks5" || u.Scheme == "socks5h") && (len(u.User.Username()) > 255 || len(password) > 255)) {
+	if proxy.User != nil {
+		username := proxy.User.Username()
+		password, _ := proxy.User.Password()
+		socks := proxy.Scheme == "socks5" || proxy.Scheme == "socks5h"
+		// SOCKS5 username/password authentication encodes each field in one byte.
+		socksTooLong := socks && (len(username) > 255 || len(password) > 255)
+		if strings.ContainsAny(username+password, "\x00\r\n") || socksTooLong {
 			return nil, errors.New("github.proxy 的认证信息无效")
 		}
 	}
-	return u, nil
+	return proxy, nil
 }
-func digest(b []byte) string { sum := sha256.Sum256(b); return hex.EncodeToString(sum[:]) }
-func Parse(b []byte, file string) (Config, error) {
+
+// digest is the revision of a YAML file: the SHA-256 of its exact bytes.
+func digest(contents []byte) string {
+	sum := sha256.Sum256(contents)
+	return hex.EncodeToString(sum[:])
+}
+
+func Parse(contents []byte, file string) (Config, error) {
 	c := Defaults()
-	d := yaml.NewDecoder(bytes.NewReader(b))
-	d.KnownFields(true)
-	if err := d.Decode(&c); err != nil {
+	decoder := yaml.NewDecoder(bytes.NewReader(contents))
+	decoder.KnownFields(true)
+	if err := decoder.Decode(&c); err != nil {
 		return c, err
 	}
 	var extra any
-	if err := d.Decode(&extra); !errors.Is(err, io.EOF) {
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
 		return c, errors.New("仅支持一个有效 YAML 文档")
 	}
 	if c.Sources == nil {
@@ -562,6 +744,7 @@ func Parse(b []byte, file string) (Config, error) {
 	}
 	return c, c.Validate(file)
 }
+
 func Open(file string) (*Manager, error) {
 	abs, err := filepath.Abs(file)
 	if err != nil {
@@ -571,30 +754,58 @@ func Open(file string) (*Manager, error) {
 	if err != nil {
 		return nil, err
 	}
-	b, err := os.ReadFile(abs)
+	contents, err := os.ReadFile(abs)
 	if err != nil {
 		return nil, err
 	}
-	c, err := Parse(b, abs)
+	c, err := Parse(contents, abs)
 	if err != nil {
 		return nil, err
 	}
-	return &Manager{file: abs, cfg: c, startup: Clone(c), revision: digest(b)}, nil
+	return &Manager{file: abs, cfg: c, startup: Clone(c), revision: digest(contents)}, nil
 }
-func (m *Manager) File() string    { return m.file }
-func (m *Manager) Current() Config { m.mu.RLock(); defer m.mu.RUnlock(); return Clone(m.cfg) }
+
+func (m *Manager) File() string { return m.file }
+
+func (m *Manager) Current() Config {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return Clone(m.cfg)
+}
+
 func (m *Manager) Startup() Config { return Clone(m.startup) }
+
+// restartRequired reports whether a deployment field differs from startup.
+// These fields only take effect after the process restarts.
+func restartRequired(current, startup Config) bool {
+	return current.Listen != startup.Listen ||
+		current.Port != startup.Port ||
+		current.Path != startup.Path ||
+		current.MirrorRoot != startup.MirrorRoot ||
+		current.TLS != startup.TLS ||
+		current.Auth != startup.Auth ||
+		current.Log != startup.Log
+}
+
+// View is the configuration as returned by the read API. The administrator
+// password and GitHub token are removed; the proxy URL is intentionally kept.
 func (m *Manager) View() View {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	c := Clone(m.cfg)
-	configured := c.Settings.GitHub.Token != ""
-	proxyConfigured := c.Settings.GitHub.Proxy != ""
+	view := View{
+		Revision:        m.revision,
+		TokenConfigured: c.Settings.GitHub.Token != "",
+		ProxyConfigured: c.Settings.GitHub.Proxy != "",
+		RestartRequired: restartRequired(c, m.startup),
+		File:            m.file,
+	}
 	c.Settings.GitHub.Token = ""
-	restart := c.Listen != m.startup.Listen || c.Port != m.startup.Port || c.Path != m.startup.Path || c.MirrorRoot != m.startup.MirrorRoot || c.TLS != m.startup.TLS || c.Auth != m.startup.Auth || c.Log != m.startup.Log
 	c.Auth.Password = ""
-	return View{Config: c, Revision: m.revision, TokenConfigured: configured, ProxyConfigured: proxyConfigured, RestartRequired: restart, File: m.file}
+	view.Config = c
+	return view
 }
+
 func (m *Manager) Reload() error {
 	return m.ReloadChecked(func(Config) error { return nil })
 }
@@ -602,11 +813,11 @@ func (m *Manager) Reload() error {
 func (m *Manager) ReloadChecked(check func(Config) error) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	b, err := os.ReadFile(m.file)
+	contents, err := os.ReadFile(m.file)
 	if err != nil {
 		return err
 	}
-	c, err := Parse(b, m.file)
+	c, err := Parse(contents, m.file)
 	if err != nil {
 		return err
 	}
@@ -614,16 +825,24 @@ func (m *Manager) ReloadChecked(check func(Config) error) error {
 		return err
 	}
 	m.cfg = c
-	m.revision = digest(b)
+	m.revision = digest(contents)
 	return nil
 }
+
 func (m *Manager) Save(c Config, revision string, tokenUpdate, proxyUpdate *string) error {
 	return m.save(c, revision, tokenUpdate, proxyUpdate, nil)
 }
+
 func (m *Manager) SaveNotifications(channels map[string]Notification, revision string) error {
 	return m.save(Config{}, revision, nil, nil, channels)
 }
-func (m *Manager) save(c Config, revision string, tokenUpdate, proxyUpdate *string, channels map[string]Notification) error {
+
+func (m *Manager) save(
+	c Config,
+	revision string,
+	tokenUpdate, proxyUpdate *string,
+	channels map[string]Notification,
+) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if channels != nil {
@@ -688,15 +907,18 @@ func (m *Manager) save(c Config, revision string, tokenUpdate, proxyUpdate *stri
 	if err := enc.Close(); err != nil {
 		return err
 	}
-	b := out.Bytes()
-	if err := AtomicWrite(m.file, b, 0600); err != nil {
+	written := out.Bytes()
+	if err := AtomicWrite(m.file, written, 0600); err != nil {
 		return err
 	}
 	m.cfg = Clone(c)
-	m.revision = digest(b)
+	m.revision = digest(written)
 	return nil
 }
-func AtomicWrite(file string, b []byte, mode os.FileMode) error {
+
+// AtomicWrite replaces file with contents through a synced temporary file in
+// the same directory, then syncs the directory entry.
+func AtomicWrite(file string, contents []byte, mode os.FileMode) error {
 	f, err := os.CreateTemp(filepath.Dir(file), ".mirrordock-config-*")
 	if err != nil {
 		return err
@@ -704,7 +926,7 @@ func AtomicWrite(file string, b []byte, mode os.FileMode) error {
 	name := f.Name()
 	defer os.Remove(name)
 	if err = f.Chmod(mode); err == nil {
-		_, err = f.Write(b)
+		_, err = f.Write(contents)
 	}
 	if err == nil {
 		err = f.Sync()
@@ -723,6 +945,7 @@ func AtomicWrite(file string, b []byte, mode os.FileMode) error {
 	defer dir.Close()
 	return dir.Sync()
 }
+
 func preserveComments(old, fresh *yaml.Node) {
 	fresh.HeadComment = old.HeadComment
 	fresh.LineComment = old.LineComment
@@ -743,22 +966,24 @@ func preserveComments(old, fresh *yaml.Node) {
 		}
 	}
 	if old.Kind == yaml.SequenceNode && fresh.Kind == yaml.SequenceNode {
-		for i, n := range fresh.Content {
-			key := nodeID(n)
-			for j, o := range old.Content {
-				if (key != "" && key == nodeID(o)) || (key == "" && i == j) {
-					preserveComments(o, n)
+		// Sources are matched by id so comments follow a moved entry.
+		for i, freshItem := range fresh.Content {
+			key := nodeID(freshItem)
+			for j, oldItem := range old.Content {
+				if (key != "" && key == nodeID(oldItem)) || (key == "" && i == j) {
+					preserveComments(oldItem, freshItem)
 					break
 				}
 			}
 		}
 	}
 }
-func nodeID(n *yaml.Node) string {
-	if n.Kind == yaml.MappingNode {
-		for i := 0; i < len(n.Content); i += 2 {
-			if n.Content[i].Value == "id" {
-				return n.Content[i+1].Value
+
+func nodeID(node *yaml.Node) string {
+	if node.Kind == yaml.MappingNode {
+		for i := 0; i < len(node.Content); i += 2 {
+			if node.Content[i].Value == "id" {
+				return node.Content[i+1].Value
 			}
 		}
 	}

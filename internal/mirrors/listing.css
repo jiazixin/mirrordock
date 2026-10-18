@@ -27,7 +27,9 @@
   --red-bg:#fcecec;
   --red-bd:#f3cfcd;
   --gray-bg:#f3f5f4;
-  font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Segoe UI","Microsoft YaHei","Noto Sans CJK SC",sans-serif;
+  font-family:
+    -apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB",
+    "Segoe UI","Microsoft YaHei","Noto Sans CJK SC",sans-serif;
   font-variant-numeric:tabular-nums;
   color:var(--t1);
   background:var(--bg);

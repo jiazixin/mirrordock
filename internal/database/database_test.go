@@ -6,6 +6,8 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -411,5 +413,36 @@ func BenchmarkNotificationResultCursor(b *testing.B) {
 				}
 			}
 		})
+	}
+}
+
+func TestOpenRecordsSchemaVersionAndRejectsNewerDatabase(t *testing.T) {
+	dir := t.TempDir()
+	store, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var version int
+	if err := store.DB.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != schemaVersion {
+		t.Fatal(version, err)
+	}
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		info, err := os.Stat(filepath.Join(dir, "data.sqlite"+suffix))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != 0600 {
+			t.Fatalf("data.sqlite%s mode %v", suffix, info.Mode().Perm())
+		}
+	}
+	if _, err := store.DB.Exec(fmt.Sprintf("PRAGMA user_version=%d", schemaVersion+1)); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if reopened, err := Open(dir); err == nil {
+		reopened.Close()
+		t.Fatal("a database with a newer schema version must not open")
 	}
 }

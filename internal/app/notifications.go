@@ -21,7 +21,8 @@ func (a *App) notificationRoutes(api *http.ServeMux) {
 			respond(w, 400, map[string]string{"error": "通知请求格式无效"})
 			return
 		}
-		if err := a.Runs.NotificationChange(func() error { return a.Notifications.Save(r.PathValue("channel"), body) }); err != nil {
+		save := func() error { return a.Notifications.Save(r.PathValue("channel"), body) }
+		if err := a.Runs.NotificationChange(save); err != nil {
 			failure(w, err)
 			return
 		}

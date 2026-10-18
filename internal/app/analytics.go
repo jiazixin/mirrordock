@@ -21,7 +21,9 @@ func (a *App) analytics(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if (kind != "rsync" && kind != "reposync" && kind != "github_release") || (days != 7 && days != 30 && days != 90) || len(q.Get("source")) > 128 {
+	validKind := kind == "rsync" || kind == "reposync" || kind == "github_release"
+	validDays := days == 7 || days == 30 || days == 90
+	if !validKind || !validDays || len(q.Get("source")) > 128 {
 		respond(w, 400, map[string]string{"error": "分析类型或范围无效"})
 		return
 	}

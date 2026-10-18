@@ -44,8 +44,8 @@ const maximum = computed(() => {
   const step = steps.find((candidate) => candidate * 4 >= max) ?? Math.ceil(max / 4)
   return step * 4
 })
-const x = (i: number) => left + ((i + 0.5) * plotWidth.value) / props.days.length
-const y = (n: number) => top + plotHeight * (1 - n / maximum.value)
+const columnX = (index: number) => left + ((index + 0.5) * plotWidth.value) / props.days.length
+const valueY = (amount: number) => top + plotHeight * (1 - amount / maximum.value)
 const format = (n: number) =>
   props.metric === 'bytes'
     ? bytes(n)
@@ -64,7 +64,9 @@ const tickLabel = (n: number) =>
           : duration(n)
       : format(n)
 const path = computed(() =>
-  props.days.map((d, i) => `${i ? 'L' : 'M'}${x(i)},${y(value(d))}`).join(' '),
+  props.days
+    .map((day, index) => `${index ? 'L' : 'M'}${columnX(index)},${valueY(value(day))}`)
+    .join(' '),
 )
 const labelIndices = computed(() => [
   ...new Set([
@@ -75,8 +77,13 @@ const labelIndices = computed(() => [
   ]),
 ])
 const active = computed(() => (hovered.value === null ? null : props.days[hovered.value]))
-const describe = (d: AnalyticsDay) =>
-  `${d.date}：${props.metric === 'runs' ? `成功 ${d.succeeded}，失败 ${d.failed}，取消 ${d.cancelled}，未结束 ${d.active}` : props.metric === 'duration' && !d.duration_samples ? '无耗时样本' : format(value(d))}`
+function describe(day: AnalyticsDay) {
+  if (props.metric === 'runs') {
+    return `${day.date}：成功 ${day.succeeded}，失败 ${day.failed}，取消 ${day.cancelled}，未结束 ${day.active}`
+  }
+  if (props.metric === 'duration' && !day.duration_samples) return `${day.date}：无耗时样本`
+  return `${day.date}：${format(value(day))}`
+}
 const metricLabel = computed(() =>
   props.metric === 'runs'
     ? '运行次数'
@@ -109,13 +116,13 @@ const metricLabel = computed(() =>
         <line
           :x1="left"
           :x2="width - right"
-          :y1="y(tick)"
-          :y2="y(tick)"
+          :y1="valueY(tick)"
+          :y2="valueY(tick)"
           class="chart-grid"
         />
         <text
           :x="left - 10"
-          :y="y(tick) + 4"
+          :y="valueY(tick) + 4"
           text-anchor="end"
           class="chart-text"
         >
@@ -128,29 +135,29 @@ const metricLabel = computed(() =>
           :key="day.date"
         >
           <rect
-            :x="x(i) - (plotWidth / days.length) * 0.28"
-            :y="y(day.succeeded)"
+            :x="columnX(i) - (plotWidth / days.length) * 0.28"
+            :y="valueY(day.succeeded)"
             :width="(plotWidth / days.length) * 0.56"
             :height="(plotHeight * day.succeeded) / maximum"
             class="bar-ok"
           />
           <rect
-            :x="x(i) - (plotWidth / days.length) * 0.28"
-            :y="y(day.succeeded + day.failed)"
+            :x="columnX(i) - (plotWidth / days.length) * 0.28"
+            :y="valueY(day.succeeded + day.failed)"
             :width="(plotWidth / days.length) * 0.56"
             :height="(plotHeight * day.failed) / maximum"
             class="bar-fail"
           />
           <rect
-            :x="x(i) - (plotWidth / days.length) * 0.28"
-            :y="y(day.succeeded + day.failed + day.cancelled)"
+            :x="columnX(i) - (plotWidth / days.length) * 0.28"
+            :y="valueY(day.succeeded + day.failed + day.cancelled)"
             :width="(plotWidth / days.length) * 0.56"
             :height="(plotHeight * day.cancelled) / maximum"
             class="bar-cancel"
           />
           <rect
-            :x="x(i) - (plotWidth / days.length) * 0.28"
-            :y="y(day.runs)"
+            :x="columnX(i) - (plotWidth / days.length) * 0.28"
+            :y="valueY(day.runs)"
             :width="(plotWidth / days.length) * 0.56"
             :height="(plotHeight * day.active) / maximum"
             class="bar-active"
@@ -159,7 +166,7 @@ const metricLabel = computed(() =>
       </template>
       <template v-else>
         <path
-          :d="`${path} L${x(days.length - 1)},${y(0)} L${x(0)},${y(0)} Z`"
+          :d="`${path} L${columnX(days.length - 1)},${valueY(0)} L${columnX(0)},${valueY(0)} Z`"
           class="area"
         />
         <path
@@ -188,16 +195,16 @@ const metricLabel = computed(() =>
         />
         <line
           v-if="hovered === i"
-          :x1="x(i)"
-          :x2="x(i)"
+          :x1="columnX(i)"
+          :x2="columnX(i)"
           :y1="top"
-          :y2="y(0)"
+          :y2="valueY(0)"
           class="cursor"
         />
         <circle
           v-if="hovered === i && metric !== 'runs'"
-          :cx="x(i)"
-          :cy="y(value(day))"
+          :cx="columnX(i)"
+          :cy="valueY(value(day))"
           r="3.5"
           class="dot"
         />
@@ -205,7 +212,7 @@ const metricLabel = computed(() =>
       <text
         v-for="i in labelIndices"
         :key="`label-${i}`"
-        :x="x(i)"
+        :x="columnX(i)"
         :y="height - 10"
         text-anchor="middle"
         class="chart-text"

@@ -25,16 +25,16 @@ export function time(value?: string) {
 }
 export function duration(seconds?: number | null) {
   if (seconds == null || seconds < 0) return '—'
-  const n = Math.floor(seconds)
-  if (n < 60) return `${n}s`
-  if (n < 3600) return `${Math.floor(n / 60)}m${n % 60}s`
-  return `${Math.floor(n / 3600)}h${Math.floor((n % 3600) / 60)}m`
+  const whole = Math.floor(seconds)
+  if (whole < 60) return `${whole}s`
+  if (whole < 3600) return `${Math.floor(whole / 60)}m${whole % 60}s`
+  return `${Math.floor(whole / 3600)}h${Math.floor((whole % 3600) / 60)}m`
 }
-export function bytes(n: number) {
-  if (!(n >= 1)) return '0 B'
+export function bytes(size: number) {
+  if (!(size >= 1)) return '0 B'
   const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB']
-  const index = Math.min(4, Math.floor(Math.log(n) / Math.log(1024)))
-  return `${(n / 1024 ** index).toFixed(index ? 1 : 0)} ${units[index]}`
+  const index = Math.min(4, Math.floor(Math.log(size) / Math.log(1024)))
+  return `${(size / 1024 ** index).toFixed(index ? 1 : 0)} ${units[index]}`
 }
 const sourceTypeLabels: Record<SourceType, string> = {
   rsync: 'Rsync',

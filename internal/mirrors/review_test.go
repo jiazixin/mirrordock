@@ -100,6 +100,7 @@ func TestGitHubReuseKeepsGenerationAndRefreshesSummary(t *testing.T) {
 		previous = p.Current.ID
 	}
 }
+
 func TestRsyncHardlinkReuseKeepsGeneration(t *testing.T) {
 	binary := os.Getenv("MIRRORDOCK_TEST_RSYNC")
 	if binary == "" {
@@ -203,6 +204,7 @@ func TestFileDescriptorsBoundBeforeOpen(t *testing.T) {
 		}
 	}
 }
+
 func TestSummaryPersistenceFailureRetainsOldFactsAndWork(t *testing.T) {
 	m, s := testManager(t)
 	s.Type = "github_release"

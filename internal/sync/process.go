@@ -29,46 +29,56 @@ func CleanLog(line string) string {
 		return r
 	}, line)
 }
+
+// ParseProgress reads one rsync --info=progress2 line, for example
+// "1,234,567  42%  1.50MB/s  0:01:02 (xfr#3, to-chk=10/20)".
 func ParseProgress(line string) (Progress, bool) {
-	m := progressLine.FindStringSubmatch(line)
-	if m == nil {
+	match := progressLine.FindStringSubmatch(line)
+	if match == nil {
 		return Progress{}, false
 	}
-	n, err := strconv.ParseInt(strings.ReplaceAll(m[1], ",", ""), 10, 64)
+	bytesText, percentText, speedText, unitText, timeText := match[1], match[2], match[3], match[4], match[5]
+	transferred, err := strconv.ParseInt(strings.ReplaceAll(bytesText, ",", ""), 10, 64)
 	if err != nil {
 		return Progress{}, false
 	}
-	percent, err := strconv.ParseFloat(m[2], 64)
+	percent, err := strconv.ParseFloat(percentText, 64)
 	if err != nil || percent > 100 {
 		return Progress{}, false
 	}
-	speed, err := strconv.ParseFloat(m[3], 64)
+	speed, err := strconv.ParseFloat(speedText, 64)
 	if err != nil {
 		return Progress{}, false
 	}
-	unit := strings.Index("KMGT", strings.ToUpper(m[4]))
-	if m[4] != "" && unit >= 0 {
+	unit := strings.Index("KMGT", strings.ToUpper(unitText))
+	if unitText != "" && unit >= 0 {
 		for range unit + 1 {
 			speed *= 1024
 		}
 	}
-	parts := strings.Split(m[5], ":")
 	remaining := float64(0)
-	for _, p := range parts {
-		v, _ := strconv.ParseFloat(p, 64)
-		remaining = remaining*60 + v
+	for part := range strings.SplitSeq(timeText, ":") {
+		value, _ := strconv.ParseFloat(part, 64)
+		remaining = remaining*60 + value
 	}
 	total := int64(0)
 	if percent > 0 {
-		value := float64(n) * 100 / percent
-		if value < float64(math.MaxInt64) {
-			total = int64(value)
+		estimate := float64(transferred) * 100 / percent
+		if estimate < float64(math.MaxInt64) {
+			total = int64(estimate)
 		}
 	}
 	if math.IsInf(speed, 0) || math.IsInf(remaining, 0) {
 		return Progress{}, false
 	}
-	p := Progress{Phase: "transfer", Bytes: n, Total: total, Percent: new(percent), Speed: speed, ETA: new(remaining)}
+	p := Progress{
+		Phase:   "transfer",
+		Bytes:   transferred,
+		Total:   total,
+		Percent: new(percent),
+		Speed:   speed,
+		ETA:     new(remaining),
+	}
 	// File-completion lines report elapsed time, not ETA. With ir-chk the
 	// file list is still growing, so percent and total cover only part of it.
 	if strings.Contains(line, "-chk=") {
@@ -80,6 +90,7 @@ func ParseProgress(line string) (Progress, bool) {
 	}
 	return p, true
 }
+
 func splitCR(data []byte, atEOF bool) (int, []byte, error) {
 	if i := bytes.IndexAny(data, "\r\n"); i >= 0 {
 		return i + 1, data[:i], nil
@@ -106,23 +117,24 @@ type processOutput struct {
 }
 
 func (o *processOutput) scan(reader io.Reader) {
-	s := bufio.NewScanner(reader)
-	s.Split(splitCR)
-	s.Buffer(make([]byte, 4096), 1<<20)
-	for s.Scan() {
-		line := CleanLog(s.Text())
+	scanner := bufio.NewScanner(reader)
+	scanner.Split(splitCR)
+	scanner.Buffer(make([]byte, 4096), 1<<20)
+	for scanner.Scan() {
+		line := CleanLog(scanner.Text())
 		o.mu.Lock()
 		if _, err := fmt.Fprintln(o.log, line); err != nil {
 			o.err = err
 			o.cancel(err)
 		}
-		if localFailureLine(line) || (o.name == "dnf" && strings.Contains(strings.ToLower(line), "permission denied")) {
+		dnf, rsync := o.name == "dnf", o.name == "rsync"
+		if localFailureLine(line) || (dnf && strings.Contains(strings.ToLower(line), "permission denied")) {
 			o.localError = line
 		}
-		if (o.name == "rsync" && rsyncPermanentLine(line)) || (o.name == "dnf" && reposyncPermanentLine(line)) {
+		if (rsync && rsyncPermanentLine(line)) || (dnf && reposyncPermanentLine(line)) {
 			o.upstreamError = line
 		}
-		if o.name == "dnf" && reposyncNetworkLine(line) {
+		if dnf && reposyncNetworkLine(line) {
 			o.networkError = line
 		}
 		if line != "" {
@@ -144,19 +156,19 @@ func (o *processOutput) scan(reader io.Reader) {
 			p.Success = o.progress.Success
 			o.progress = p
 			o.emit(o.progress)
-		} else if n, ok := statNumber(line, "Total bytes received:"); ok && o.name == "rsync" {
-			o.progress.ReceivedBytes = new(n)
+		} else if received, ok := statNumber(line, "Total bytes received:"); ok && rsync {
+			o.progress.ReceivedBytes = new(received)
 			o.emit(o.progress)
-		} else if n, ok := statNumber(line, "Number of files:"); ok {
-			o.progress.Files = int(n)
+		} else if files, ok := statNumber(line, "Number of files:"); ok {
+			o.progress.Files = int(files)
 			o.emit(o.progress)
-		} else if n, ok := statNumber(line, "Number of regular files transferred:"); ok {
-			o.progress.Success = int(n)
+		} else if transferred, ok := statNumber(line, "Number of regular files transferred:"); ok {
+			o.progress.Success = int(transferred)
 			o.emit(o.progress)
 		}
 		o.mu.Unlock()
 	}
-	if err := s.Err(); err != nil {
+	if err := scanner.Err(); err != nil {
 		o.mu.Lock()
 		o.err = err
 		o.cancel(err)
@@ -173,9 +185,13 @@ func statNumber(line, prefix string) (int64, bool) {
 	if len(fields) == 0 {
 		return 0, false
 	}
-	n, err := strconv.ParseInt(strings.ReplaceAll(fields[0], ",", ""), 10, 64)
-	return n, err == nil && n >= 0
+	number, err := strconv.ParseInt(strings.ReplaceAll(fields[0], ",", ""), 10, 64)
+	return number, err == nil && number >= 0
 }
+
+// command runs an executor in its own process group with output parsed for
+// progress and failure classification. Cancellation sends TERM to the group,
+// then KILL after a grace period.
 func command(ctx context.Context, name string, args []string, emit func(Progress), log io.Writer) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -187,11 +203,11 @@ func command(ctx context.Context, name string, args []string, emit func(Progress
 	// Progress and diagnostics are parsed in a stable locale.
 	cmd.Env = append(os.Environ(), "LC_ALL=C", "LANG=C")
 	configureProcess(cmd)
-	out, err := cmd.StdoutPipe()
+	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return err
 	}
-	errout, err := cmd.StderrPipe()
+	stderr, err := cmd.StderrPipe()
 	if err != nil {
 		return err
 	}
@@ -199,51 +215,54 @@ func command(ctx context.Context, name string, args []string, emit func(Progress
 		return &Failure{Code: "DEPENDENCY_MISSING", Message: err.Error()}
 	}
 	lowerPriority(cmd.Process.Pid)
-	o := &processOutput{log: log, emit: emit, cancel: cancel, name: name}
-	var wg sync.WaitGroup
-	wg.Go(func() { o.scan(out) })
-	wg.Go(func() { o.scan(errout) })
-	done := make(chan struct{})
-	stop := context.AfterFunc(ctx, func() {
+	output := &processOutput{log: log, emit: emit, cancel: cancel, name: name}
+	var readers sync.WaitGroup
+	readers.Go(func() { output.scan(stdout) })
+	readers.Go(func() { output.scan(stderr) })
+	exited := make(chan struct{})
+	stopOnCancel := context.AfterFunc(ctx, func() {
 		stopProcess(cmd.Process.Pid, false)
 		select {
-		case <-done:
+		case <-exited:
 			return
-		case <-time.After(10 * time.Second):
+		case <-time.After(terminationGrace):
 			stopProcess(cmd.Process.Pid, true)
 		}
 	})
-	wg.Wait()
+	readers.Wait()
 	err = cmd.Wait()
-	close(done)
-	stop()
+	close(exited)
+	stopOnCancel()
 	// Descendants that outlive the direct child, such as an rsync receiver,
 	// share its process group; never leave them writing into the work tree.
 	stopProcess(cmd.Process.Pid, true)
 	if parent.Err() != nil {
 		return parent.Err()
 	}
-	if o.err != nil {
-		return &Failure{Code: "OUTPUT_FAILED", Message: o.err.Error()}
+	if output.err != nil {
+		return &Failure{Code: "OUTPUT_FAILED", Message: output.err.Error()}
 	}
-	if err != nil {
-		code := -1
-		if exit, ok := errors.AsType[*exec.ExitError](err); ok {
-			code = exit.ExitCode()
-		}
-		if o.localError != "" {
-			return &Failure{Code: "LOCAL_TRANSFER", Message: o.localError, ExitCode: code}
-		}
-		if o.upstreamError != "" {
-			return &Failure{Code: "UPSTREAM_ERROR", Message: o.upstreamError, SourceFailure: true, ExitCode: code}
-		}
-		if name == "dnf" {
-			return &Failure{Code: "REPOSYNC_FAILED", Message: o.last, Retryable: o.networkError != "", ExitCode: code}
-		}
-		return Classify(code, o.last)
+	if err == nil {
+		return nil
 	}
-	return nil
+	code := -1
+	if exit, ok := errors.AsType[*exec.ExitError](err); ok {
+		code = exit.ExitCode()
+	}
+	switch {
+	case output.localError != "":
+		return &Failure{Code: "LOCAL_TRANSFER", Message: output.localError, ExitCode: code}
+	case output.upstreamError != "":
+		return &Failure{Code: "UPSTREAM_ERROR", Message: output.upstreamError, SourceFailure: true, ExitCode: code}
+	case name == "dnf":
+		return &Failure{Code: "REPOSYNC_FAILED", Message: output.last, Retryable: output.networkError != "", ExitCode: code}
+	default:
+		return Classify(code, output.last)
+	}
 }
+
+// terminationGrace is how long a process group may handle TERM before KILL.
+const terminationGrace = 10 * time.Second
 
 // DNF exits with a generic status; retain transient curl diagnostics even when
 // the final summary only says that all mirrors were tried.
@@ -262,9 +281,29 @@ func reposyncNetworkLine(line string) bool {
 	return false
 }
 
+// reposyncPermanentDiagnostics are DNF messages that a retry cannot fix:
+// local storage errors, signature failures, malformed URLs, TLS trust
+// errors and authorization or not-found responses.
+var reposyncPermanentDiagnostics = []string{
+	"no space left",
+	"read-only file system",
+	"permission denied",
+	"gpg check failed",
+	"gpg signature",
+	"signature verification failed",
+	"public key for",
+	"curl error (3)",
+	"curl error (60)",
+	"curl error (77)",
+	"status code: 401",
+	"status code: 403",
+	"status code: 404",
+	"status code: 407",
+}
+
 func reposyncPermanentLine(line string) bool {
 	lower := strings.ToLower(line)
-	for _, text := range []string{"no space left", "read-only file system", "permission denied", "gpg check failed", "gpg signature", "signature verification failed", "public key for", "curl error (3)", "curl error (60)", "curl error (77)", "status code: 401", "status code: 403", "status code: 404", "status code: 407"} {
+	for _, text := range reposyncPermanentDiagnostics {
 		if strings.Contains(lower, text) {
 			return true
 		}

@@ -15,9 +15,10 @@
     const matching = rows.filter(row => row.dataset.name.toLocaleLowerCase().includes(query));
     matching.sort((a, b) => {
       if (a.dataset.dir !== b.dataset.dir) return a.dataset.dir === 'true' ? -1 : 1;
+      const time = (row) => Date.parse(row.dataset[sort]) || 0;
       let order;
       if (sort === 'bytes') order = Number(a.dataset.bytes) - Number(b.dataset.bytes);
-      else if (['modified', 'last', 'next'].includes(sort)) order = (Date.parse(a.dataset[sort]) || 0) - (Date.parse(b.dataset[sort]) || 0);
+      else if (['modified', 'last', 'next'].includes(sort)) order = time(a) - time(b);
       else order = collator.compare(a.dataset[sort], b.dataset[sort]);
       return (descending ? -order : order) || collator.compare(a.dataset.name, b.dataset.name);
     });

@@ -20,15 +20,15 @@ const usageText = `mirrordock — 源仓
 `
 
 func parseArgs(args []string) (*cliOptions, error) {
-	o := &cliOptions{ConfigPath: "config.yaml"}
+	options := &cliOptions{ConfigPath: "config.yaml"}
 	fs := flag.NewFlagSet("mirrordock", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	var short, long string
 	fs.StringVar(&short, "f", "", "配置文件路径")
 	fs.StringVar(&long, "config", "", "配置文件路径")
-	fs.BoolVar(&o.Help, "h", false, "显示帮助")
-	fs.BoolVar(&o.Help, "help", false, "显示帮助")
-	fs.BoolVar(&o.Version, "version", false, "显示版本")
+	fs.BoolVar(&options.Help, "h", false, "显示帮助")
+	fs.BoolVar(&options.Help, "help", false, "显示帮助")
+	fs.BoolVar(&options.Version, "version", false, "显示版本")
 	if err := fs.Parse(args); err != nil {
 		return nil, err
 	}
@@ -42,16 +42,16 @@ func parseArgs(args []string) (*cliOptions, error) {
 		return nil, fmt.Errorf("配置文件路径不能留空")
 	}
 	if short != "" {
-		o.ConfigPath = short
+		options.ConfigPath = short
 	}
 	if long != "" {
 		if short != "" && short != long {
 			return nil, fmt.Errorf("-f 和 --config 不一致")
 		}
-		o.ConfigPath = long
+		options.ConfigPath = long
 	}
 	if fs.NArg() > 0 {
 		return nil, fmt.Errorf("不接受额外位置参数")
 	}
-	return o, nil
+	return options, nil
 }

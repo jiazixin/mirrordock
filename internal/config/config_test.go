@@ -120,6 +120,7 @@ func TestLogConfiguration(t *testing.T) {
 		}
 	}
 }
+
 func TestWritebackConflictAndSecrets(t *testing.T) {
 	dir := t.TempDir()
 	file := filepath.Join(dir, "config.yaml")
@@ -259,6 +260,7 @@ func TestGitHubProxyValidation(t *testing.T) {
 		}
 	}
 }
+
 func TestUnsafeConfig(t *testing.T) {
 	file := filepath.Join(t.TempDir(), "config.yaml")
 	for _, dest := range []string{"../escape", "admin/evil", "api", "favicon.ico", ".internal", "a/../b"} {

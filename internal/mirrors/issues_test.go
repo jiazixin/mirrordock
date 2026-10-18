@@ -158,8 +158,8 @@ func TestStartupAdoptsDeletedSourcePublication(t *testing.T) {
 
 func TestStartupCleansOnlyReservedTemporaryDirectories(t *testing.T) {
 	m, source := testManager(t)
-	removed := []string{"work/dnf-private-fixture", "work/.reflink-probe-fixture", "published/.reflink-probe-fixture"}
-	retained := []string{"work/unknown", "work/12345", "published/unknown"}
+	removed := []string{"work/.discard-7-1", "work/.reflink-probe-fixture", "published/.reflink-probe-fixture"}
+	retained := []string{"work/unknown", "work/dnf-private-fixture", "work/12345", "published/unknown"}
 	for _, name := range append(append([]string{}, removed...), retained...) {
 		dir := filepath.Join(m.Root, ".mirrordock", filepath.FromSlash(name))
 		if err := os.MkdirAll(dir, 0700); err != nil {

@@ -8,6 +8,13 @@ import type { SystemChecks } from '../../app/types'
 const checks = ref<SystemChecks>()
 const checking = ref(false)
 const controller = new AbortController()
+function storageDetail(storage: SystemChecks['storage'] | undefined) {
+  const capacity = `可用 ${diskSize(storage?.available)} / 总量 ${diskSize(storage?.total)}`
+  const margins = `安全余量 ${diskSize(storage?.reserve)}，任务启动需余量 ${diskSize(storage?.required)}`
+  const counts = `旧代 ${storage?.previous ?? 0}，任务目录 ${storage?.work_directories ?? 0}`
+  return `${capacity}；${margins}；${counts}。共享数据块不按目录重复计量。`
+}
+
 function diskSize(bytes: number | undefined) {
   if (bytes === undefined) return '未知'
   return bytes >= 1024 ** 4
@@ -88,9 +95,7 @@ const checkRows = computed(() => {
         !!result?.storage &&
         !result.storage.error &&
         result.storage.available >= result.storage.required,
-      detail:
-        result?.storage?.error ??
-        `可用 ${diskSize(result?.storage?.available)} / 总量 ${diskSize(result?.storage?.total)}；安全余量 ${diskSize(result?.storage?.reserve)}，任务启动需余量 ${diskSize(result?.storage?.required)}；旧代 ${result?.storage?.previous ?? 0}，任务目录 ${result?.storage?.work_directories ?? 0}。共享数据块不按目录重复计量。`,
+      detail: result?.storage?.error ?? storageDetail(result?.storage),
     },
     {
       label: '发布目录接入',

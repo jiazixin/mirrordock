@@ -30,6 +30,7 @@ type Progress struct {
 	Failed             int      `json:"failed"`
 	Skipped            int      `json:"skipped"`
 }
+
 type Task struct {
 	Source    config.Source
 	Settings  config.Settings
@@ -37,6 +38,7 @@ type Task struct {
 	Candidate string
 	Token     string
 }
+
 type Failure struct {
 	Code          string
 	Message       string
@@ -51,8 +53,10 @@ func (e *Failure) Error() string { return e.Code + ": " + e.Message }
 type Runner interface {
 	Run(context.Context, Task, func(Progress), io.Writer) error
 }
+
 type SystemRunner struct{}
 
+// Run dispatches the task to the executor of its source type.
 func (SystemRunner) Run(ctx context.Context, t Task, emit func(Progress), log io.Writer) error {
 	switch t.Source.Type {
 	case "rsync":
@@ -67,68 +71,103 @@ func (SystemRunner) Run(ctx context.Context, t Task, emit func(Progress), log io
 		return &Failure{Code: "INVALID_TYPE", Message: t.Source.Type}
 	}
 }
-func seconds(v string) string {
-	d, _ := time.ParseDuration(v)
-	return strconv.FormatInt(max(1, int64(math.Ceil(d.Seconds()))), 10)
+
+// seconds converts a duration setting to whole seconds, at least one.
+func seconds(setting string) string {
+	duration, _ := time.ParseDuration(setting)
+	return strconv.FormatInt(max(1, int64(math.Ceil(duration.Seconds()))), 10)
 }
+
+// RsyncArgs builds the rsync argument list. Every value is a separate argv
+// element after its option; the source address follows "--" so it can never
+// be parsed as an option.
 func RsyncArgs(t Task) []string {
-	opts := t.Source.Rsync
-	args := []string{"--recursive", "--partial-dir=.rsync-partial", "--exclude=.mirrordock*", "--info=progress2", "--stats", "--outbuf=L", "--timeout=" + seconds(t.Settings.Rsync.IOTimeout), "--contimeout=" + seconds(t.Settings.Rsync.ConnectTimeout)}
-	for _, o := range []struct {
-		v    *bool
-		flag string
-	}{{opts.PreserveLinks, "--links"}, {opts.PreserveTimes, "--times"}, {opts.PreservePermissions, "--perms"}, {opts.PreserveHardlinks, "--hard-links"}, {opts.Delete, "--delete"}} {
-		if config.DefaultBool(o.v) {
-			args = append(args, o.flag)
+	options := t.Source.Rsync
+	args := []string{
+		"--recursive",
+		"--partial-dir=.rsync-partial",
+		"--exclude=.mirrordock*",
+		"--info=progress2",
+		"--stats",
+		"--outbuf=L",
+		"--timeout=" + seconds(t.Settings.Rsync.IOTimeout),
+		"--contimeout=" + seconds(t.Settings.Rsync.ConnectTimeout),
+	}
+	toggles := []struct {
+		enabled *bool
+		flag    string
+	}{
+		{options.PreserveLinks, "--links"},
+		{options.PreserveTimes, "--times"},
+		{options.PreservePermissions, "--perms"},
+		{options.PreserveHardlinks, "--hard-links"},
+		{options.Delete, "--delete"},
+	}
+	for _, toggle := range toggles {
+		if config.DefaultBool(toggle.enabled) {
+			args = append(args, toggle.flag)
 		}
 	}
-	if opts.UID != nil || opts.GID != nil {
-		uid, gid := "", ""
-		if opts.UID != nil {
+	if options.UID != nil || options.GID != nil {
+		owner := ""
+		if options.UID != nil {
 			args = append(args, "--owner")
-			uid = strconv.Itoa(*opts.UID)
+			owner = strconv.Itoa(*options.UID)
 		}
-		if opts.GID != nil {
+		if options.GID != nil {
 			args = append(args, "--group")
-			gid = strconv.Itoa(*opts.GID)
+			owner += ":" + strconv.Itoa(*options.GID)
 		}
-		chown := uid
-		if opts.GID != nil {
-			chown = uid + ":" + gid
-		}
-		args = append(args, "--chown="+chown)
+		args = append(args, "--chown="+owner)
 	}
-	if t.Settings.Rsync.LimitMB > 0 {
-		args = append(args, "--bwlimit="+strconv.FormatInt(max(1, int64(math.Round(t.Settings.Rsync.LimitMB*1e6/1024))), 10))
+	if limit := t.Settings.Rsync.LimitMB; limit > 0 {
+		// limit_mb is decimal MB/s; --bwlimit takes KiB/s.
+		kibibytes := max(1, int64(math.Round(limit*1e6/1024)))
+		args = append(args, "--bwlimit="+strconv.FormatInt(kibibytes, 10))
 	}
-	for _, p := range t.Source.Exclude {
-		args = append(args, "--exclude="+p)
+	for _, pattern := range t.Source.Exclude {
+		args = append(args, "--exclude="+pattern)
 	}
 	return append(args, "--", t.Candidate, t.Directory+string(filepath.Separator))
 }
+
+// Classify maps an rsync exit code to a failure. SourceFailure lets the run
+// try the next mirror; Retryable lets a later round try again.
 func Classify(code int, message string) error {
+	failure := &Failure{Code: "UPSTREAM_ERROR", Message: message, ExitCode: code, SourceFailure: true}
 	switch code {
-	case 2, 3:
-		return &Failure{Code: "UPSTREAM_ERROR", Message: message, SourceFailure: true, ExitCode: code}
-	case 5:
+	case 2, 3: // protocol incompatibility, file selection error
+	case 5: // error starting the client-server protocol
 		permanent := rsyncPermanentLine(message) || strings.Contains(strings.ToLower(message), "permission denied")
-		return &Failure{Code: "UPSTREAM_ERROR", Message: message, Retryable: !permanent, SourceFailure: true, ExitCode: code}
-	case 10, 12, 30, 35:
-		return &Failure{Code: "UPSTREAM_ERROR", Message: message, Retryable: true, SourceFailure: true, ExitCode: code}
-	case 23, 24:
-		return &Failure{Code: "PARTIAL_TRANSFER", Message: message, Retryable: !localFailureLine(message), SourceFailure: !localFailureLine(message), ExitCode: code}
+		failure.Retryable = !permanent
+	case 10, 12, 30, 35: // socket I/O, protocol stream, timeouts
+		failure.Retryable = true
+	case 23, 24: // partial transfer, vanished source files
+		local := localFailureLine(message)
+		failure.Code = "PARTIAL_TRANSFER"
+		failure.Retryable = !local
+		failure.SourceFailure = !local
 	default:
-		return &Failure{Code: "PROCESS_FAILED", Message: message, ExitCode: code}
+		failure.Code = "PROCESS_FAILED"
+		failure.SourceFailure = false
 	}
+	return failure
 }
 
+// localFailureLine recognizes receiver-side errors of this host, which no
+// other mirror or retry can fix.
 func localFailureLine(message string) bool {
 	lower := strings.ToLower(message)
 	if strings.Contains(lower, "[sender]") || strings.Contains(lower, "@error:") {
 		return false
 	}
-	return strings.Contains(lower, "no space left") || strings.Contains(lower, "read-only file system") || (strings.Contains(lower, "permission denied") && (strings.Contains(lower, "[receiver]") || strings.Contains(lower, "[generator]")))
+	if strings.Contains(lower, "no space left") || strings.Contains(lower, "read-only file system") {
+		return true
+	}
+	receiverSide := strings.Contains(lower, "[receiver]") || strings.Contains(lower, "[generator]")
+	return receiverSide && strings.Contains(lower, "permission denied")
 }
+
 func reposync(ctx context.Context, t Task, emit func(Progress), log io.Writer) error {
 	cfg := t.Source.RepoSync
 	if !config.DefaultBool(cfg.DownloadMetadata) {
@@ -159,16 +198,46 @@ func reposync(ctx context.Context, t Task, emit func(Progress), log io.Writer) e
 	if err = os.Mkdir(repoDir, 0700); err != nil {
 		return err
 	}
-	repos := fmt.Sprintf("[%s]\nname=%s\nbaseurl=%s\nenabled=1\ngpgcheck=%t\ngpgkey=%s\nmodule_hotfixes=%t\n", cfg.RepoID, cfg.RepoID, t.Candidate, config.DefaultBool(cfg.GPGCheck), strings.Join(cfg.GPGKeys, " "), cfg.ModuleHotfixes)
-	if err = os.WriteFile(filepath.Join(repoDir, "source.repo"), []byte(repos), 0600); err != nil {
+	// Every interpolated value was validated: identifiers match the source ID
+	// pattern and URLs contain no line breaks, so no INI key can be injected.
+	repository := strings.Join([]string{
+		"[" + cfg.RepoID + "]",
+		"name=" + cfg.RepoID,
+		"baseurl=" + t.Candidate,
+		"enabled=1",
+		fmt.Sprintf("gpgcheck=%t", config.DefaultBool(cfg.GPGCheck)),
+		"gpgkey=" + strings.Join(cfg.GPGKeys, " "),
+		fmt.Sprintf("module_hotfixes=%t", cfg.ModuleHotfixes),
+	}, "\n") + "\n"
+	if err = os.WriteFile(filepath.Join(repoDir, "source.repo"), []byte(repository), 0600); err != nil {
 		return err
 	}
+	installRoot := filepath.Join(private, "root")
 	conf := filepath.Join(private, "dnf.conf")
-	contents := fmt.Sprintf("[main]\nreposdir=%s\ncachedir=%s\npersistdir=%s\nlogdir=%s\ninstallroot=%s\n", repoDir, filepath.Join(private, "cache"), filepath.Join(private, "state"), private, filepath.Join(private, "root"))
-	if err = os.WriteFile(conf, []byte(contents), 0600); err != nil {
+	mainSection := strings.Join([]string{
+		"[main]",
+		"reposdir=" + repoDir,
+		"cachedir=" + filepath.Join(private, "cache"),
+		"persistdir=" + filepath.Join(private, "state"),
+		"logdir=" + private,
+		"installroot=" + installRoot,
+	}, "\n") + "\n"
+	if err = os.WriteFile(conf, []byte(mainSection), 0600); err != nil {
 		return err
 	}
-	args := []string{"-y", "--config=" + conf, "--installroot=" + filepath.Join(private, "root"), "--setopt=reposdir=" + repoDir, "--setopt=varsdir=" + filepath.Join(private, "vars"), "--releasever=" + cfg.Releasever, "--forcearch=" + cfg.Basearch, "reposync", "--repoid=" + cfg.RepoID, "--download-path=" + t.Directory, "--norepopath"}
+	args := []string{
+		"-y",
+		"--config=" + conf,
+		"--installroot=" + installRoot,
+		"--setopt=reposdir=" + repoDir,
+		"--setopt=varsdir=" + filepath.Join(private, "vars"),
+		"--releasever=" + cfg.Releasever,
+		"--forcearch=" + cfg.Basearch,
+		"reposync",
+		"--repoid=" + cfg.RepoID,
+		"--download-path=" + t.Directory,
+		"--norepopath",
+	}
 	if config.DefaultBool(cfg.DownloadMetadata) {
 		args = append(args, "--download-metadata")
 	}
@@ -181,8 +250,8 @@ func reposync(ctx context.Context, t Task, emit func(Progress), log io.Writer) e
 	if config.DefaultBool(cfg.GPGCheck) {
 		args = append(args, "--gpgcheck")
 	}
-	for _, a := range cfg.Architectures {
-		args = append(args, "--arch="+a)
+	for _, architecture := range cfg.Architectures {
+		args = append(args, "--arch="+architecture)
 	}
 	fmt.Fprintf(log, "dnf %s\n", strings.Join(args, " "))
 	return command(ctx, "dnf", args, emit, log)
@@ -193,32 +262,39 @@ func reposync(ctx context.Context, t Task, emit func(Progress), log io.Writer) e
 func importRepoKeys(ctx context.Context, private string, keys []string, emit func(Progress), log io.Writer) error {
 	const maxKeyBytes = 1 << 20
 	transport := &http.Transport{
-		Proxy:               http.ProxyFromEnvironment,
-		DialContext:         (&net.Dialer{Timeout: 30 * time.Second}).DialContext,
-		TLSHandshakeTimeout: 30 * time.Second, ResponseHeaderTimeout: 30 * time.Second,
-		IdleConnTimeout: 30 * time.Second, MaxIdleConns: 4, MaxIdleConnsPerHost: 2,
+		Proxy:                 http.ProxyFromEnvironment,
+		DialContext:           (&net.Dialer{Timeout: 30 * time.Second}).DialContext,
+		TLSHandshakeTimeout:   30 * time.Second,
+		ResponseHeaderTimeout: 30 * time.Second,
+		IdleConnTimeout:       30 * time.Second,
+		MaxIdleConns:          4,
+		MaxIdleConnsPerHost:   2,
 	}
 	defer transport.CloseIdleConnections()
 	client := &http.Client{Transport: transport, Timeout: 30 * time.Second, CheckRedirect: downloadRedirect}
 	args := []string{"--root", filepath.Join(private, "root"), "--import"}
 	for i, address := range keys {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, address, nil)
+		request, err := http.NewRequestWithContext(ctx, http.MethodGet, address, nil)
 		if err != nil {
 			return &Failure{Code: "GPG_KEY_DOWNLOAD", Message: "GPG 公钥地址无效"}
 		}
-		res, err := client.Do(req)
+		response, err := client.Do(request)
 		if err != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
 			return httpNetworkError(err, "", "GPG_KEY_DOWNLOAD", "GPG 公钥下载")
 		}
-		if res.StatusCode != http.StatusOK {
-			res.Body.Close()
-			return &Failure{Code: "GPG_KEY_DOWNLOAD", Message: fmt.Sprintf("GPG 公钥下载 HTTP %d", res.StatusCode), Retryable: transientHTTP(res.StatusCode)}
+		if response.StatusCode != http.StatusOK {
+			response.Body.Close()
+			return &Failure{
+				Code:      "GPG_KEY_DOWNLOAD",
+				Message:   fmt.Sprintf("GPG 公钥下载 HTTP %d", response.StatusCode),
+				Retryable: transientHTTP(response.StatusCode),
+			}
 		}
-		data, err := io.ReadAll(io.LimitReader(res.Body, maxKeyBytes+1))
-		res.Body.Close()
+		data, err := io.ReadAll(io.LimitReader(response.Body, maxKeyBytes+1))
+		response.Body.Close()
 		if err != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()
@@ -239,14 +315,22 @@ func importRepoKeys(ctx context.Context, private string, keys []string, emit fun
 	}
 	return command(ctx, "rpmkeys", args, emit, log)
 }
+
 func AsFailure(err error) *Failure {
-	if e, ok := errors.AsType[*Failure](err); ok {
-		return e
+	if failure, ok := errors.AsType[*Failure](err); ok {
+		return failure
 	}
 	return &Failure{Code: "LOCAL_ERROR", Message: err.Error()}
 }
 
+// rsyncPermanentLine recognizes daemon refusals that retrying the same
+// mirror cannot fix.
 func rsyncPermanentLine(message string) bool {
 	lower := strings.ToLower(message)
-	return strings.Contains(lower, "auth failed") || strings.Contains(lower, "unknown module") || strings.Contains(lower, "access denied") || (strings.Contains(lower, "@error:") && strings.Contains(lower, "permission denied"))
+	for _, refusal := range []string{"auth failed", "unknown module", "access denied"} {
+		if strings.Contains(lower, refusal) {
+			return true
+		}
+	}
+	return strings.Contains(lower, "@error:") && strings.Contains(lower, "permission denied")
 }

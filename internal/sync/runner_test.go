@@ -42,6 +42,7 @@ func TestRsyncFlags(t *testing.T) {
 		t.Fatal("gid only")
 	}
 }
+
 func TestProgressAndStop(t *testing.T) {
 	p, ok := ParseProgress("  1,000,000  50%  2.0MB/s 0:01:20 (xfr#2)")
 	if !ok || p.Bytes != 1000000 || p.Percent == nil || *p.Percent != 50 || *p.ETA != 80 {
