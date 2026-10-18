@@ -92,7 +92,6 @@ const assetShares = computed(() => {
     reused: (100 * summary.reused) / summary.completed,
   }
 })
-const largestSource = computed(() => Math.max(1, ...(data.value?.sources.map((s) => s.runs) ?? [])))
 const largestError = computed(() => Math.max(1, ...(data.value?.errors.map((e) => e.count) ?? [])))
 async function load() {
   controller?.abort()
@@ -474,14 +473,7 @@ onBeforeUnmount(() => {
                     <strong>{{ item.name }}</strong
                     ><small>{{ item.id }}</small>
                   </td>
-                  <td>
-                    <div class="ranking-count">
-                      <strong>{{ item.runs }}</strong>
-                      <div>
-                        <span :style="{ width: `${(100 * item.runs) / largestSource}%` }" />
-                      </div>
-                    </div>
-                  </td>
+                  <td>{{ item.runs }}</td>
                   <td>{{ rate(item) }}</td>
                   <td>{{ average(item) }}</td>
                   <td v-if="reposync">{{ item.retried_runs }}</td>
@@ -811,12 +803,17 @@ i {
 .source-ranking table {
   min-width: 740px;
 }
+.source-ranking th,
+.source-ranking td {
+  text-align: center;
+}
 .source-ranking th:first-child {
   width: 25%;
 }
 .source-ranking th:first-child,
 .source-ranking td:first-child {
   padding-left: 24px;
+  text-align: left;
 }
 .source-ranking th:last-child,
 .source-ranking td:last-child {
@@ -826,31 +823,9 @@ i {
 .source-ranking td:first-child small {
   overflow-wrap: anywhere;
 }
-.ranking-count {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  max-width: 140px;
-}
-.ranking-count strong {
-  min-width: 24px;
-}
-.ranking-count > div {
-  height: 6px;
-  border-radius: 3px;
-  background: var(--gray-bg);
-  flex: 1;
-  min-width: 40px;
-  overflow: hidden;
-}
-.ranking-count span {
-  display: block;
-  border-radius: 3px;
-  background: var(--chart-ok);
-  height: 100%;
-}
-.ranking-empty {
+.source-ranking td.ranking-empty {
   padding: 32px;
+  text-align: center;
   color: var(--t3);
 }
 .analytics-note {
