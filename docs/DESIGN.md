@@ -10,7 +10,7 @@
 flowchart LR
     UI[Vue 管理台] --> API[管理 API / SSE]
     API --> CFG[YAML 配置]
-    API --> RUN[运行引擎 / cron / 2 workers]
+    API --> RUN[运行引擎 / cron / 按类型并发]
     RUN --> EXEC[系统 rsync / DNF / Go GitHub assets]
     EXEC --> WORK[私有工作目录]
     WORK --> VALID[校验 / 持久发布]
@@ -52,7 +52,7 @@ flowchart LR
 
 恢复必须等待 working 执行器退出，保存 queued 成功后才入队；worker 出队再次检查 working，避免停止窗口或重复队列导致同一 ID 并发执行。运行中操作保存失败保留与执行器一致的 pausing/running 状态和源预占，执行器退出后再持久化结果；无执行器时保存失败保留 interrupted。
 
-任务快照固定非敏感源/策略，凭证每次实际执行读取当前配置。内置两个 worker；五字段 cron、启动时区、重叠 skip。准备/扫描/传输/校验/发布、来源切换和重试等待共用累计预算，排队和暂停不计入。重试计数与等待期限持久化。TERM 后最多 10 秒 KILL 整个进程组，执行器退出后再 KILL 一次进程组以清理脱离的子进程；服务被 SIGKILL 后，下次启动持实例锁、在恢复任务前按 /proc（Darwin 用 ps）结束本用户参数引用 work 根的残留执行器，不按工作目录匹配，以免误杀管理员 shell 或服务发布代的 rsync daemon，cron 关闭等待正在执行的回调结束。
+任务快照固定非敏感源/策略，凭证每次实际执行读取当前配置。调度器按 FIFO 扫描队列，跳过所属类型已满的任务，`settings.concurrency` 为 rsync/reposync/github_release 各自的并发上限（1–16，默认 4），每个放行任务在独立 goroutine 执行，结束后唤醒调度器；配置保存或重载立即唤醒以采用新上限，已执行任务不被中止；五字段 cron、启动时区、重叠 skip。准备/扫描/传输/校验/发布、来源切换和重试等待共用累计预算，排队和暂停不计入。重试计数与等待期限持久化。TERM 后最多 10 秒 KILL 整个进程组，执行器退出后再 KILL 一次进程组以清理脱离的子进程；服务被 SIGKILL 后，下次启动持实例锁、在恢复任务前按 /proc（Darwin 用 ps）结束本用户参数引用 work 根的残留执行器，不按工作目录匹配，以免误杀管理员 shell 或服务发布代的 rsync daemon，cron 关闭等待正在执行的回调结束。
 
 interrupted 是可恢复状态，不进入最终通知结果流、失败统计或终态日志清理。日志写入跨块保留可能的凭据前缀，读取按 UTF-8 完整字符边界推进字节偏移。
 
@@ -76,7 +76,7 @@ GitHub 使用 go-github v88，按发布时间选 Release，仅 assets。tag 与�
 
 克隆按 dev/inode 保留工作树内部硬链接组，组内首个文件原生 reflink，其他路径链接到该 work 文件，绝不链接到 published。GitHub 更新私有同步时间后恢复父目录 mtime；正文不变时仅持久化更新发布摘要，不改变当前代 ID 或公开文件，摘要保存失败保留旧事实和 work。
 
-Linux statfs 使用 Frsize（缺失时回退 Bsize），Darwin 使用 Bsize。普通 statfs 故障仅记录错误、让新任务保持 queued/waiting_space；只有明确低容量才取消活动任务，且不取消已进入 publish 阶段的任务，Publish 本身不再检查余量。容量读取实际 work 文件系统的总量与可用量，不累加 reflink 目录逻辑大小。两个 worker 共用准入锁：可用量需达到 max(1 GiB, 总量 1%) 加每个活动 worker（含新任务）512 MiB。准入不足保持 queued/waiting_space，不消耗累计预算；运行中独立每 5 秒检查，低于安全余量取消执行器，持久化 DISK_SPACE 失败并保留旧发布。该机制不能保证上游增长或外部写入不触发 ENOSPC。
+Linux statfs 使用 Frsize（缺失时回退 Bsize），Darwin 使用 Bsize。普通 statfs 故障仅记录错误、让新任务保持 queued/waiting_space；只有明确低容量才取消活动任务，且不取消已进入 publish 阶段的任务，Publish 本身不再检查余量。容量读取实际 work 文件系统的总量与可用量，不累加 reflink 目录逻辑大小。所有类型的任务共用准入锁：可用量需达到 max(1 GiB, 总量 1%) 加每个活动任务（含新任务）512 MiB。准入不足保持 queued/waiting_space，不消耗累计预算；运行中独立每 5 秒检查，低于安全余量取消执行器，持久化 DISK_SPACE 失败并保留旧发布。该机制不能保证上游增长或外部写入不触发 ENOSPC。
 
 启动、终态与每 5 分钟由独立清理循环回收，单次上下文上限 30 秒。work 清理查询持久化 state，仅移除 succeeded/failed/timed_out/cancelled；可恢复状态和未知目录不删，终态保存失败保留源预占。删除按 128 项批次检查取消并协作让出；过期且无引用的旧代先改名为 `.gc-<id>`，中断后继续回收，避免删除导致 mtime 更新而再延后 24 小时。
 
@@ -120,7 +120,7 @@ Vue 以 app、features、components、layouts 分层，七类页面（含概览�
 
 ## 代码组织与供应链
 
-- 每个顶层声明之间留空行；超过约 120 列的条件、结构体字面量、参数表和 SQL 按语义分行，复杂判断提取为具名函数（例如 `config.Validate` 拆为服务、设置、路径、日志、TLS、源各自的校验函数，`runs.Engine.worker` 拆为出队、等待空间、执行、结果映射与重试调度）。变量名表达含义，单字母名只用于几行内的循环下标、方法接收者和 `err`/`ok` 等惯用名。
+- 每个顶层声明之间留空行；超过约 120 列的条件、结构体字面量、参数表和 SQL 按语义分行，复杂判断提取为具名函数（例如 `config.Validate` 拆为服务、设置、路径、日志、TLS、源各自的校验函数，`runs.Engine.dispatch` 拆为出队、等待空间、启动执行、结果映射与重试调度）。变量名表达含义，单字母名只用于几行内的循环下标、方法接收者和 `err`/`ok` 等惯用名。
 - 子进程只通过参数数组调用 rsync、dnf、rpmkeys，不经过 shell；来源地址位于 `--` 之后。SQL 全部参数化，公开目录使用 `html/template`。
 - 依赖由 `go.sum`（对照 sum.golang.org）与 `package-lock.json`（integrity + 注册表签名）固定；容器基础镜像按 digest 固定，Web 依赖安装禁用 install script，Go 模块下载后 `go mod verify`。核验命令见 README“依赖来源校验”。
 - 容器默认以 UID/GID 10001 的 `mirrordock` 用户运行；systemd 模板在原有沙箱选项外增加内核模块/参数/cgroup 保护、`LockPersonality` 与 `RestrictRealtime`。

@@ -42,6 +42,7 @@ export interface Configuration {
   settings: {
     retry_count: number
     task_timeout: string
+    concurrency: { rsync: number; reposync: number; github_release: number }
     rsync: { io_timeout: string; connect_timeout: string; limit_mb: number }
     github: {
       release_count: number

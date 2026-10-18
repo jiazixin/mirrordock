@@ -10,7 +10,7 @@ mirror_root: "/srv/mirrors" # 镜像根目录；下载路径直接为 /<dest>/�
 # / 是镜像目录首页；/admin/ 是管理界面；/api/ 是管理接口。
 # dest 的目录段不能使用 admin、api、favicon.ico，以免与程序路由冲突。
 # 文件服务优先使用 Linux HTTP/1.1 sendfile；Go 原生 HTTPS 使用优化的 TLS 流式传输。
-# 下载缓存、缓冲与资源准入采用内置策略；不受同步任务并发数或 rsync limit_mb 限制。
+# 下载缓存、缓冲与资源准入采用内置策略；不受 settings.concurrency 或 rsync limit_mb 限制。
 # 性能路径及压测目标见 docs/DESIGN.md 的 ADR-010；实测范围见 docs/ACCEPTANCE.md。
 
 # 管理账号由配置文件定义，修改后重启生效；页面保存其他设置会保留此段。
@@ -41,6 +41,12 @@ settings:
   # 网络/上游临时失败后额外重试次数；默认 3，0 关闭，最多 10。共用累计预算。
   retry_count: 3
   task_timeout: "8h"        # 每轮任务的累计执行预算；切换 src 不重置，排队/暂停不计入
+  # 每种类型最多同时执行的任务数，各类型独立计数、互不占用；1–16，默认 4。
+  # 超出的任务按触发顺序排队；页面保存后立即生效，已在执行的任务不受影响。
+  concurrency:
+    rsync: 4
+    reposync: 4
+    github_release: 4
   rsync:
     io_timeout: "5m"        # 连续无数据传输的等待上限，超时后可切换下一来源
     connect_timeout: "30s"  # 连接 rsync daemon 的等待上限

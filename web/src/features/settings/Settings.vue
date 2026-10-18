@@ -211,6 +211,44 @@ async function save() {
           >
         </div>
       </article>
+      <article class="panel setting-row">
+        <div class="setting-description">
+          <span class="setting-index">03 · 并发</span>
+          <h3>同类型并发数</h3>
+          <p>每种同步类型最多同时执行的任务数。</p>
+          <small
+            >各类型独立计数，Rsync 大仓库不会占用 GitHub Release
+            的名额；超出的任务按触发顺序排队。保存后立即生效，已在执行的任务不受影响。</small
+          >
+        </div>
+        <div class="setting-controls">
+          <label
+            >Rsync 并发数<input
+              v-model.number="draft.settings.concurrency.rsync"
+              type="number"
+              min="1"
+              max="16"
+              step="1"
+          /></label>
+          <label
+            >Reposync 并发数<input
+              v-model.number="draft.settings.concurrency.reposync"
+              type="number"
+              min="1"
+              max="16"
+              step="1"
+          /></label>
+          <label
+            >GitHub Release 并发数<input
+              v-model.number="draft.settings.concurrency.github_release"
+              type="number"
+              min="1"
+              max="16"
+              step="1"
+            /><small>每种 1–16 个，默认 4 个。</small></label
+          >
+        </div>
+      </article>
     </div>
 
     <div

@@ -91,7 +91,6 @@ func (a *active) elapsed() float64 { return a.base + time.Since(a.start).Seconds
 
 // Engine timing defaults.
 const (
-	workerCount        = 2
 	checkpointInterval = 5 * time.Second
 	cleanupInterval    = 5 * time.Minute
 	cleanupTimeout     = 30 * time.Second
@@ -153,7 +152,7 @@ func New(
 		current:            map[int64]*Run{},
 		working:            map[int64]*active{},
 		clearing:           map[int64]chan struct{}{},
-		wake:               make(chan struct{}, workerCount),
+		wake:               make(chan struct{}, 1),
 		cleanupWake:        make(chan struct{}, 1),
 		location:           location,
 		retryDelay:         defaultRetryDelay,
@@ -257,9 +256,7 @@ func (e *Engine) recoverRun(r *Run, sources []config.Source) {
 
 func (e *Engine) Start() {
 	e.cron.Start()
-	for range workerCount {
-		e.wg.Go(e.worker)
-	}
+	e.wg.Go(e.dispatch)
 	e.wg.Go(e.cleanupLoop)
 	// Capacity monitoring and persistence must not wait for a large directory
 	// cleanup to finish.
@@ -349,8 +346,8 @@ func (e *Engine) event(r *Run, message string) {
 
 func (e *Engine) save(r *Run) error { return e.store.SaveRun(r.ID, r.State, r) }
 
-// wakeWorker nudges one idle worker without blocking.
-func (e *Engine) wakeWorker() {
+// wakeDispatcher nudges the idle dispatcher without blocking.
+func (e *Engine) wakeDispatcher() {
 	select {
 	case e.wake <- struct{}{}:
 	default:
@@ -454,6 +451,8 @@ func (e *Engine) ApplyConfig(c config.Config, revision string, token, proxy *str
 	if err != nil {
 		return err
 	}
+	// A raised concurrency limit may admit queued runs immediately.
+	e.wakeDispatcher()
 	reconcileErr := e.mirror.Reconcile(e.ctx, e.cfg.Current().Sources)
 	if reconcileErr != nil {
 		reconcileErr = fmt.Errorf("配置已保存，但发布目录接入失败，请修复后重新载入配置: %w", reconcileErr)
@@ -497,6 +496,7 @@ func (e *Engine) Reload() error {
 	if err != nil {
 		return err
 	}
+	e.wakeDispatcher()
 	reconcileErr := e.mirror.Reconcile(e.ctx, e.cfg.Current().Sources)
 	if reconcileErr != nil {
 		reconcileErr = fmt.Errorf("配置已载入，但发布目录接入失败，请修复后重新载入配置: %w", reconcileErr)
@@ -551,7 +551,7 @@ func (e *Engine) Enqueue(sourceID, trigger string) (*Run, error) {
 	r.ID = id
 	e.current[id] = r
 	e.pending = append(e.pending, r)
-	e.wakeWorker()
+	e.wakeDispatcher()
 	return cloneRun(r), nil
 }
 
@@ -630,7 +630,7 @@ func (e *Engine) Action(id int64, action string) error {
 	}
 	if action == "resume" {
 		e.pending = append(e.pending, r)
-		e.wakeWorker()
+		e.wakeDispatcher()
 	}
 	if !reserved(r.State) && e.working[id] == nil {
 		delete(e.current, id)
@@ -766,7 +766,9 @@ func (e *Engine) projectRuns(records [][]byte) ([]*Run, error) {
 	return out, nil
 }
 
-func (e *Engine) worker() {
+// dispatch starts queued runs while their source type has a free slot. Each
+// started run executes in its own goroutine; types never share slots.
+func (e *Engine) dispatch() {
 	for e.ctx.Err() == nil {
 		if e.mirror.Busy() {
 			e.markWaitingForDownloads()
@@ -776,6 +778,12 @@ func (e *Engine) worker() {
 			continue
 		}
 		e.mu.Lock()
+		// Close cancels the context before interrupting working runs under
+		// e.mu; never start a run it can no longer see.
+		if e.ctx.Err() != nil {
+			e.mu.Unlock()
+			return
+		}
 		r := e.dequeueLocked()
 		if r == nil {
 			e.mu.Unlock()
@@ -802,7 +810,8 @@ func (e *Engine) worker() {
 			e.mu.Unlock()
 			continue
 		}
-		e.run(r)
+		e.startLocked(r)
+		e.mu.Unlock()
 	}
 }
 
@@ -833,26 +842,46 @@ func (e *Engine) markWaitingForDownloads() {
 	}
 }
 
+// runningLocked counts executions per source type. Callers hold e.mu.
+func (e *Engine) runningLocked() map[string]int {
+	counts := map[string]int{}
+	for id := range e.working {
+		counts[e.current[id].Type]++
+	}
+	return counts
+}
+
 // dequeueLocked removes and returns the oldest runnable queued run. Runs
 // whose source changed in YAML are stopped instead. Callers hold e.mu.
 func (e *Engine) dequeueLocked() *Run {
-	var sources []config.Source
-	for len(e.pending) > 0 {
-		candidate := e.pending[0]
-		e.pending = e.pending[1:]
+	if len(e.pending) == 0 {
+		return nil
+	}
+	current := e.cfg.Current()
+	running := e.runningLocked()
+	kept := e.pending[:0]
+	var chosen *Run
+	for i, candidate := range e.pending {
+		if chosen != nil {
+			kept = append(kept, e.pending[i:]...)
+			break
+		}
 		if candidate.State != "queued" || e.working[candidate.ID] != nil {
 			continue
 		}
-		if sources == nil {
-			sources = e.cfg.Current().Sources
-		}
-		if conflict := sourceConflict(candidate, sources); conflict != "" {
+		if conflict := sourceConflict(candidate, current.Sources); conflict != "" {
 			e.stopQueued(candidate, conflict)
 			continue
 		}
-		return candidate
+		if running[candidate.Type] >= current.Settings.Concurrency.Limit(candidate.Type) {
+			kept = append(kept, candidate)
+			continue
+		}
+		chosen = candidate
 	}
-	return nil
+	clear(e.pending[len(kept):])
+	e.pending = kept
+	return chosen
 }
 
 // waitForSpaceLocked requeues r when admission was refused. A failed
@@ -890,9 +919,10 @@ func (e *Engine) expireLocked(r *Run) {
 	e.requestCleanup()
 }
 
-// run executes an admitted run within its remaining budget and persists the
-// outcome. It is entered with e.mu held and returns with it released.
-func (e *Engine) run(r *Run) {
+// startLocked marks an admitted run as working and executes it in a new
+// goroutine within its remaining budget. Callers hold e.mu, so the slot is
+// taken before the dispatcher looks at the queue again.
+func (e *Engine) startLocked(r *Run) {
 	remaining := time.Duration((r.BudgetSeconds - r.ElapsedSeconds) * float64(time.Second))
 	ctx, stopDeadline := context.WithTimeout(e.ctx, remaining)
 	ctx, cancel := context.WithCancelCause(ctx)
@@ -909,15 +939,21 @@ func (e *Engine) run(r *Run) {
 		cancel(err)
 	}
 	snapshot := r.Snapshot
-	e.mu.Unlock()
+	e.wg.Go(func() {
+		err := e.execute(ctx, r.ID, snapshot)
+		if cause := context.Cause(ctx); cause != nil && err != nil {
+			err = cause
+		}
+		stopDeadline()
+		cancel(nil)
+		e.finish(r, execution, err)
+	})
+}
 
-	err := e.execute(ctx, r.ID, snapshot)
-	if cause := context.Cause(ctx); cause != nil && err != nil {
-		err = cause
-	}
-	stopDeadline()
-	cancel(nil)
+// finish persists the outcome of an execution and frees its slot.
+func (e *Engine) finish(r *Run, execution *active, err error) {
 	e.mirror.EndSync(r.ID)
+	defer e.wakeDispatcher()
 
 	e.mu.Lock()
 	defer e.mu.Unlock()

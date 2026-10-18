@@ -349,6 +349,17 @@ test('real configuration, rsync failover, publication, records and responsive UI
       )
       .toBe(3)
     await expect(page.getByRole('button', { name: '保存设置' })).toBeEnabled()
+    await expect(page.getByLabel('GitHub Release 并发数')).toHaveValue('4')
+    await page.getByLabel('GitHub Release 并发数').fill('2')
+    await page.getByRole('button', { name: '保存设置' }).click()
+    await expect
+      .poll(
+        async () =>
+          (await (await page.request.get(base + '/api/config')).json()).config.settings.concurrency,
+      )
+      .toEqual({ rsync: 4, reposync: 4, github_release: 2 })
+    expect(await readFile(configFile, 'utf8')).toContain('github_release: 2')
+    await expect(page.getByRole('button', { name: '保存设置' })).toBeEnabled()
     await page.screenshot({ path: testInfo.outputPath('settings-retry.png'), fullPage: true })
     await page.getByRole('tab', { name: '同步策略', exact: true }).press('ArrowRight')
     await expect(page.getByRole('tab', { name: '系统配置', exact: true })).toBeFocused()

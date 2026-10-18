@@ -1,5 +1,22 @@
 # 验收记录
 
+## 同步任务按类型并发（2026-10-18）
+
+范围：`internal/config/config.go`（新增 `settings.concurrency`）、`internal/runs/runs.go`（固定 2 个 worker 改为按类型调度）、`web/src/features/settings/Settings.vue`、`web/src/app/types.ts`、`configs/config.example.yaml`、README/DESIGN；测试 `internal/config/config_test.go`、新增 `internal/runs/concurrency_test.go`、`web/e2e/mirrordock.spec.ts`。
+
+- `settings.concurrency.{rsync,reposync,github_release}` 各自 1–16 的整数，默认 4；缺省块或缺省键使用默认值，小数、0、17 与未知键被拒绝。页面“系统设置 → 同步策略 → 03 · 并发”编辑，保存经 revision 检查原子写回 YAML。
+- 调度器按 FIFO 扫描队列，跳过所属类型已满的任务（保留队位），放行任务在独立 goroutine 执行，结束、配置保存或重载后立即唤醒。磁盘准入、公开下载繁忙检查仍对全部类型共用；每个活动任务仍预留 512 MiB。调度器在关闭开始后不再放行新任务。
+
+| 检查 | 结果 |
+| --- | --- |
+| `go vet ./...` / `go test -race -count=1 ./...` | 通过 |
+| `TestConcurrencyIsPerSourceType` | rsync 上限 1 时第二个 rsync 保持排队、GitHub Release 同时运行；改为 2 并保存后排队任务立即开始 |
+| `npm --prefix web run format:check` / `npm --prefix web run build` | 通过 |
+| E2E 全量（scratchpad 临时二进制） | 16 通过，2 跳过（`mirrordock.spec.ts`、`public-directory.spec.ts` 首例需 `MIRRORDOCK_TEST_RSYNC`，本机仅有 openrsync）；**新增的并发设置 E2E 步骤位于被跳过的 `mirrordock.spec.ts`，未执行** |
+| 手工核对（临时实例，隔离端口与临时目录） | 同步策略页显示三项默认 4；改 GitHub Release 为 2 保存后 `/api/config` 与 YAML 均为 2；截图核对单列布局 |
+| open-code-review | 托管模式，未调用外部 LLM；`ocr delegate preview/rule` 选出 5/5 可审文件（config.example.yaml、config.go、runs.go、types.ts、Settings.vue），由当前会话审查；排除的 README/DESIGN（unsupported_ext）与三个测试文件（default_path）已人工核对。补强：关闭开始后调度器不再放行新任务；未发现其他正确性、安全性或性能问题 |
+| 未执行 | 需现代 rsync 的两例 E2E；Linux 实机多类型并发同步 |
+
 ## GitHub Release 批量新增同步源（2026-10-18）
 
 范围：`web/src/features/sources/SourceEditor.vue`、新增 `web/src/features/sources/GitHubBatch.vue`、`web/src/features/sources/githubBatch.ts`、`web/e2e/github-batch.spec.ts`、README 一句说明。后端与配置协议未改动。

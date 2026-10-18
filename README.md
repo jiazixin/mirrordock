@@ -64,11 +64,11 @@ YAML
 
 `-f <文件>` 与 `--config <文件>` 等价，同时指定不同文件报错。无参数读取工作目录 `config.yaml`，不存在就报错，不生成或覆盖。相对路径以配置文件目录为基准，数据库为 `<path>/data.sqlite`，任务日志为 `<path>/logs/<run-id>/<attempt>.log`。启动自动建表/索引并保留原有记录。
 
-用户确认的 YAML 协议优先于 [目录规范.md](目录规范.md) 的默认协议。不使用 CONFIG_FILE 或环境变量覆盖配置，不恢复 version、timezone、maxconcurrent、exec、token_env、records 字段。系统启动时区用于调度、管理台和公开目录；可在启动环境设 `TZ=Asia/Shanghai`。通知时区单独由登录浏览器同步，未同步时 UTC。
+用户确认的 YAML 协议优先于 [目录规范.md](目录规范.md) 的默认协议。不使用 CONFIG_FILE 或环境变量覆盖配置，不恢复 version、timezone、maxconcurrent、exec、token_env、records 字段；按类型并发使用用户确认的 `settings.concurrency`。系统启动时区用于调度、管理台和公开目录；可在启动环境设 `TZ=Asia/Shanghai`。通知时区单独由登录浏览器同步，未同步时 UTC。
 
 - `listen`、`port`、`path`、`mirror_root`、TLS、`auth`、`log` 修改后重启。系统配置页仅显示路径和环境检查；页面保存其他配置时保留这些部署字段。
 - YAML 是配置真源；保存保留注释、检查 revision，使用同目录临时文件、fsync 与 rename。配置文件及父目录必须允许程序身份写入，应挂载整个配置目录。外部编辑后用“重新载入配置”，冲突时重新打开编辑器。设置页保留未保存草稿：通知/源更新可合并，实际设置冲突时须显式载入最新设置后重新编辑。
-- 内置两个同步 worker，同源已有排队、运行、暂停或中断任务时跳过重复触发。cron 使用五字段，`overlap` 仅支持 `skip`。
+- `settings.concurrency` 按类型限制同时执行的任务数（rsync、reposync、github_release 各自 1–16，默认 4），各类型独立计数、互不占用名额；超出的任务按触发顺序排队，系统设置“同步策略”页保存后立即生效，已在执行的任务不受影响。同源已有排队、运行、暂停或中断任务时跳过重复触发。cron 使用五字段，`overlap` 仅支持 `skip`。
 - 服务停止/重启产生的 `SERVICE_INTERRUPTED` 在源 ID、类型、dest 匹配且仍启用时自动继续，沿用剩余预算和重试次数；预算耗尽转超时。暂停与持久化失败等其他中断不自动继续。启动按任务 ID 分页恢复全部未终态记录；停机期间源已从 YAML 删除或变更类型/dest 的任务自动取消（`SOURCE_REMOVED`/`SOURCE_CHANGED`），已禁用源的排队任务转为中断（`SOURCE_DISABLED`），启用后可继续。worker 出队与“继续”操作同样核对当前配置，不按旧快照执行。
 - `task_timeout` 默认 8h，准备、传输、校验、发布、来源切换与重试等待共享累计预算；排队/暂停不计时。停止时先 TERM，最多 10 秒后 KILL 整个进程组；执行器正常退出后也清理同组残留子进程。服务被 SIGKILL/OOM 终止时 rsync 派生的接收进程会脱离父进程继续写入，下次启动在恢复任务前结束本用户所有参数引用 `<mirror_root>/.mirrordock/work/` 的进程（只看参数、不看工作目录，不碰发布代和其他用户的进程）。systemd 的 `KillMode=control-group` 也会在重启前清理整个 cgroup，但残留进程忽略 TERM 时要等满 `TimeoutStopSec`。
 - `retry_count` 默认额外 3 次，范围 0–10，0 关闭。网络/临时上游错误按 5/10/20 秒退避、后续最多 80 秒；次数和等待期限持久化，继续不会重置。单个 rsync 来源的认证、模块不存在等错误仍可切换下一个来源；本地权限/磁盘错误停止。rsync 23/24 不作为成功发布，仓库校验不一致进入有限重试/备用来源流程。GitHub 配额限流按服务端重置时间延迟重试，等待仍占累计预算。

@@ -59,24 +59,61 @@ type GitHubSettings struct {
 	Proxy              string `yaml:"proxy" json:"proxy"`
 }
 
-// RetryCount requires a YAML integer; yaml.v3 otherwise truncates decimals.
+// decodeInteger requires a YAML integer; yaml.v3 otherwise truncates decimals.
+func decodeInteger(node *yaml.Node, message string) (int, error) {
+	if node.Kind != yaml.ScalarNode || node.Tag != "!!int" {
+		return 0, errors.New(message)
+	}
+	var value int
+	err := node.Decode(&value)
+	return value, err
+}
+
 type RetryCount int
 
 func (c *RetryCount) UnmarshalYAML(node *yaml.Node) error {
-	if node.Kind != yaml.ScalarNode || node.Tag != "!!int" {
-		return errors.New("retry_count 必须为 0–10 之间的整数")
-	}
-	var value int
-	if err := node.Decode(&value); err != nil {
-		return err
-	}
+	value, err := decodeInteger(node, "retry_count 必须为 0–10 之间的整数")
 	*c = RetryCount(value)
-	return nil
+	return err
+}
+
+// Slots is the number of runs of one source type that may execute at once.
+type Slots int
+
+func (s *Slots) UnmarshalYAML(node *yaml.Node) error {
+	value, err := decodeInteger(node, "concurrency 必须为 1–16 之间的整数")
+	*s = Slots(value)
+	return err
+}
+
+// Concurrency limits simultaneous runs per source type. Each type has its
+// own slots, so a long rsync never blocks a GitHub Release run.
+type Concurrency struct {
+	Rsync         Slots `yaml:"rsync" json:"rsync"`
+	RepoSync      Slots `yaml:"reposync" json:"reposync"`
+	GitHubRelease Slots `yaml:"github_release" json:"github_release"`
+}
+
+// MaxSlots bounds each type's concurrency.
+const MaxSlots = 16
+
+// Limit returns the slots for sourceType.
+func (c Concurrency) Limit(sourceType string) int {
+	switch sourceType {
+	case "rsync":
+		return int(c.Rsync)
+	case "reposync":
+		return int(c.RepoSync)
+	case "github_release":
+		return int(c.GitHubRelease)
+	}
+	return 0
 }
 
 type Settings struct {
 	RetryCount    RetryCount              `yaml:"retry_count" json:"retry_count"`
 	TaskTimeout   string                  `yaml:"task_timeout" json:"task_timeout"`
+	Concurrency   Concurrency             `yaml:"concurrency" json:"concurrency"`
 	Rsync         RsyncSettings           `yaml:"rsync" json:"rsync"`
 	GitHub        GitHubSettings          `yaml:"github" json:"github"`
 	Notifications map[string]Notification `yaml:"notifications,omitempty" json:"-"`
@@ -197,6 +234,7 @@ func Defaults() Config {
 		Settings: Settings{
 			RetryCount:  3,
 			TaskTimeout: "8h",
+			Concurrency: Concurrency{Rsync: 4, RepoSync: 4, GitHubRelease: 4},
 			Rsync:       RsyncSettings{IOTimeout: "5m", ConnectTimeout: "30s"},
 			GitHub:      GitHubSettings{ReleaseCount: 5},
 		},
@@ -343,6 +381,11 @@ func (s Settings) validate() error {
 	}
 	if s.RetryCount < 0 || s.RetryCount > 10 {
 		return errors.New("retry_count 必须在 0–10 之间")
+	}
+	for _, slots := range []Slots{s.Concurrency.Rsync, s.Concurrency.RepoSync, s.Concurrency.GitHubRelease} {
+		if slots < 1 || slots > MaxSlots {
+			return errors.New("concurrency 每种类型必须在 1–16 之间")
+		}
 	}
 	limit := s.Rsync.LimitMB
 	if math.IsNaN(limit) || math.IsInf(limit, 0) || limit < 0 {

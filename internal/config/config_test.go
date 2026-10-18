@@ -342,3 +342,53 @@ func TestRetryConfigurationDefaultsValidationAndWriteback(t *testing.T) {
 		t.Fatal("comment lost", err)
 	}
 }
+
+func TestConcurrencyDefaultsValidationAndWriteback(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "config.yaml")
+	base := "listen: 127.0.0.1\npath: ./data\nmirror_root: ./mirror\nauth:\n  username: operator\n  password: test-secret\nsources: []\n"
+	for _, tc := range []struct {
+		section string
+		want    Concurrency
+	}{
+		{"", Concurrency{Rsync: 4, RepoSync: 4, GitHubRelease: 4}},
+		{"settings:\n  concurrency:\n    rsync: 1\n", Concurrency{Rsync: 1, RepoSync: 4, GitHubRelease: 4}},
+		{"settings:\n  concurrency:\n    reposync: 16\n    github_release: 2\n", Concurrency{Rsync: 4, RepoSync: 16, GitHubRelease: 2}},
+	} {
+		c, err := Parse([]byte(base+tc.section), file)
+		if err != nil || c.Settings.Concurrency != tc.want {
+			t.Fatal(tc.section, c.Settings.Concurrency, err)
+		}
+	}
+	if Defaults().Settings.Concurrency.Limit("unknown") != 0 {
+		t.Fatal("unknown type received slots")
+	}
+	for _, v := range []string{"0", "17", "-1", "1.5", "invalid"} {
+		if _, err := Parse([]byte(base+"settings:\n  concurrency:\n    github_release: "+v+"\n"), file); err == nil {
+			t.Fatal("invalid concurrency accepted", v)
+		}
+	}
+	if _, err := Parse([]byte(base+"settings:\n  concurrency:\n    git: 1\n"), file); err == nil {
+		t.Fatal("unknown concurrency type accepted")
+	}
+	if err := os.WriteFile(file, []byte(base), 0600); err != nil {
+		t.Fatal(err)
+	}
+	m, err := Open(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := m.Current()
+	c.Settings.Concurrency.Rsync = 2
+	if err = m.Save(c, m.View().Revision, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(file)
+	if err != nil || !strings.Contains(string(b), "concurrency:\n    rsync: 2\n    reposync: 4\n    github_release: 4\n") {
+		t.Fatal("concurrency not written back", string(b), err)
+	}
+	var view View
+	encoded, _ := json.Marshal(m.View())
+	if err = json.Unmarshal(encoded, &view); err != nil || view.Config.Settings.Concurrency.Rsync != 2 {
+		t.Fatal("concurrency missing from read API", err)
+	}
+}
