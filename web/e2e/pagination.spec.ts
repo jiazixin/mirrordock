@@ -184,6 +184,18 @@ test('management pagination covers complete history, filtering, page sizes, jump
     await expect(pager.getByRole('button', { name: '末页', exact: true })).toBeDisabled()
     await page.getByRole('link', { name: '计划管理', exact: true }).click()
     await expect(page.locator('tbody tr')).toHaveCount(50)
+    const aligns = (cells: string) =>
+      page
+        .locator(cells)
+        .evaluateAll((items) => items.map((item) => getComputedStyle(item).textAlign))
+    expect(await aligns('thead th')).toEqual(['left', 'center', 'center', 'center', 'center'])
+    expect(await aligns('tbody tr:first-child td')).toEqual([
+      'left',
+      'center',
+      'center',
+      'center',
+      'center',
+    ])
     await jump('3')
     await expect(page.locator('tbody tr')).toHaveCount(25)
     await page.getByRole('link', { name: '批次记录', exact: true }).click()
@@ -262,6 +274,9 @@ test('management pagination covers complete history, filtering, page sizes, jump
     await expect(page.getByRole('columnheader', { name: '耗时', exact: true })).toBeVisible()
     await expect(page.getByRole('columnheader', { name: '数据量', exact: true })).toBeVisible()
     await expect(page.locator('tbody tr').first().locator('td').nth(4)).toHaveText('1.0 MiB')
+    const centered = ['center', 'left', 'center', 'center', 'center', 'center', 'center']
+    expect(await aligns('thead th')).toEqual(centered)
+    expect(await aligns('tbody tr:first-child td')).toEqual(centered)
     await page.screenshot({ path: testInfo.outputPath('records-columns.png'), fullPage: false })
     await chooseSize(20)
     await jump('7')
@@ -281,6 +296,15 @@ test('management pagination covers complete history, filtering, page sizes, jump
     await expect(pager).toContainText('共 0 条记录')
     await page.getByRole('button', { name: '失败记录', exact: true }).click()
     await expect(pager).toContainText('共 0 条记录')
+    expect(await aligns('thead th')).toEqual([
+      'center',
+      'left',
+      'center',
+      'center',
+      'center',
+      'left',
+      'center',
+    ])
     await page.getByRole('link', { name: '系统设置', exact: true }).click()
     await page.getByRole('tab', { name: '系统配置', exact: true }).click()
     await expect(page.locator('.check-row')).toHaveCount(10)

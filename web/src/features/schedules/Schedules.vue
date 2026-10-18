@@ -49,8 +49,8 @@ async function cron(source: Source, event: Event) {
         <table class="schedule-table">
           <thead>
             <tr>
-              <th class="text-left">同步源</th>
-              <th>Cron 表达式</th>
+              <th>同步源</th>
+              <th class="center">Cron 表达式</th>
               <th class="center">下次运行</th>
               <th class="center">自动计划</th>
               <th class="center">操作</th>
@@ -61,11 +61,11 @@ async function cron(source: Source, event: Event) {
               v-for="source in visible"
               :key="source.id"
             >
-              <td class="text-left">
+              <td>
                 <strong>{{ source.name }}</strong
                 ><small>{{ sourceType(source.type) }}</small>
               </td>
-              <td>
+              <td class="center">
                 <input
                   class="cron-input"
                   :value="source.schedule.cron"

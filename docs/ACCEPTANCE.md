@@ -1,5 +1,21 @@
 # 验收记录
 
+## 运行记录与计划管理表格居中（2026-10-18）
+
+范围：`web/src/features/runs/Records.vue`、`web/src/features/schedules/Schedules.vue`、`web/src/styles/global.css`、`web/e2e/pagination.spec.ts`。
+
+- 运行记录（成功、失败两个页签）参照同步源表改为 `table-layout: fixed` 固定列宽（`.records-table`，最小宽 980px，窄屏在 `.table-scroll` 内横向滚动）。同步源列居左；时间、状态、耗时、数据量、详情居中；成功页签的“处理结果”居中，失败页签的“失败原因”保持居左。原因单元格依据该行有无 `error_code` 决定是否居中，去掉原 340px 上限，由剩余列宽承载。
+- 计划管理：同步源列居左，Cron 表达式列改为居中，其余列原本已居中。两张表的同步源列去掉多余的 `text-left`（表格默认即左对齐）。
+- E2E：`pagination.spec.ts` 新增计划管理表头/首行、运行记录成功页签表头/首行、失败页签表头的 `text-align` 断言。
+
+| 检查 | 结果 |
+| --- | --- |
+| `npm --prefix web run format:check` / `npm --prefix web run build`（含 `vue-tsc`） | 通过 |
+| E2E `pagination.spec.ts`（scratchpad 临时二进制） | 1/1 通过 |
+| 截图核对（`records-columns.png`，1440 宽） | 列宽与居中符合预期；截图恰在页面淡入过程中，颜色偏浅 |
+| open-code-review | 未调用外部 LLM；`ocr delegate preview/rule` 选出 3/3 个可审文件（Records.vue、Schedules.vue、global.css），由当前会话审查；排除的 `e2e/pagination.spec.ts`（default_path）已人工核对。未发现正确性、安全性或性能问题 |
+| 未执行 | 失败记录有数据时的截图、窄屏截图核对、其他 E2E |
+
 本文件只记录**当前代码**的验证结果。更早的会话记录（含 2026-10-09 的 1.0 发布前验收、2026-10-16/17 的 AlmaLinux 10.2 实机验收）保留在 Git 历史中，查阅 `git show 7ca1573:docs/ACCEPTANCE.md`；那些结果是旧代码的事实，不能当作本次改动的验证结论，摘要见文末“历史实机验收摘要”。
 
 ## 1.0 上线前全量代码审查与修复（2026-10-18）

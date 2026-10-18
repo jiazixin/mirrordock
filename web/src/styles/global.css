@@ -1195,8 +1195,30 @@ td.center .stacked-time {
 .tabs button.active svg {
   color: var(--brand);
 }
+.records-table {
+  min-width: 980px;
+  table-layout: fixed;
+}
+.records-table th:first-child {
+  width: 140px;
+}
+.records-table th:nth-child(2) {
+  width: 220px;
+}
+.records-table th:nth-child(3) {
+  width: 120px;
+}
+.records-table th:nth-child(4),
+.records-table th:nth-child(5) {
+  width: 110px;
+}
+.records-table th:last-child {
+  width: 90px;
+}
+.records-table td:nth-child(2) strong {
+  overflow-wrap: anywhere;
+}
 .record-reason {
-  max-width: 340px;
   color: var(--t2);
   font-size: 12px;
   line-height: 1.6;

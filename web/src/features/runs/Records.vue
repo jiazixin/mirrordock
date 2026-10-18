@@ -100,15 +100,17 @@ async function clear() {
         /><span class="filter-count">共 {{ total }} 项</span>
       </div>
       <div class="table-scroll">
-        <table>
+        <table class="records-table">
           <thead>
             <tr>
-              <th>时间</th>
-              <th class="text-left">同步源</th>
-              <th>状态</th>
-              <th>耗时</th>
-              <th>数据量</th>
-              <th class="text-left">{{ tab === 'succeeded' ? '处理结果' : '失败原因' }}</th>
+              <th class="center">时间</th>
+              <th>同步源</th>
+              <th class="center">状态</th>
+              <th class="center">耗时</th>
+              <th class="center">数据量</th>
+              <th :class="{ center: tab === 'succeeded' }">
+                {{ tab === 'succeeded' ? '处理结果' : '失败原因' }}
+              </th>
               <th class="center">详情</th>
             </tr>
           </thead>
@@ -117,22 +119,25 @@ async function clear() {
               v-for="run in visible"
               :key="run.id"
             >
-              <td>
+              <td class="center">
                 <StackedTime
                   :value="time(run.created_at)"
                   :datetime="run.created_at"
                 />
               </td>
-              <td class="text-left">
+              <td>
                 <strong>{{ run.name }}</strong
                 ><small>{{ sourceType(run.type) }} · #{{ run.id }}</small>
               </td>
-              <td><StatusBadge :state="run.state" /></td>
-              <td>
+              <td class="center"><StatusBadge :state="run.state" /></td>
+              <td class="center">
                 <strong>{{ duration(run.elapsed_seconds) }}</strong>
               </td>
-              <td>{{ bytes(run.progress.bytes) }}</td>
-              <td class="record-reason text-left">
+              <td class="center">{{ bytes(run.progress.bytes) }}</td>
+              <td
+                class="record-reason"
+                :class="{ center: !run.error_code }"
+              >
                 <template v-if="run.error_code"
                   ><strong>{{ run.error_code }}</strong>
                   <p>{{ run.error }}</p></template
