@@ -51,6 +51,10 @@ settings:
     io_timeout: "5m"        # 连续无数据传输的等待上限，超时后可切换下一来源
     connect_timeout: "30s"  # 连接 rsync daemon 的等待上限
     limit_mb: 0             # 每个 rsync 任务限速，单位 MB/s；0 不限速，可填小数
+    proxy: ""               # rsync:// 来源的全局代理；空字符串直连，写法与 github.proxy 相同
+    # 支持 http://、https://、socks5://、socks5h://，可带 用户名:密码@；不读取 RSYNC_PROXY 等环境变量。
+    # HTTP/HTTPS 代理须允许 CONNECT 到上游端口（默认 873）；代理失败时本轮报错，不自动直连。
+    # 单个源可在 rsync.proxy_mode 中选择跟随全局、直连或自定义；保存后对下一次执行生效。
   github:
     release_count: 5        # 默认同步最近发布的 N 个 Release；单个源可覆盖
     include_prereleases: false # 是否包含预发布版本；草稿始终排除
@@ -94,6 +98,9 @@ sources:
       # uid: 1000                # 对应 --owner --chown=1000（仅指定 UID 时）
       # gid: 1000                # 对应 --group --chown=:1000（仅指定 GID 时）
       # 两项同时填写时使用 --owner --group --chown=1000:1000。
+      # 代理：省略或 global 跟随 settings.rsync.proxy；direct 直连；custom 使用下面的 proxy。
+      # proxy_mode: custom
+      # proxy: "socks5://127.0.0.1:1080" # 仅 custom 时填写，写法与全局代理相同
     schedule:
       enabled: true        # false 时只允许手动运行
       cron: "0 2 * * *"    # 五字段 cron，按程序启动时的时区解释：每天 02:00

@@ -2,7 +2,7 @@
 import { computed, onMounted, onBeforeUnmount, ref } from 'vue'
 import { RefreshCw, ShieldCheck } from '@lucide/vue'
 import { api } from '../../app/api'
-import { perform } from '../../app/state'
+import { perform, state } from '../../app/state'
 import type { SystemChecks } from '../../app/types'
 
 const checks = ref<SystemChecks>()
@@ -33,6 +33,13 @@ function toolVersion(tool: SystemChecks['rsync'] | undefined, name: 'rsync' | 'd
   }
   const version = tool.version.match(patterns[name])?.[1]
   return version ? `版本 ${version}` : '可执行，版本未识别'
+}
+function rsyncProxyDetail() {
+  const sources = (state.config?.config.sources ?? []).filter((source) => source.type === 'rsync')
+  const direct = sources.filter((source) => source.rsync?.proxy_mode === 'direct').length
+  const custom = sources.filter((source) => source.rsync?.proxy_mode === 'custom').length
+  const overrides = direct || custom ? `；${custom} 个源自定义代理，${direct} 个源直连` : ''
+  return `全局设置，取自配置${overrides}。仅检查配置状态，未测试网络连通性`
 }
 function publicationStatus(result: SystemChecks | undefined) {
   if (!result) return '未知'
@@ -113,10 +120,16 @@ const checkRows = computed(() => {
       detail: '仅检查配置状态，未验证 API 认证',
     },
     {
-      label: '下载代理',
+      label: 'GitHub 代理',
       status: result?.github_proxy_configured ? '已配置' : '直连',
       ok: true,
       detail: '仅检查配置状态，未测试网络连通性',
+    },
+    {
+      label: 'Rsync 代理',
+      status: state.config?.config.settings.rsync?.proxy ? '已配置' : '直连',
+      ok: true,
+      detail: rsyncProxyDetail(),
     },
   ]
 })

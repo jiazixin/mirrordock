@@ -49,6 +49,7 @@ type RsyncSettings struct {
 	IOTimeout      string  `yaml:"io_timeout" json:"io_timeout"`
 	ConnectTimeout string  `yaml:"connect_timeout" json:"connect_timeout"`
 	LimitMB        float64 `yaml:"limit_mb" json:"limit_mb"`
+	Proxy          string  `yaml:"proxy" json:"proxy"`
 }
 
 type GitHubSettings struct {
@@ -127,7 +128,18 @@ type Rsync struct {
 	Delete              *bool `yaml:"delete,omitempty" json:"delete"`
 	UID                 *int  `yaml:"uid,omitempty" json:"uid"`
 	GID                 *int  `yaml:"gid,omitempty" json:"gid"`
+	// ProxyMode is blank or "global" to follow settings.rsync.proxy, "direct"
+	// to connect without a proxy, or "custom" to use Proxy.
+	ProxyMode string `yaml:"proxy_mode,omitempty" json:"proxy_mode"`
+	Proxy     string `yaml:"proxy,omitempty" json:"proxy"`
 }
+
+// Rsync proxy modes of a source.
+const (
+	ProxyGlobal = "global"
+	ProxyDirect = "direct"
+	ProxyCustom = "custom"
+)
 
 type RepoSync struct {
 	RepoID           string   `yaml:"repo_id" json:"repo_id"`
@@ -398,7 +410,10 @@ func (s Settings) validate() error {
 	if strings.IndexFunc(token, unicode.IsSpace) >= 0 || strings.IndexFunc(token, unicode.IsControl) >= 0 {
 		return errors.New("github.token 不能包含空白或控制字符，请只填写 Token 本身")
 	}
-	_, err := ParseProxyURL(s.GitHub.Proxy)
+	if _, err := ParseProxyURL(s.GitHub.Proxy); err != nil {
+		return err
+	}
+	_, err := ParseProxyField("rsync.proxy", s.Rsync.Proxy)
 	return err
 }
 
@@ -635,7 +650,38 @@ func (s Source) validateRsync() error {
 			return errors.New("exclude 包含控制字符")
 		}
 	}
-	return nil
+	return s.Rsync.validateProxy(s.ID)
+}
+
+func (r Rsync) validateProxy(sourceID string) error {
+	switch r.ProxyMode {
+	case "", ProxyGlobal, ProxyDirect:
+		if r.Proxy != "" {
+			return fmt.Errorf("%s 的 rsync.proxy 仅在 proxy_mode 为 custom 时填写", sourceID)
+		}
+		return nil
+	case ProxyCustom:
+		if r.Proxy == "" {
+			return fmt.Errorf("%s 的 proxy_mode 为 custom 时须填写 rsync.proxy", sourceID)
+		}
+		_, err := ParseProxyField(sourceID+" 的 rsync.proxy", r.Proxy)
+		return err
+	default:
+		return fmt.Errorf("%s 的 rsync.proxy_mode 只支持 global、direct、custom", sourceID)
+	}
+}
+
+// RsyncProxy is the proxy URL the source's rsync connects through, read from
+// the current settings; blank means direct.
+func (s Source) RsyncProxy(settings RsyncSettings) string {
+	switch s.Rsync.ProxyMode {
+	case ProxyDirect:
+		return ""
+	case ProxyCustom:
+		return s.Rsync.Proxy
+	default:
+		return settings.Proxy
+	}
 }
 
 func (s Source) validateRepoSync() error {
@@ -722,12 +768,18 @@ func publicURL(v string) error {
 	return nil
 }
 
-// ParseProxyURL never includes the input in errors: proxy URLs may contain credentials.
+// ParseProxyURL parses the GitHub proxy; see ParseProxyField.
 func ParseProxyURL(v string) (*url.URL, error) {
+	return ParseProxyField("github.proxy", v)
+}
+
+// ParseProxyField parses a proxy URL setting named field. Blank means direct.
+// Errors never include the input: proxy URLs may contain credentials.
+func ParseProxyField(field, v string) (*url.URL, error) {
 	if v == "" {
 		return nil, nil
 	}
-	invalid := errors.New("github.proxy 必须为合法的代理地址，不能包含路径、查询或片段")
+	invalid := errors.New(field + " 必须为合法的代理地址，不能包含路径、查询或片段")
 	if len(v) > 4096 || strings.TrimSpace(v) != v || strings.ContainsAny(v, "\x00\r\n\t") {
 		return nil, invalid
 	}
@@ -739,12 +791,12 @@ func ParseProxyURL(v string) (*url.URL, error) {
 		return nil, invalid
 	}
 	if !slices.Contains([]string{"http", "https", "socks5", "socks5h"}, proxy.Scheme) {
-		return nil, errors.New("github.proxy 只支持 http、https、socks5、socks5h")
+		return nil, errors.New(field + " 只支持 http、https、socks5、socks5h")
 	}
 	if port := proxy.Port(); port != "" {
 		number, err := strconv.Atoi(port)
 		if err != nil || number < 1 || number > 65535 {
-			return nil, errors.New("github.proxy 端口必须在 1–65535 之间")
+			return nil, errors.New(field + " 端口必须在 1–65535 之间")
 		}
 	}
 	if proxy.User != nil {
@@ -754,7 +806,7 @@ func ParseProxyURL(v string) (*url.URL, error) {
 		// SOCKS5 username/password authentication encodes each field in one byte.
 		socksTooLong := socks && (len(username) > 255 || len(password) > 255)
 		if strings.ContainsAny(username+password, "\x00\r\n") || socksTooLong {
-			return nil, errors.New("github.proxy 的认证信息无效")
+			return nil, errors.New(field + " 的认证信息无效")
 		}
 	}
 	return proxy, nil

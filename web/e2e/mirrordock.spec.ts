@@ -449,10 +449,52 @@ test('real configuration, rsync failover, publication, records and responsive UI
     expect(
       (await (await page.request.get(base + '/api/system/info')).json()).publications[0].current.id,
     ).toBe(publicationBefore)
+    // Proxy settings are edited after the last sync: the proxies are unreachable.
+    const rsyncProxy = 'http://rsync-user:e2e-rsync-secret@127.0.0.1:3128'
+    const sourceProxy = 'socks5h://source-user:e2e-source-secret@127.0.0.1:1080'
+    await page.getByRole('link', { name: '系统设置' }).click()
+    await page.getByRole('tab', { name: 'Rsync', exact: true }).click()
+    await page.getByLabel('Rsync 代理 · proxy').fill(rsyncProxy)
+    await page.getByRole('button', { name: '保存设置' }).click()
+    await expect.poll(async () => await readFile(configFile, 'utf8')).toContain(rsyncProxy)
+    await page.screenshot({ path: testInfo.outputPath('settings-rsync-proxy.png'), fullPage: true })
     await page.getByRole('link', { name: '同步源', exact: true }).click()
     await page.getByRole('button', { name: '编辑 隔离测试源' }).click()
     await expect(page.getByRole('dialog')).toContainText('编辑同步源')
-    await page.getByRole('button', { name: '取消', exact: true }).click()
+    await expect(page.getByRole('combobox', { name: '代理', exact: true })).toContainText(
+      '跟随全局',
+    )
+    // The hint names the global proxy host without its credentials.
+    await expect(page.getByRole('dialog')).toContainText('当前全局代理：http://127.0.0.1:3128')
+    await expect(page.getByRole('dialog')).not.toContainText('e2e-rsync-secret')
+    await page.getByRole('combobox', { name: '代理', exact: true }).click()
+    await page.getByRole('option', { name: '自定义', exact: true }).click()
+    await page.getByLabel('自定义代理 · proxy').fill(sourceProxy)
+    await page
+      .getByRole('dialog')
+      .screenshot({ path: testInfo.outputPath('source-proxy-custom.png') })
+    await page.getByRole('button', { name: '保存并写回 YAML' }).click()
+    await expect(page.getByRole('dialog')).toHaveCount(0)
+    let written = await readFile(configFile, 'utf8')
+    expect(written).toContain('proxy_mode: custom')
+    expect(written).toContain(sourceProxy)
+    await page.getByRole('button', { name: '编辑 隔离测试源' }).click()
+    await expect(page.getByLabel('自定义代理 · proxy')).toHaveValue(sourceProxy)
+    await page.getByRole('combobox', { name: '代理', exact: true }).click()
+    await page.getByRole('option', { name: '直连', exact: true }).click()
+    await expect(page.getByLabel('自定义代理 · proxy')).toHaveCount(0)
+    await page.getByRole('button', { name: '保存并写回 YAML' }).click()
+    await expect(page.getByRole('dialog')).toHaveCount(0)
+    written = await readFile(configFile, 'utf8')
+    expect(written).toContain('proxy_mode: direct')
+    expect(written).not.toContain('e2e-source-secret')
+    expect(written).toContain(rsyncProxy)
+    await page.getByRole('button', { name: '编辑 隔离测试源' }).click()
+    await page.getByRole('combobox', { name: '代理', exact: true }).click()
+    await page.getByRole('option', { name: '跟随全局', exact: true }).click()
+    await page.getByRole('button', { name: '保存并写回 YAML' }).click()
+    await expect(page.getByRole('dialog')).toHaveCount(0)
+    expect(await readFile(configFile, 'utf8')).not.toContain('proxy_mode')
     for (const width of [1440, 1024, 736, 375]) {
       await page.setViewportSize({ width, height: 1000 })
       for (const name of ['sources', 'batches', 'records', 'schedules', 'settings']) {

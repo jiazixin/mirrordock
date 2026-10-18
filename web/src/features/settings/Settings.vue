@@ -297,6 +297,31 @@ async function save() {
           >
         </div>
       </article>
+      <article class="panel setting-row">
+        <div class="setting-description">
+          <span class="setting-index">03 · 网络</span>
+          <h3>下载代理</h3>
+          <p>Rsync 来源默认经此代理连接上游。</p>
+          <small
+            >单个同步源可选择跟随全局、直连或自定义代理。HTTP/HTTPS 代理须允许 CONNECT
+            到上游端口（默认 873）；代理失败时本轮报错，不会自动直连。</small
+          >
+        </div>
+        <div class="setting-controls">
+          <label
+            >Rsync 代理 · proxy<input
+              v-model="draft.settings.rsync.proxy"
+              type="text"
+              autocomplete="off"
+              spellcheck="false"
+              placeholder="socks5://127.0.0.1:1080"
+            /><small
+              >支持
+              http://、https://、socks5://、socks5h://，可带用户名和密码；留空并保存即直连。保存后对下一次执行生效。</small
+            ></label
+          >
+        </div>
+      </article>
     </div>
 
     <div

@@ -8,6 +8,7 @@ import (
 	"mirrordock/internal/app"
 	"mirrordock/internal/config"
 	"mirrordock/internal/observability"
+	syncer "mirrordock/internal/sync"
 	"net/http"
 	"os"
 	"os/signal"
@@ -16,6 +17,11 @@ import (
 )
 
 func main() {
+	// rsync starts this internal command to reach its daemon through a proxy;
+	// stdout is the daemon connection, so nothing else may be written there.
+	if len(os.Args) > 1 && os.Args[1] == syncer.ConnectCommand {
+		os.Exit(syncer.RunConnect())
+	}
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
 	os.Exit(run())
 }

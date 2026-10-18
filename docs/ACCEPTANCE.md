@@ -1,5 +1,26 @@
 # 验收记录
 
+## Rsync 下载代理：全局与按源跟随全局/直连/自定义（2026-10-18）
+
+范围：`internal/config/config.go`（`settings.rsync.proxy`、源 `rsync.proxy_mode`/`rsync.proxy`、`ParseProxyField`）、新增 `internal/sync/connect.go`（`rsync-connect` 内部命令）、`internal/sync/{runner,process}.go`、`internal/runs/{runs,snapshot}.go`、`cmd/mirrordock/main.go`、`web/src/app/types.ts`、`web/src/features/settings/{Settings,EnvironmentChecks}.vue`、`web/src/features/sources/SourceEditor.vue`、`configs/config.example.yaml`、README/DESIGN；测试 `internal/config/config_test.go`、新增 `internal/runs/proxy_test.go`、`internal/sync/connect_test.go`、`internal/sync/{runner,strays}_test.go`（`command` 新增 env 参数、复用 daemon 启动辅助）、`web/e2e/{mirrordock,pagination}.spec.ts`。GitHub Release 与 Reposync 行为未改动。
+
+- 配置：全局 `settings.rsync.proxy` 写法与 `settings.github.proxy` 相同；源 `rsync.proxy_mode` 省略/`global`/`direct`/`custom`，仅 custom 可填且必须填 `rsync.proxy`。页面：系统设置 Rsync 页“03 · 网络”；源编辑器“代理 · proxy_mode”三选一，跟随全局保存为省略（YAML 不新增键），切换离开自定义时清除地址。环境检查“下载代理”改名“GitHub 代理”，新增“Rsync 代理”行（全局状态与按源覆盖计数）。
+- 执行：每次尝试从当前 YAML 解析代理；快照保留模式、清除地址；日志只写代理协议与主机端口，代理 URL 与凭据加入脱敏列表。rsync 经 `RSYNC_CONNECT_PROG` 启动 `mirrordock rsync-connect`（单引号转义路径，`%` 转义为 `%%`），代理/目标/连接超时经环境变量传递；rsync 环境始终剔除继承的 `RSYNC_PROXY`、`RSYNC_CONNECT_PROG`。**行为变化：此前 rsync 继承启动环境的 `RSYNC_PROXY`，现在只使用 YAML 中的代理。**
+- 失败分类：代理不可达（可重试、`ProxyFailure`，本轮不切换备用来源，重试耗尽提示“代理不可用”）；认证/协议/配置错误（不可重试）；代理拒绝目标（HTTP 403、SOCKS 规则拒绝：不可重试的来源失败）；其他目标失败（可重试的来源失败）。隧道建立后的转发错误不再输出分类诊断，避免覆盖 rsync 自身判断（例如 unknown module 仍为不可重试的 `UPSTREAM_ERROR`）。
+
+| 检查 | 结果 |
+| --- | --- |
+| `go vet ./...` / `go test -race -count=1 ./...`（`MIRRORDOCK_TEST_RSYNC=.cache/rsync/rsync-3.5.1/rsync`） | 通过 |
+| 真实 rsync 3.5.1 经代理（`TestSystemRsyncThroughProxy`，本机合成） | 来源主机为只有代理能到达的 `mirror.invalid`：HTTP CONNECT 与 SOCKS5h（均带认证）完成传输；经代理访问不存在模块保持 `UPSTREAM_ERROR`；代理不可达得到可重试 `RSYNC_PROXY`，消息与日志不含凭据 |
+| 内部命令与隧道单测 | http/https（自签根）/socks5/socks5h 隧道含 daemon 即时问候不丢字节；407/403/502/405/SOCKS 无可用认证/不可达代理/无响应代理超时分类；子进程中继与失败诊断；环境变量剔除与端口范围；含 `'`、`%`、`$()` 路径的 shell 引用 |
+| 引擎（`TestRsyncProxyIsResolvedPerAttemptAndSkipsMirrors`） | 代理失败重试同一来源而不切换 src2；global/custom/direct/global 依次生效；快照不含地址；日志脱敏 |
+| 配置（`TestRsyncProxyValidationAndResolution`、`TestRsyncProxyRoundTripsThroughYAML`） | 模式/地址组合校验、错误不含凭据、管理视图回填、写回保留注释且默认模式不写键 |
+| `npm --prefix web run format:check` / `npm --prefix web run build`（含 `vue-tsc`） | 通过 |
+| E2E 全量（scratchpad 临时二进制，rsync 3.5.1） | 19 通过、0 跳过。首轮 `pagination.spec.ts` 失败：其 mock 源缺少 `rsync` 块，新环境检查行访问 `source.rsync.proxy_mode` 抛错导致整块不渲染；改为可选链并将检查行数期望 10→11 后通过。`mirrordock.spec.ts` 新增全局代理保存、源编辑器自定义→直连→跟随全局及 YAML 断言，截图 `settings-rsync-proxy.png`、`source-proxy-custom.png` 已人工核对 |
+| `GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build` | 通过（仅编译） |
+| open-code-review | 托管模式，未调用外部 LLM；`ocr delegate preview/rule` 选出 12/12 可审文件（main.go、config.example.yaml、config.go、runs.go、snapshot.go、process.go、runner.go、connect.go、types.ts、EnvironmentChecks.vue、Settings.vue、SourceEditor.vue），由当前会话审查；排除的 README/DESIGN（unsupported_ext）与 7 个测试文件（default_path）已人工核对。修复 3 项：转发阶段错误带分类前缀会覆盖 rsync 自身诊断（改为不分类）；rsync 关闭后内部命令可能长期持有 stderr 管道（半关闭后 5 秒读取期限）；超出 65535 的端口在 SOCKS 请求中被截断（解析时拒绝）；诊断识别由包含改为前缀匹配 |
+| 未执行 | Linux/EL 实机经真实 HTTP、HTTPS、SOCKS 代理同步；HTTPS 代理隧道下的真实 rsync 传输（仅单测覆盖隧道）；systemd 与容器内 `/bin/sh` 启动内部命令；运行中升级二进制后旧进程启动新版本内部命令的兼容性 |
+
 ## Rsync 剩余时间平滑与连续整体进度条（2026-10-18）
 
 范围：`internal/sync/process.go`、`internal/sync/runner_test.go`、`web/src/features/runs/Batches.vue`、`web/src/styles/global.css`、`docs/DESIGN.md`；`web/e2e/mirrordock.spec.ts` 只把 favicon 期望从 `?v=2` 改为 `?v=3`（跟随 671208a 的有意改动）。配置协议与 API 字段未改动。

@@ -8,11 +8,9 @@ import (
 	"io"
 	"math"
 	"mirrordock/internal/config"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -52,7 +50,7 @@ func TestProgressAndStop(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
 	defer cancel()
 	start := time.Now()
-	err := command(ctx, "sh", []string{"-c", "sleep 30"}, func(Progress) {}, io.Discard)
+	err := command(ctx, "sh", []string{"-c", "sleep 30"}, processEnv(), func(Progress) {}, io.Discard)
 	if err == nil || time.Since(start) > time.Second {
 		t.Fatal(err, time.Since(start))
 	}
@@ -78,34 +76,7 @@ func TestSystemRsyncProtocol(t *testing.T) {
 	os.Link(filepath.Join(source, "package.rpm"), filepath.Join(source, "hardlink.rpm"))
 	os.Symlink("package.rpm", filepath.Join(source, "link.rpm"))
 	os.WriteFile(filepath.Join(dest, "obsolete"), []byte("remove"), 0644)
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	port := listener.Addr().(*net.TCPAddr).Port
-	listener.Close()
-	conf := filepath.Join(dir, "rsyncd.conf")
-	contents := fmt.Sprintf("pid file = %s\nlog file = %s\nuse chroot = no\nuid =\ngid =\nmunge symlinks = no\n[repo]\npath = %s\nread only = yes\n", filepath.Join(dir, "daemon.pid"), filepath.Join(dir, "daemon.log"), source)
-	os.WriteFile(conf, []byte(contents), 0600)
-	cmd := exec.Command(binary, "--daemon", "--no-detach", "--address=127.0.0.1", fmt.Sprintf("--port=%d", port), "--config="+conf)
-	configureProcess(cmd)
-	if err = cmd.Start(); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { stopProcess(cmd.Process.Pid, true); cmd.Wait() })
-	ready := false
-	for range 100 {
-		conn, e := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 20*time.Millisecond)
-		if e == nil {
-			conn.Close()
-			ready = true
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	if !ready {
-		t.Fatal("daemon did not start")
-	}
+	port := startRsyncDaemon(t, binary, dir, source)
 	settings := config.Defaults().Settings
 	task := Task{Directory: dest, Candidate: fmt.Sprintf("rsync://127.0.0.1:%d/repo/", port), Settings: settings, Source: config.Source{Type: "rsync", Rsync: config.Rsync{UID: new(os.Getuid()), GID: new(os.Getgid())}}}
 	var log bytes.Buffer
@@ -203,7 +174,7 @@ func TestReposyncCommandKeepsNetworkDiagnosticsAndStopsOnPermanentErrors(t *test
 		if err := os.WriteFile(filepath.Join(dir, "dnf"), []byte(script), 0700); err != nil {
 			t.Fatal(err)
 		}
-		err := command(t.Context(), "dnf", nil, func(Progress) {}, io.Discard)
+		err := command(t.Context(), "dnf", nil, processEnv(), func(Progress) {}, io.Discard)
 		if err == nil || AsFailure(err).Retryable != tc.retry {
 			t.Fatal(tc.diagnostic, err)
 		}
@@ -223,7 +194,7 @@ func TestRsyncCommandRetainsAuthenticationFailureBeforeExitSummary(t *testing.T)
 	if err := os.WriteFile(filepath.Join(dir, "rsync"), []byte(script), 0700); err != nil {
 		t.Fatal(err)
 	}
-	err := command(t.Context(), "rsync", nil, func(Progress) {}, io.Discard)
+	err := command(t.Context(), "rsync", nil, processEnv(), func(Progress) {}, io.Discard)
 	if err == nil || AsFailure(err).Retryable || !strings.Contains(err.Error(), "auth failed") {
 		t.Fatal("lost auth diagnostic", err)
 	}

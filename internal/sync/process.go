@@ -123,6 +123,7 @@ type processOutput struct {
 	upstreamError string
 	networkError  string
 	localError    string
+	proxyError    string
 	err           error
 	cancel        context.CancelCauseFunc
 	progress      Progress
@@ -201,6 +202,9 @@ func (o *processOutput) scan(reader io.Reader) {
 		if localFailureLine(line) || (dnf && strings.Contains(strings.ToLower(line), "permission denied")) {
 			o.localError = line
 		}
+		if rsync && strings.HasPrefix(line, connectMarker) {
+			o.proxyError = line
+		}
 		if (rsync && rsyncPermanentLine(line)) || (dnf && reposyncPermanentLine(line)) {
 			o.upstreamError = line
 		}
@@ -271,10 +275,16 @@ func statNumber(line, prefix string) (int64, bool) {
 	return number, err == nil && number >= 0
 }
 
+// processEnv is the executor environment: the service's own, with a stable
+// locale so progress and diagnostics can be parsed.
+func processEnv() []string {
+	return append(os.Environ(), "LC_ALL=C", "LANG=C")
+}
+
 // command runs an executor in its own process group with output parsed for
 // progress and failure classification. Cancellation sends TERM to the group,
 // then KILL after a grace period.
-func command(ctx context.Context, name string, args []string, emit func(Progress), log io.Writer) error {
+func command(ctx context.Context, name string, args, env []string, emit func(Progress), log io.Writer) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -282,8 +292,7 @@ func command(ctx context.Context, name string, args []string, emit func(Progress
 	ctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
 	cmd := exec.Command(name, args...)
-	// Progress and diagnostics are parsed in a stable locale.
-	cmd.Env = append(os.Environ(), "LC_ALL=C", "LANG=C")
+	cmd.Env = env
 	configureProcess(cmd)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -334,6 +343,11 @@ func command(ctx context.Context, name string, args []string, emit func(Progress
 	switch {
 	case output.localError != "":
 		return &Failure{Code: "LOCAL_TRANSFER", Message: output.localError, ExitCode: code}
+	case output.proxyError != "":
+		if failure, ok := connectLineFailure(output.proxyError, code); ok {
+			return failure
+		}
+		return Classify(code, output.last)
 	case output.upstreamError != "":
 		return &Failure{Code: "UPSTREAM_ERROR", Message: output.upstreamError, SourceFailure: true, ExitCode: code}
 	case name == "dnf":

@@ -94,7 +94,7 @@ func TestTerminateStraysStopsOnlyWorkProcesses(t *testing.T) {
 func TestCommandStopsDescendantsAfterExit(t *testing.T) {
 	var log strings.Builder
 	// The background child closes the pipes so the shell exits immediately.
-	err := command(t.Context(), "sh", []string{"-c", "sleep 30 >/dev/null 2>&1 </dev/null & echo $!"}, func(Progress) {}, &log)
+	err := command(t.Context(), "sh", []string{"-c", "sleep 30 >/dev/null 2>&1 </dev/null & echo $!"}, processEnv(), func(Progress) {}, &log)
 	if err != nil {
 		t.Fatal(err)
 	}

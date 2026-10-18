@@ -530,6 +530,7 @@ func (e *Engine) Enqueue(sourceID, trigger string) (*Run, error) {
 	settings := c.Settings
 	settings.GitHub.Token = ""
 	settings.GitHub.Proxy = ""
+	settings.Rsync.Proxy = ""
 	settings.Notifications = nil
 	r := &Run{
 		SourceID:      source.ID,
@@ -1070,8 +1071,10 @@ func (e *Engine) execute(ctx context.Context, id int64, snapshot Snapshot) error
 		failure.Message = redact(failure.Message, secrets...)
 		roundRetryable = roundRetryable || failure.Retryable
 		rsync := source.Type == "rsync"
-		// Source-local permanent failures can still use another mirror.
-		if rsync && (failure.Retryable || failure.SourceFailure) && index+1 < len(candidates) {
+		// Source-local permanent failures can still use another mirror; a
+		// failed proxy would fail the same way for every other mirror.
+		nextMirror := rsync && !failure.ProxyFailure && (failure.Retryable || failure.SourceFailure)
+		if nextMirror && index+1 < len(candidates) {
 			continue
 		}
 		if !failure.Retryable && !(rsync && failure.SourceFailure && roundRetryable) {
@@ -1117,13 +1120,18 @@ func (e *Engine) attempt(
 	if err != nil {
 		return nil, nil, err
 	}
-	// Credentials are read at execution time; snapshots never contain them.
-	github := e.cfg.Current().Settings.GitHub
+	// Credentials and proxies are read at execution time; snapshots never
+	// contain them.
+	current := e.cfg.Current()
+	github := current.Settings.GitHub
 	settings := snapshot.Settings
 	settings.GitHub.Proxy = github.Proxy
-	secrets = append([]string{github.Token}, proxySecrets(github.Proxy)...)
-	writer := &redactedWriter{writer: log, secrets: secrets}
 	task := syncer.Task{Source: source, Settings: settings, Directory: work, Candidate: candidate, Token: github.Token}
+	if source.Type == "rsync" {
+		task.Proxy = rsyncProxy(current, source.ID)
+	}
+	secrets = slices.Concat([]string{github.Token}, proxySecrets(github.Proxy), proxySecrets(task.Proxy))
+	writer := &redactedWriter{writer: log, secrets: secrets}
 	attemptErr = e.runner.Run(ctx, task, e.progressReporter(id), writer)
 	closeErr := errors.Join(writer.Flush(), log.Close())
 	if attemptErr == nil {
@@ -1210,6 +1218,12 @@ func (e *Engine) scheduleRetry(id int64, snapshot Snapshot, failure *syncer.Fail
 	r := e.current[id]
 	allowed := int(snapshot.Settings.RetryCount)
 	if r.RetryCount >= allowed {
+		if failure.ProxyFailure {
+			return &syncer.Failure{
+				Code:    failure.Code,
+				Message: "代理不可用，重试次数已用尽；最近原因: " + failure.Message,
+			}
+		}
 		if snapshot.Source.Type == "rsync" {
 			return &syncer.Failure{
 				Code:    "SOURCE_EXHAUSTED",
@@ -1255,6 +1269,17 @@ func (e *Engine) waitRetry(ctx context.Context, id int64) error {
 	defer e.mu.Unlock()
 	e.current[id].RetryAt = time.Time{}
 	return e.save(e.current[id])
+}
+
+// rsyncProxy is the proxy of the source in the current configuration. The
+// worker checks that the source still exists before it runs; were it gone,
+// the global proxy is used rather than falling back to a direct connection.
+func rsyncProxy(c config.Config, sourceID string) string {
+	index := slices.IndexFunc(c.Sources, func(s config.Source) bool { return s.ID == sourceID })
+	if index < 0 {
+		return c.Settings.Rsync.Proxy
+	}
+	return c.Sources[index].RsyncProxy(c.Settings.Rsync)
 }
 
 // proxySecrets lists the proxy URL and its credentials for log redaction.

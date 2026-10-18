@@ -4,7 +4,7 @@ import { computed, ref } from 'vue'
 import { Plus, Trash2, Save } from '@lucide/vue'
 import Modal from '../../components/Modal.vue'
 import OptionCard from '../../components/OptionCard.vue'
-import type { Source } from '../../app/types'
+import type { RsyncProxyMode, Source } from '../../app/types'
 import { clone, state, saveConfiguration } from '../../app/state'
 import GitHubBatch from './GitHubBatch.vue'
 import { splitPatterns, staggerCrons, validateRows, type BatchRow } from './githubBatch'
@@ -55,6 +55,31 @@ const exclusions = ref((draft.value.exclude ?? []).join('\n'))
 const patterns = ref((draft.value.github_release.asset_patterns ?? []).join('\n'))
 const keys = ref((draft.value.reposync.gpg_keys ?? []).join('\n'))
 const architectures = ref((draft.value.reposync.architectures ?? []).join(', '))
+const proxyMode = ref<RsyncProxyMode>(draft.value.rsync.proxy_mode || 'global')
+const customProxy = ref(draft.value.rsync.proxy ?? '')
+const proxyModes = [
+  { value: 'global', label: '跟随全局' },
+  { value: 'direct', label: '直连' },
+  { value: 'custom', label: '自定义' },
+] satisfies { value: RsyncProxyMode; label: string }[]
+// Only the proxy host is shown, so credentials in the global URL stay out of view.
+function proxyHost(address: string) {
+  try {
+    const url = new URL(address)
+    return `${url.protocol}//${url.host}`
+  } catch {
+    return '已设置'
+  }
+}
+const proxyHint = computed(() => {
+  if (proxyMode.value === 'direct') return '此源不使用代理，即使系统设置了全局代理。'
+  if (proxyMode.value === 'custom')
+    return '仅此源使用，写法与系统设置中的全局代理相同；代理失败时本轮报错，不会自动直连。'
+  const global = state.config?.config.settings.rsync.proxy
+  return global
+    ? `当前全局代理：${proxyHost(global)}，可在系统设置的 Rsync 页修改。`
+    : '系统设置未配置全局代理，当前直连。'
+})
 const error = ref('')
 const busy = ref(false)
 const batchMode = ref(false)
@@ -134,6 +159,9 @@ async function save() {
         : source.type === 'reposync'
           ? { src1: upstreams.value[0]?.value.trim() ?? '' }
           : Object.fromEntries(upstreams.value.map((item) => [item.key, item.value.trim()]))
+    // Blank follows the global proxy and keeps the YAML free of a default.
+    source.rsync.proxy_mode = proxyMode.value === 'global' ? '' : proxyMode.value
+    source.rsync.proxy = proxyMode.value === 'custom' ? customProxy.value.trim() : ''
     source.github_release.asset_patterns = lines(patterns.value)
     source.reposync.gpg_keys = lines(keys.value)
     source.reposync.architectures = architectures.value
@@ -307,6 +335,23 @@ async function save() {
           /></label>
         </div>
         <small>指定 UID 通常需要接收端具有 root 权限；程序不会自动提权。</small>
+        <div class="form-grid">
+          <label
+            >代理 · proxy_mode<SelectField
+              v-model="proxyMode"
+              aria-label="代理"
+              :options="proxyModes" /></label
+          ><label v-if="proxyMode === 'custom'"
+            >自定义代理 · proxy<input
+              v-model="customProxy"
+              type="text"
+              required
+              autocomplete="off"
+              spellcheck="false"
+              placeholder="socks5://127.0.0.1:1080"
+          /></label>
+        </div>
+        <small>{{ proxyHint }}</small>
       </section>
       <section
         v-if="draft.type === 'github_release'"

@@ -392,3 +392,83 @@ func TestConcurrencyDefaultsValidationAndWriteback(t *testing.T) {
 		t.Fatal("concurrency missing from read API", err)
 	}
 }
+
+func TestRsyncProxyValidationAndResolution(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "config.yaml")
+	base := func(mode, proxy string) Config {
+		c := Defaults()
+		c.Auth = Auth{Username: "admin", Password: "fixture-password"}
+		c.Path, c.MirrorRoot = "./data", "./mirror"
+		c.Settings.Rsync.Proxy = "socks5h://user:global-secret@proxy.example:1080"
+		c.Sources = []Source{{
+			ID: "test", Name: "Test", Type: "rsync", Dest: "test",
+			Upstreams: map[string]string{"src1": "rsync://localhost/test/"},
+			Rsync:     Rsync{ProxyMode: mode, Proxy: proxy},
+		}}
+		return c
+	}
+	for _, valid := range []struct{ mode, proxy, want string }{
+		{"", "", "socks5h://user:global-secret@proxy.example:1080"},
+		{ProxyGlobal, "", "socks5h://user:global-secret@proxy.example:1080"},
+		{ProxyDirect, "", ""},
+		{ProxyCustom, "https://user:pass@proxy.example:443", "https://user:pass@proxy.example:443"},
+	} {
+		c := base(valid.mode, valid.proxy)
+		if err := c.Validate(file); err != nil {
+			t.Fatalf("valid mode %q rejected: %v", valid.mode, err)
+		}
+		if got := c.Sources[0].RsyncProxy(c.Settings.Rsync); got != valid.want {
+			t.Fatalf("mode %q resolved %q", valid.mode, got)
+		}
+	}
+	for _, invalid := range []struct{ mode, proxy string }{
+		{ProxyCustom, ""},
+		{ProxyCustom, "ftp://user:custom-secret@proxy:21"},
+		{ProxyDirect, "http://127.0.0.1:8081"},
+		{"", "http://127.0.0.1:8081"},
+		{"proxy", ""},
+	} {
+		if err := base(invalid.mode, invalid.proxy).Validate(file); err == nil || strings.Contains(err.Error(), "secret") {
+			t.Fatalf("invalid mode %q accepted or credential exposed: %v", invalid.mode, err)
+		}
+	}
+	c := base("", "")
+	c.Settings.Rsync.Proxy = "http://user:global-secret@proxy:99999"
+	if err := c.Validate(file); err == nil || !strings.Contains(err.Error(), "rsync.proxy") || strings.Contains(err.Error(), "secret") {
+		t.Fatal("invalid global rsync proxy accepted or exposed", err)
+	}
+}
+
+func TestRsyncProxyRoundTripsThroughYAML(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "config.yaml")
+	text := "# keep\nlisten: 127.0.0.1\nport: 8080\npath: ./data\nmirror_root: ./mirror\nauth:\n  username: admin\n  password: fixture-password\nsettings:\n  rsync:\n    proxy: socks5://127.0.0.1:1080\nsources:\n  - id: test\n    name: Test\n    type: rsync\n    enabled: true\n    dest: test\n    src1: rsync://localhost/test/\n    rsync:\n      proxy_mode: custom\n      proxy: http://user:custom-secret@127.0.0.1:8081\n  - id: plain\n    name: Plain\n    type: rsync\n    enabled: true\n    dest: plain\n    src1: rsync://localhost/plain/\n"
+	if err := os.WriteFile(file, []byte(text), 0600); err != nil {
+		t.Fatal(err)
+	}
+	m, err := Open(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	view := m.View()
+	if view.Config.Settings.Rsync.Proxy != "socks5://127.0.0.1:1080" || view.Config.Sources[0].Rsync.Proxy != "http://user:custom-secret@127.0.0.1:8081" {
+		t.Fatal("admin view must return rsync proxies for editing", view.Config.Settings.Rsync, view.Config.Sources[0].Rsync)
+	}
+	c := m.Current()
+	c.Sources[0].Rsync.ProxyMode, c.Sources[0].Rsync.Proxy = ProxyDirect, ""
+	if err = m.Save(c, view.Revision, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	written, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(written)
+	if strings.Contains(got, "custom-secret") || !strings.Contains(got, "proxy_mode: direct") || !strings.Contains(got, "proxy: socks5://127.0.0.1:1080") || !strings.Contains(got, "# keep") {
+		t.Fatal("rsync proxy not written back as edited", got)
+	}
+	// The plain source keeps following the global proxy without new keys.
+	if strings.Count(got, "proxy_mode") != 1 {
+		t.Fatal("default proxy mode written to YAML", got)
+	}
+}

@@ -307,7 +307,7 @@ test('management pagination covers complete history, filtering, page sizes, jump
     ])
     await page.getByRole('link', { name: '系统设置', exact: true }).click()
     await page.getByRole('tab', { name: '系统配置', exact: true }).click()
-    await expect(page.locator('.check-row')).toHaveCount(10)
+    await expect(page.locator('.check-row')).toHaveCount(11)
     await expect(page.locator('.check-row').filter({ hasText: 'RPM 公钥工具' })).toBeVisible()
     await expect(page.locator('.check-row').filter({ hasText: '发布目录接入' })).toContainText(
       '正常',

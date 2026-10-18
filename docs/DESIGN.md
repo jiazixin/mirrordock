@@ -40,7 +40,7 @@ flowchart LR
 
 用户确定的 `-f`/`--config` 协议优先于目录基线默认值；无参数读 cwd/config.yaml。相对路径以配置目录为基准，数据库为 `<path>/data.sqlite`。不恢复已删除的配置字段。监听、数据/镜像路径、TLS、auth、log 使用启动值；页面保存保留部署字段，外部修改需重载并按提示重启。
 
-保存通过 revision 同时检测其他管理员与磁盘编辑，保留 YAML 注释，临时文件写入/fsync/rename，文件权限 0600。源编辑器保存打开时的 revision，旧编辑不能覆盖新配置。Token 与通知凭据只返回存在标记，管理员密码不参与 JSON 序列化；**完整 GitHub 代理地址按已确认协议向登录管理员回填**。所有运行快照、审计与错误日志继续脱敏。
+保存通过 revision 同时检测其他管理员与磁盘编辑，保留 YAML 注释，临时文件写入/fsync/rename，文件权限 0600。源编辑器保存打开时的 revision，旧编辑不能覆盖新配置。Token 与通知凭据只返回存在标记，管理员密码不参与 JSON 序列化；**完整 GitHub 代理地址与 Rsync 全局/按源代理地址按已确认协议向登录管理员回填**。所有运行快照、审计与错误日志继续脱敏。
 
 账号来自 YAML，启动时内存 bcrypt，Cookie 会话 12h，HttpOnly/SameSite Strict，TLS 下 Secure。最多 32 会话，登录按连接 IP（IPv6 按 /64）每分钟最多 10 次，成功重置，最多 4096 桶且一分钟过期，满额淘汰最早窗口；不信任转发头，反代部署边界见 README。修改请求需要自定义头和匹配 Origin；管理 API no-store。SSE 最多 8 条、每秒推送，逐次校验会话，过期/退出终止流。各连接共用最多一秒的不可变序列化快照，查询与编码在缓存锁外进行；并发未命中合并为一次读取，等待读取可取消，失败不缓存，无客户端不主动查询。已登录的非 GET 请求结束后使快照失效并唤醒各连接立即推送；与写操作重叠的读取结果丢弃重读，客户端不会在写后收到写前快照。匿名登录不触发失效。前端连接 SSE 期间各源最新运行只取自事件流，刷新接口结果仅在未连接时使用。每客户端仍独立发送并验证会话。
 
@@ -59,6 +59,8 @@ interrupted 是可恢复状态，不进入最终通知结果流、失败统计�
 手动日志清理用开始时的最大任务 ID 固定扫描上界，按 ID 游标读取每页最多 100 个终态任务，不做 OFFSET 或全量 count。独立清理互斥与日志打开锁协调删除；每个任务在短暂 Engine.mu 内取得清理租约，文件删除与保存发生在锁外。相同 ID 的动作等待租约完成，其他任务继续执行；重新检查当前状态/working，避免删除已恢复任务的日志。请求取消/服务关闭终止后续工作，部分删除落库，删除/保存失败可重试；事实、通知结果和已打开导出的长度不删除或修改。外部备份中的日志不受页面清理影响。
 
 Rsync 使用系统 PATH 中现代 rsync，数字 srcN 顺序失败切换，包括永久性来源错误；本地磁盘/权限错误停止，校验不一致可重试，rsync 23/24 仍不视为成功。模块内子目录 URL 必须带尾斜杠。不通过 shell 执行用户命令。默认递归并保留链接/时间/权限/硬链接；partial-dir 与默认单文件临时替换用于任务工作目录，不使用 delay-updates 或 inplace，整体发布由镜像模块保证。固定排除 `.mirrordock*`，避免上游和 --delete 改写内部准备标记。UID/GID 独立可选，0 有效，明确范围及权限，不自动 sudo。
+
+Rsync 代理在每次尝试时从当前 YAML 解析：源 `rsync.proxy_mode` 为 direct 时直连，custom 时用源的 `rsync.proxy`，否则用 `settings.rsync.proxy`；快照只保留模式，清除两处地址。设置代理时为 rsync 注入 `RSYNC_CONNECT_PROG='<可执行文件>' rsync-connect`（rsync 先展开 `%H`/`%%`，故路径中的 `%` 写为 `%%`，再由 `/bin/sh -c` 执行；字符串只含单引号转义的可执行文件路径，配置值不经 shell）。代理 URL、`host:port` 目标与连接超时经 `MIRRORDOCK_RSYNC_*` 环境变量传入，进程参数不含凭据。内部命令在连接超时内完成 HTTP CONNECT（https 代理先 TLS，系统根证书校验）或 SOCKS5（RFC 1928/1929，socks5 与 socks5h 均交由代理解析主机名，与 GitHub transport 一致），之后不设截止时间，stdin/stdout 与隧道双向转发，rsync 结束发送后半关闭写端；`--timeout` 仍约束 I/O 空闲，`--contimeout` 不作用于该路径。内部命令与 rsync 同属任务进程组，随取消/终止一起结束。失败时在 stderr 输出带 `mirrordock rsync-connect:` 前缀与分类的诊断，执行器据此映射 `RSYNC_PROXY`：代理不可达可重试且 `ProxyFailure`，本轮不再切换备用来源；认证、协议或配置错误不可重试；代理拒绝目标（HTTP 403、SOCKS 规则拒绝）为不可重试的来源失败，其他目标连接失败为可重试的来源失败。rsync 环境始终移除继承的 `RSYNC_PROXY`、`RSYNC_CONNECT_PROG` 与 `MIRRORDOCK_RSYNC_*`，“直连”不受启动环境影响。
 
 Reposync 针对 DNF4，使用任务私有配置/缓存/RPM 密钥库，仅启用选定 repo；不修改宿主配置。开启 GPG 时先下载配置的公钥（每个最多 1 MiB、30 秒并受任务预算约束，拒绝 HTTPS 降级到 HTTP），用 rpmkeys 导入私有 installroot，再执行 reposync 包签名校验；不依赖插件自动导入。仅一个 src1，完整元数据与 newest_only 组合被拒绝；关闭元数据下载时按文件发布并移除旧 repodata，不承诺可安装仓库。私有 DNF 数据在任务 work 的隐藏子目录，执行结束清除，异常退出由重试/终态清理。GPG 仅声明包签名校验，不宣称元数据签名已验证。
 
@@ -121,6 +123,6 @@ Vue 以 app、features、components、layouts 分层，七类页面（含概览�
 ## 代码组织与供应链
 
 - 每个顶层声明之间留空行；超过约 120 列的条件、结构体字面量、参数表和 SQL 按语义分行，复杂判断提取为具名函数（例如 `config.Validate` 拆为服务、设置、路径、日志、TLS、源各自的校验函数，`runs.Engine.dispatch` 拆为出队、等待空间、启动执行、结果映射与重试调度）。变量名表达含义，单字母名只用于几行内的循环下标、方法接收者和 `err`/`ok` 等惯用名。
-- 子进程只通过参数数组调用 rsync、dnf、rpmkeys，不经过 shell；来源地址位于 `--` 之后。SQL 全部参数化，公开目录使用 `html/template`。
+- 子进程只通过参数数组调用 rsync、dnf、rpmkeys，不经过 shell；来源地址位于 `--` 之后。唯一例外是 rsync 按自身协议以 `/bin/sh -c` 执行 `RSYNC_CONNECT_PROG`，其内容固定为单引号转义的本程序路径加 `rsync-connect`，不含任何配置值。SQL 全部参数化，公开目录使用 `html/template`。
 - 依赖由 `go.sum`（对照 sum.golang.org）与 `package-lock.json`（integrity + 注册表签名）固定；容器基础镜像按 digest 固定，Web 依赖安装禁用 install script，Go 模块下载后 `go mod verify`。核验命令见 README“依赖来源校验”。
 - 容器默认以 UID/GID 10001 的 `mirrordock` 用户运行；systemd 模板在原有沙箱选项外增加内核模块/参数/cgroup 保护、`LockPersonality` 与 `RestrictRealtime`。

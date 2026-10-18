@@ -37,6 +37,8 @@ type Task struct {
 	Directory string
 	Candidate string
 	Token     string
+	// Proxy is the rsync proxy URL resolved at execution; blank is direct.
+	Proxy string
 }
 
 type Failure struct {
@@ -44,8 +46,11 @@ type Failure struct {
 	Message       string
 	Retryable     bool
 	SourceFailure bool
-	RetryAt       time.Time
-	ExitCode      int
+	// ProxyFailure means the proxy itself failed, so the other candidates,
+	// which use the same proxy, are not tried in this round.
+	ProxyFailure bool
+	RetryAt      time.Time
+	ExitCode     int
 }
 
 func (e *Failure) Error() string { return e.Code + ": " + e.Message }
@@ -60,9 +65,17 @@ type SystemRunner struct{}
 func (SystemRunner) Run(ctx context.Context, t Task, emit func(Progress), log io.Writer) error {
 	switch t.Source.Type {
 	case "rsync":
+		env, err := rsyncEnv(t)
+		if err != nil {
+			return err
+		}
+		if t.Proxy != "" {
+			proxy, _ := config.ParseProxyField("rsync.proxy", t.Proxy)
+			fmt.Fprintf(log, "经 %s 代理 %s 连接上游\n", proxy.Scheme, proxyAddress(proxy))
+		}
 		args := RsyncArgs(t)
 		fmt.Fprintf(log, "rsync %s\n", strings.Join(args, " "))
-		return command(ctx, "rsync", args, emit, log)
+		return command(ctx, "rsync", args, env, emit, log)
 	case "reposync":
 		return reposync(ctx, t, emit, log)
 	case "github_release":
@@ -254,7 +267,7 @@ func reposync(ctx context.Context, t Task, emit func(Progress), log io.Writer) e
 		args = append(args, "--arch="+architecture)
 	}
 	fmt.Fprintf(log, "dnf %s\n", strings.Join(args, " "))
-	return command(ctx, "dnf", args, emit, log)
+	return command(ctx, "dnf", args, processEnv(), emit, log)
 }
 
 // Reposync verifies against the installroot RPM database but does not import
@@ -313,7 +326,7 @@ func importRepoKeys(ctx context.Context, private string, keys []string, emit fun
 	if _, err := fmt.Fprintln(log, "rpmkeys: 将配置的公钥导入任务私有 RPM 数据库"); err != nil {
 		return err
 	}
-	return command(ctx, "rpmkeys", args, emit, log)
+	return command(ctx, "rpmkeys", args, processEnv(), emit, log)
 }
 
 func AsFailure(err error) *Failure {

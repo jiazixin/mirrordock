@@ -78,13 +78,15 @@ YAML
 
 Rsync 使用 `src1`、`src2` 等按数字升序尝试；各来源应为同一仓库布局。地址必须包含模块；模块根可为 `rsync://host/module`，模块内目录须以 `/` 结尾。每轮耗尽备用来源后才自动重试；本轮任一来源为网络/临时错误即重试整轮，所有来源都是认证、模块不存在等永久错误时直接失败。`exclude` 仅阻止同步，不删除以前已发布的匹配文件；未开启 `--delete-excluded`。`delete`、保留链接/时间/权限/硬链接默认 true；不默认保留上游属主或设备文件。`limit_mb` 是单个上游任务的十进制 MB/s，0 不限速，不限制公开下载。UID/GID 可分别填写，0 有效，范围 0–4294967294；跨身份映射依赖服务用户权限，程序不提权。
 
+Rsync 代理：`settings.rsync.proxy` 为全局代理，写法与 GitHub 代理相同（HTTP/HTTPS/SOCKS5/SOCKS5h，可带 `用户名:密码@`，特殊字符 URL 编码），空字符串直连；系统设置 Rsync 页编辑。每个 rsync 源的 `rsync.proxy_mode` 可省略/`global`（跟随全局）、`direct`（直连，即使设了全局代理）或 `custom`（使用该源 `rsync.proxy`，仅此模式可填）；源编辑器提供同样三选一，切回其他模式保存时清除自定义地址。rsync 通过 `RSYNC_CONNECT_PROG` 启动本程序的内部命令 `mirrordock rsync-connect`，由它经代理连接 `rsync://` 来源的 daemon 端口（默认 873）并转发数据；HTTP/HTTPS 代理须允许 CONNECT 到该端口。代理地址、目标与连接超时（沿用 `connect_timeout`）经环境变量传给内部命令，不出现在进程参数中；rsync 不再读取启动环境中的 `RSYNC_PROXY`、`RSYNC_CONNECT_PROG`。代理本身不可达时可自动重试，但不切换备用来源（它们经过同一代理）；代理认证或协议错误直接失败；代理已连通但上游拒绝/不可达时按普通来源失败切换下一来源。代理失败不绕过代理。代理与凭据在每次实际执行时读取，不进入运行快照、审计或日志；任务日志只记录代理协议与主机端口。需要 rsync 3.0+ 的 `RSYNC_CONNECT_PROG` 支持（部署要求本已是 3.1+）。
+
 Reposync 使用单个 `src1`，生成任务私有 repo、缓存和密钥库，不修改 `/etc/yum.repos.d`。`download_metadata=false` 为仅包文件模式，可发布下载文件，但不能直接用作 DNF 仓库，并会去除上次遗留的 repodata。完整镜像要求下载元数据，并拒绝 `download_metadata=true` 与 `newest_only=true` 组合。GPG 包签名检查不等于仓库元数据签名验证；参数和真实发行版安装仍须在目标 EL 验收。
 
 配置中的来源地址和 `gpg_keys` 为公开地址，不支持 URL 鉴权，不能包含用户信息、查询参数或片段；这些地址会作为运行事实保存。GitHub 从 API 获取的临时签名资产 URL 不受此配置限制。运行快照仍防御性脱敏。数据库结构版本记录在 SQLite `PRAGMA user_version`（1.0 为 1）；程序拒绝打开版本更高的数据库。以后改变表结构必须提升版本并附带显式迁移步骤。
 
 GitHub 按发布时间选最近 N 个符合条件的 Release，仅下载 assets，不下载自动源码 ZIP/TAR。源内 `release_count: 0` 继承系统值；glob 可筛选附件。tag 和附件不得使用 `.mirrordock*`、`.rsync-partial`、`.~tmp~` 或 `*.part` 等内部保留名称。大小、身份及可用 digest 校验后才复用或续传，Range 不兼容时重新下载。正文读取连续 5 分钟无数据会中止并保留 `.part`，允许有限重试/续传。开启旧版本清理后，仅在所有选中附件下载成功后清除旧版本及保留版本内已删除、改名或不再匹配的附件。为保证发布时间选择及附件完整性，仍分页查询 Release 和附件，超过 100 页明确失败。
 
-GitHub Token 直接存放 `settings.github.token`，读取 API 仅返回存在标记，页面留空保留，显式清空删除。`settings.github.proxy` 支持 HTTP/HTTPS/SOCKS5/SOCKS5h，API 和附件共用，空字符串直连，不读取代理环境变量；代理失败不绕过代理。HTTP/mixed 入口用 `http://`，`https://` 要求代理入口自身支持 TLS；特殊字符需 URL 编码。**按已确认协议，受登录保护的 API 返回完整代理地址，页面明文回填；其认证信息仍不进入运行快照、审计或日志。** Token 与代理在每次实际执行时读取。上述直连规则仅针对 GitHub；DNF、rsync 子进程继承启动环境，GPG 公钥 HTTP 下载使用环境代理。
+GitHub Token 直接存放 `settings.github.token`，读取 API 仅返回存在标记，页面留空保留，显式清空删除。`settings.github.proxy` 支持 HTTP/HTTPS/SOCKS5/SOCKS5h，API 和附件共用，空字符串直连，不读取代理环境变量；代理失败不绕过代理。HTTP/mixed 入口用 `http://`，`https://` 要求代理入口自身支持 TLS；特殊字符需 URL 编码。**按已确认协议，受登录保护的 API 返回完整代理地址，页面明文回填；其认证信息仍不进入运行快照、审计或日志。** Token 与代理在每次实际执行时读取。上述直连规则针对 GitHub，rsync 代理见上文“Rsync 代理”；DNF 子进程继承启动环境，GPG 公钥 HTTP 下载使用环境代理。
 
 ### 日志与 TLS
 
@@ -204,6 +206,6 @@ test-results/            忽略的 Go/OCR/构建报告
 | 基线规则 | 实际行为 | 原因与依据 | 适用范围 / 重新评估条件 |
 | --- | --- | --- | --- |
 | §7.1 配置入口与覆盖 | -f/--config；默认 cwd/config.yaml；无字段环境覆盖 | 用户确认的 YAML 协议 | 本程序；仅用户要求改变时评估 |
-| §7.1 密钥注入 | GitHub Token 直接 YAML；通知凭据 YAML 密文；代理 URL 管理端回填 | 已确认配置与代理编辑协议 | 配置 API/任务；凭据协议改变时评估 |
+| §7.1 密钥注入 | GitHub Token 直接 YAML；通知凭据 YAML 密文；GitHub/Rsync 全局与按源代理 URL 管理端回填 | 已确认配置与代理编辑协议（Rsync 代理沿用 GitHub 代理样式） | 配置 API/任务；凭据协议改变时评估 |
 | §11 工具必需路径 | web/embed.go 嵌入 web/dist | Go embed 与 Vite 的实际构建边界 | Web 资源；交付方式改变时评估 |
 | §7.2 日志位置 | log.path 可为部署绝对路径或相对配置目录 | 已确认顶层 log 字段；验证与镜像/敏感路径隔离 | 程序日志；日志协议改变时评估 |

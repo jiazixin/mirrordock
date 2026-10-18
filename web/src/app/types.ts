@@ -1,4 +1,5 @@
 export type SourceType = 'rsync' | 'reposync' | 'github_release'
+export type RsyncProxyMode = 'global' | 'direct' | 'custom'
 export interface Source {
   id: string
   name: string
@@ -15,6 +16,8 @@ export interface Source {
     delete: boolean | null
     uid: number | null
     gid: number | null
+    proxy_mode?: '' | RsyncProxyMode
+    proxy?: string
   }
   reposync: {
     repo_id: string
@@ -43,7 +46,7 @@ export interface Configuration {
     retry_count: number
     task_timeout: string
     concurrency: { rsync: number; reposync: number; github_release: number }
-    rsync: { io_timeout: string; connect_timeout: string; limit_mb: number }
+    rsync: { io_timeout: string; connect_timeout: string; limit_mb: number; proxy: string }
     github: {
       release_count: number
       include_prereleases: boolean

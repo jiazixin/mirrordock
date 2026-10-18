@@ -5,7 +5,10 @@ import (
 	"net/url"
 )
 
+// publicSource is the source as stored in a run snapshot. A custom rsync proxy
+// is read again at execution and may carry credentials, so it is dropped.
 func publicSource(source config.Source) config.Source {
+	source.Rsync.Proxy = ""
 	source.Upstreams = cloneAddresses(source.Upstreams)
 	source.RepoSync.GPGKeys = append([]string(nil), source.RepoSync.GPGKeys...)
 	for i, address := range source.RepoSync.GPGKeys {
