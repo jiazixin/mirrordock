@@ -455,7 +455,7 @@ onBeforeUnmount(() => {
             <table>
               <thead>
                 <tr>
-                  <th class="text-left">同步源</th>
+                  <th>同步源</th>
                   <th>运行次数</th>
                   <th>成功率</th>
                   <th>平均耗时</th>
@@ -469,7 +469,7 @@ onBeforeUnmount(() => {
                   v-for="item in data.sources"
                   :key="item.id"
                 >
-                  <td class="text-left">
+                  <td>
                     <strong>{{ item.name }}</strong
                     ><small>{{ item.id }}</small>
                   </td>
@@ -802,18 +802,18 @@ i {
 }
 .source-ranking table {
   min-width: 740px;
+  table-layout: fixed;
 }
 .source-ranking th,
 .source-ranking td {
   text-align: center;
 }
 .source-ranking th:first-child {
-  width: 25%;
+  width: 220px;
 }
 .source-ranking th:first-child,
 .source-ranking td:first-child {
   padding-left: 24px;
-  text-align: left;
 }
 .source-ranking th:last-child,
 .source-ranking td:last-child {
@@ -823,9 +823,8 @@ i {
 .source-ranking td:first-child small {
   overflow-wrap: anywhere;
 }
-.source-ranking td.ranking-empty {
+.ranking-empty {
   padding: 32px;
-  text-align: center;
   color: var(--t3);
 }
 .analytics-note {
