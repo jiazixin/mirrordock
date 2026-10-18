@@ -306,6 +306,7 @@ code {
 }
 .sidebar-foot .mirror-link {
   display: flex;
+  justify-content: center;
   padding: 14px 8px;
   border-top: 1px solid var(--line);
   font-size: 13.5px;

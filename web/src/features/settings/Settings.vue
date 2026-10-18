@@ -304,10 +304,9 @@ async function save() {
           <span class="setting-index">03 · 网络</span>
           <h3>下载代理</h3>
           <p>Rsync 来源默认经此代理连接上游。</p>
-          <small
-            >单个同步源可选择跟随全局、直连或自定义代理。HTTP/HTTPS 代理须允许 CONNECT
-            到上游端口（默认 873）；代理失败时本轮报错，不会自动直连。</small
-          >
+          <small>同步源可单独选择跟随全局、直连或自定义。</small>
+          <small>HTTP(S) 代理须允许 CONNECT 到 rsync 端口。</small>
+          <small>代理失败时本轮报错，不回退直连。</small>
         </div>
         <div class="setting-controls">
           <label
@@ -317,10 +316,7 @@ async function save() {
               autocomplete="off"
               spellcheck="false"
               placeholder="socks5://127.0.0.1:1080"
-            /><small
-              >支持
-              http://、https://、socks5://、socks5h://，可带用户名和密码；留空并保存即直连。保存后对下一次执行生效。</small
-            ></label
+            /><small>支持 http、https、socks5、socks5h，可带账号密码。</small></label
           >
         </div>
       </article>
@@ -512,6 +508,10 @@ async function save() {
 }
 .setting-description small {
   display: block;
+}
+.setting-row small {
+  word-break: keep-all;
+  overflow-wrap: anywhere;
 }
 .setting-controls {
   display: flex;
