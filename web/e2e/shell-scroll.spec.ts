@@ -46,7 +46,7 @@ test('desktop sidebar stays put and only the content column scrolls', async ({ p
     await page.getByLabel('用户名', { exact: true }).fill('admin')
     await page.getByLabel('管理员密码').fill('shell-scroll-fixture-password')
     await page.getByRole('button', { name: '登录管理台' }).click()
-    await expect(page.locator('h1')).toContainText('Rsync 分析')
+    await expect(page.locator('h1')).toContainText('数据分析')
 
     const main = page.locator('.main-shell')
     const positions = () =>

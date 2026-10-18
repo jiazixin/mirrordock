@@ -28,9 +28,9 @@ const reposync = computed(() => props.kind === 'reposync')
 const kindInfo = computed(
   () =>
     ({
-      rsync: { title: 'Rsync 分析', insight: '来源可靠性', icon: GitBranch },
-      reposync: { title: 'Reposync 分析', insight: '执行与重试', icon: RefreshCw },
-      github_release: { title: 'Release 分析', insight: '资产完成与复用', icon: ArrowDownToLine },
+      rsync: { insight: '来源可靠性', icon: GitBranch },
+      reposync: { insight: '执行与重试', icon: RefreshCw },
+      github_release: { insight: '资产完成与复用', icon: ArrowDownToLine },
     })[props.kind],
 )
 const trendMetrics = computed(() =>
@@ -138,8 +138,7 @@ onBeforeUnmount(() => {
   <section class="analytics-page">
     <header class="page-heading">
       <h1>
-        {{ kindInfo.title
-        }}<span
+        数据分析<span
           class="title-dot"
           aria-hidden="true"
           >.</span
