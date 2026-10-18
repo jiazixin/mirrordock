@@ -522,6 +522,10 @@ func (c Config) validateTLS(file, mirrorRoot string) error {
 // reservedTopLevel lists the first dest segments owned by the service itself.
 var reservedTopLevel = []string{"admin", "api", "favicon.ico"}
 
+// ReservedTopLevel reports whether a first path segment is routed to the
+// service itself, so the mirror root can never serve it.
+func ReservedTopLevel(segment string) bool { return slices.Contains(reservedTopLevel, segment) }
+
 func validateSources(sources []Source, mirrorRoot string) error {
 	ids := map[string]bool{}
 	dests := []string{}
@@ -576,7 +580,7 @@ func (s Source) validateDest() error {
 		return fmt.Errorf("%s 的 dest 必须是规范相对目录", s.ID)
 	}
 	first, _, _ := strings.Cut(s.Dest, "/")
-	if slices.Contains(reservedTopLevel, first) {
+	if ReservedTopLevel(first) {
 		return fmt.Errorf("%s 的 dest 包含保留路径", s.ID)
 	}
 	for segment := range strings.SplitSeq(s.Dest, "/") {

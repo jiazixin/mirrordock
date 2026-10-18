@@ -71,6 +71,7 @@ type Manager struct {
 	Root          string
 	store         *database.Store
 	table         atomic.Pointer[routes]
+	dests         atomic.Pointer[map[string]bool] // configured dests, routed or not
 	retired       []*opened
 	active        atomic.Int64
 	gates         chan struct{}
@@ -812,9 +813,12 @@ func (m *Manager) Restrict(sources []config.Source) {
 
 func (m *Manager) restrictLocked(sources []config.Source) {
 	allowed := map[string]string{}
+	dests := map[string]bool{}
 	for _, s := range sources {
 		allowed[s.Dest] = s.ID
+		dests[s.Dest] = true
 	}
+	m.dests.Store(&dests)
 	next := &routes{entries: map[string]*opened{}}
 	for dest, route := range m.table.Load().entries {
 		if allowed[dest] == route.Publication.SourceID {

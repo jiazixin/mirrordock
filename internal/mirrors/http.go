@@ -128,7 +128,7 @@ func (m *Manager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	m.routeMu.Unlock()
 	if entry == nil {
-		m.virtual(w, r, requested, table)
+		m.static(w, r, requested, table)
 		return
 	}
 	defer m.release(entry)
@@ -167,6 +167,12 @@ func (m *Manager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		m.directory(w, r, file, entry)
 		return
 	}
+	m.serveFile(w, r, file, st, generation, rel)
+}
+
+// serveFile sends a regular file opened inside a generation, or inside the
+// mirror root for static content; generation scopes its cached metadata.
+func (m *Manager) serveFile(w http.ResponseWriter, r *http.Request, file *os.File, st os.FileInfo, generation, rel string) {
 	if !st.Mode().IsRegular() {
 		http.NotFound(w, r)
 		return
@@ -262,59 +268,6 @@ func (w *countWriter) ReadFrom(r io.Reader) (int64, error) {
 	return n, err
 }
 
-// virtual lists the destination directories above published sources, such
-// as the root page or "/el/" when sources use "el/9" and "el/10".
-func (m *Manager) virtual(w http.ResponseWriter, r *http.Request, p string, table *routes) {
-	if r.Method != "HEAD" {
-		if !m.acquireListing(w) {
-			return
-		}
-		defer func() { <-m.listingGates }()
-	}
-	children := map[string]bool{}
-	prefix := p
-	if prefix != "" {
-		prefix += "/"
-	}
-	for dest := range table.entries {
-		if strings.HasPrefix(dest, prefix) {
-			tail := strings.TrimPrefix(dest, prefix)
-			first, _, _ := strings.Cut(tail, "/")
-			children[first] = true
-		}
-	}
-	if len(children) == 0 && p != "" {
-		http.NotFound(w, r)
-		return
-	}
-	if !strings.HasSuffix(r.URL.Path, "/") {
-		http.Redirect(w, r, r.URL.EscapedPath()+"/", 301)
-		return
-	}
-	if r.Method == "HEAD" {
-		renderListing(w, r, nil, false)
-		return
-	}
-	items := []listingItem{}
-	var infos map[string]SourceListingInfo
-	if m.ListingInfo != nil {
-		for name := range children {
-			if table.entries[prefix+name] != nil {
-				infos = m.ListingInfo(r.Context())
-				break
-			}
-		}
-	}
-	for name := range children {
-		item := newListingItem(name, r.URL.EscapedPath()+url.PathEscape(name)+"/", true, nil)
-		if entry := table.entries[prefix+name]; entry != nil {
-			item = projectItem(item, entry.Publication, infos[entry.Publication.SourceID])
-		}
-		items = append(items, item)
-	}
-	renderListing(w, r, items, false)
-}
-
 func (m *Manager) directory(w http.ResponseWriter, r *http.Request, f *os.File, publications ...*opened) {
 	if r.Method == "HEAD" {
 		renderListing(w, r, nil, false)
@@ -324,38 +277,15 @@ func (m *Manager) directory(w http.ResponseWriter, r *http.Request, f *os.File, 
 		return
 	}
 	defer func() { <-m.listingGates }()
-	// Bound retained entries; private files do not consume the public quota.
-	entries := []os.DirEntry{}
-	for len(entries) <= maxListedEntries {
-		if r.Context().Err() != nil {
-			return
-		}
-		batch, err := f.ReadDir(128)
-		if err != nil && err != io.EOF {
-			http.Error(w, "directory unavailable", 500)
-			return
-		}
-		for _, entry := range batch {
-			if !hidden(entry.Name()) {
-				entries = append(entries, entry)
-			}
-		}
-		if err == io.EOF {
-			break
-		}
-	}
-	more := len(entries) > maxListedEntries
-	if more {
-		entries = entries[:maxListedEntries]
-	}
-
-	items := []listingItem{}
 	var publication Publication
 	if len(publications) > 0 {
 		publication = publications[0].Publication
 	}
 	releaseRoot := publication.Type == "github_release" && strings.Trim(r.URL.Path, "/") == publication.Dest
-	for _, entry := range entries {
+	items, more, err := readListing(r, f, maxListedEntries, func(entry os.DirEntry) (listingItem, bool) {
+		if hidden(entry.Name()) {
+			return listingItem{}, false
+		}
 		link := r.URL.EscapedPath() + url.PathEscape(entry.Name())
 		if entry.IsDir() {
 			link += "/"
@@ -368,7 +298,41 @@ func (m *Manager) directory(w http.ResponseWriter, r *http.Request, f *os.File, 
 				item.Bytes, item.Size = release.Bytes, fileSize(release.Bytes)
 			}
 		}
-		items = append(items, item)
+		return item, true
+	})
+	if err != nil {
+		if r.Context().Err() == nil {
+			http.Error(w, "directory unavailable", 500)
+		}
+		return
 	}
 	renderListing(w, r, items, more)
+}
+
+// readListing maps the entries of f to at most limit items, reading until one
+// more is found; entries that item rejects do not consume the public quota.
+func readListing(r *http.Request, f *os.File, limit int, item func(os.DirEntry) (listingItem, bool)) ([]listingItem, bool, error) {
+	items := []listingItem{}
+	for len(items) <= limit {
+		if err := r.Context().Err(); err != nil {
+			return nil, false, err
+		}
+		batch, err := f.ReadDir(128)
+		if err != nil && err != io.EOF {
+			return nil, false, err
+		}
+		for _, entry := range batch {
+			if listed, ok := item(entry); ok {
+				items = append(items, listed)
+			}
+		}
+		if err == io.EOF {
+			break
+		}
+	}
+	more := len(items) > limit
+	if more {
+		items = items[:limit]
+	}
+	return items, more, nil
 }

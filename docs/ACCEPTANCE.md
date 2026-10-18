@@ -1,5 +1,22 @@
 # 验收记录
 
+## 镜像根配置外内容无条件公开（2026-10-18）
+
+范围：新增 `internal/mirrors/static.go`、`static_test.go`；修改 `internal/mirrors/http.go`（抽出 `serveFile`/`readListing`，删除只列路由的 `virtual`）、`mirrors.go`（保存已配置 dest 集合）、`internal/config/config.go`（导出 `ReservedTopLevel`）、README、DESIGN。用户确定：放进镜像根即公开，不设开关、不隐藏点文件、不为误放兜底；只保留保护程序正确性的排除（`.mirrordock`、同步临时名、保留顶级路由、已配置 dest、越出镜像根）。
+
+- 未命中发布路由的请求由静态区从镜像锚点 os.Root 读取；程序逐段解析符号链接，任一步进入排除路径即 404，打开后用 SameFile 核对解析时的 lstat。已删除源的残留别名、指向配置源的链接无法经静态区进入发布代。
+- 已配置 dest 的上级目录合并列出发布项目与磁盘文件；项目始终列出，文件分享剩余的 1000 项名额（审查发现的问题，已修复）。
+
+| 检查 | 结果 |
+| --- | --- |
+| `npm --prefix web run format:check` / `npm --prefix web run build` | 通过（本次无前端源码改动） |
+| `go vet ./...` | 通过 |
+| `go test -race -count=1 ./...`（`MIRRORDOCK_TEST_RSYNC=.cache/rsync/rsync-3.5.1/rsync`） | 9 个包通过；320 个测试（含子测试）通过，0 失败，0 跳过，无 data race |
+| 新增 `static_test.go` | 首页合并项目/静态目录/文件/点文件，隐藏 `.mirrordock`、`admin`、`*.part`；下载、HEAD、Range、目录重定向；改名替换后内容与 ETag 更新、新文件无需重载即列出；相对链接可跟随且按目标类型列出，指向配置源、`.mirrordock`、绝对路径、越界和自环的链接 404 且不列出；未发布/校验失败的 dest（含嵌套 `el/9`）404 且不列出，上级目录其他文件可见；移除源后残留别名 404；FIFO 不列出不提供；超过 1000 项时项目仍列出并提示截断。变异检查：去掉 dest 精确匹配后用例失败 |
+| E2E 全量（scratchpad 临时二进制，rsync 3.5.1） | 19 通过、0 跳过 |
+| open-code-review | 托管模式，未调用外部 LLM；`ocr delegate preview/rule` 选出 4/4 可审文件（Go 组），覆盖率 100%；排除的 README、DESIGN（unsupported_ext）与 `static_test.go`（default_path）已人工核对。发现 1 项中危并修复：上级目录静态条目超过 1000 时，排序截断可能挤掉发布项目 |
+| 未执行 | Linux 实机与真实发行版验收；静态区 sendfile 命中未做系统调用观测（与发布文件共用 `serveFile`，未单独验证）；解析后到打开前的替换只做 SameFile 核对，未做并发竞态压测 |
+
 ## 公开目录“管理后台”链接与管理台侧栏样式统一（2026-10-18）
 
 范围：修改 `internal/mirrors/listing.css`、DESIGN。用户选定：前台“管理后台”沿用管理台侧栏“镜像目录”链接的样式（`--brand` 绿、600 字重、13.5px、悬停下划线），仍在当前页打开、不带 ↗ 图标；去掉原灰字与浅绿底悬停块。
