@@ -172,6 +172,15 @@ test('public directory layout, icons, search, sorting, unpaginated and safe file
       const pageTitle = publicPage.getByRole('heading', { level: 1 })
       await expect(pageTitle).toHaveAccessibleName('镜像目录')
       await expect(navigation).toHaveCount(0)
+      await expect(publicPage.getByRole('link', { name: '管理后台', exact: true })).toHaveAttribute(
+        'href',
+        '/admin/',
+      )
+      // The public context has no session, so the admin entry lands on the login form.
+      await publicPage.getByRole('link', { name: '管理后台', exact: true }).click()
+      await expect(publicPage.getByRole('button', { name: '登录管理台' })).toBeVisible()
+      await publicPage.goBack()
+      await expect(pageTitle).toHaveAccessibleName('镜像目录')
       await expect(
         publicPage.locator(
           '.brand-caption, .public-label, .parent-link, .directory-slash, .action',
@@ -200,7 +209,8 @@ test('public directory layout, icons, search, sorting, unpaginated and safe file
       const rows = publicPage.locator('#file-rows tr:visible')
       await expect(rows).toHaveCount(15)
       await expect(rows.first()).toContainText('docs')
-      await expect(publicPage.locator('.file-icon.folder')).toHaveCount(3)
+      await expect(publicPage.locator('tr.is-dir .dir-slash')).toHaveCount(3)
+      await expect(publicPage.locator('tr.is-dir .file-icon')).toHaveCount(0)
       await expect(publicPage.locator('.file-icon.package')).toHaveCount(2)
       await expect(publicPage.locator('.file-icon.archive')).toHaveCount(3)
       await expect(rows.filter({ hasText: 'manifest.json' })).toContainText('6.0 KiB')

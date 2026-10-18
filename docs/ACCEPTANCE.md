@@ -1,5 +1,21 @@
 # 验收记录
 
+## 公开目录页头管理入口与目录行去图标（2026-10-18）
+
+范围：修改 `internal/mirrors/listing.html`、`listing.css`、`listing.go`、DESIGN；测试 `internal/mirrors/listing_test.go`、`web/e2e/public-directory.spec.ts`。用户要求：前台右上角“软件源镜像”改为进入后台的入口，未登录到登录页；目录行不要文件夹图标，文件图标保留。
+
+- 页头：静态文字改为指向 `/admin/` 的“管理后台”链接（悬停浅绿底）。管理台未登录时本来就显示登录表单，后端与路由未改。
+- 目录行：不再渲染 `file-icon folder`，改为名称后接浅色、`aria-hidden` 的“/”（与常见镜像站一致，链接可访问名仍为目录名）；`tr.is-dir` 在手机卡片布局中取消 34px 图标占位，使第二行与名称对齐。文件行的 Phosphor 图标与配色不变；空目录提示的文件夹插图保留。
+
+| 检查 | 结果 |
+| --- | --- |
+| `npm --prefix web run format:check` / `npm --prefix web run build` | 通过 |
+| `go vet ./internal/mirrors/`、`go test -count=1 ./internal/mirrors/ ./internal/app/` | 通过；新增断言：页头链接、`is-dir` 行与“/”标记存在，且无 `file-icon folder` |
+| `public-directory.spec.ts`（scratchpad 临时二进制） | GitHub 项目用例通过；1440/375 截图核对目录行、项目表与页头。首例（含新加的“管理后台”点击到登录页、目录行无图标断言）需 `MIRRORDOCK_TEST_RSYNC`，本机仅 openrsync，**跳过未执行** |
+| 混合目录（3 目录 + 6 文件）渲染 | 用临时测试渲染模板后以 Playwright 截 1280/375 图人工核对，临时文件已删除 |
+| open-code-review | 托管模式，未调用外部 LLM；`ocr delegate preview/rule` 选出 3/3 可审文件（Go 组 1、通用组 2），由当前会话审查，覆盖率 100%；排除的 `listing_test.go`、`public-directory.spec.ts`（default_path）与 DESIGN（unsupported_ext）已人工核对。无发现：模板仍经 `html/template` 转义，脚本未变故 CSP 哈希不变，不涉及下载热路径 |
+| 未执行 | 依赖现代 rsync 的 E2E；其余 E2E 未全量重跑 |
+
 ## 概览进行中统计对齐与侧栏底部精简（2026-10-18）
 
 范围：修改 `web/src/features/overview/Overview.vue`、`web/src/layouts/Shell.vue`、`web/src/styles/global.css`、DESIGN；测试 `web/e2e/overview-filter.spec.ts`。用户要求：首页“进行中”的实际接收/已运行/预算剩余/进度四项摊开；侧栏底部去掉“实时推送已连接”，只留“镜像目录”跳转。

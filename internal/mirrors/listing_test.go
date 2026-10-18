@@ -55,6 +55,14 @@ func TestListingEscapingBreadcrumbsAndScriptPolicy(t *testing.T) {
 			t.Errorf("missing escaped content: %s", want)
 		}
 	}
+	for _, want := range []string{`<a class="admin-link" href="/admin/">`, `<tr class="is-dir" data-name="folder"`, `<span class="filename">folder</span><span class="dir-slash" aria-hidden="true">/</span>`} {
+		if !strings.Contains(html, want) {
+			t.Errorf("missing directory or header markup: %s", want)
+		}
+	}
+	if strings.Contains(html, `file-icon folder`) {
+		t.Error("directory rows must not render a folder icon")
+	}
 	if strings.Contains(html, "<unsafe>") || strings.Index(html, `data-name="folder"`) > strings.Index(html, `data-name="a&lt;`) {
 		t.Fatal("unescaped markup or files before directories")
 	}

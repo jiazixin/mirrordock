@@ -15,7 +15,7 @@
     <a class="brand" href="/">
       <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 17V7l7 7 7-7v10"/></svg></span>MirrorDock
     </a>
-    <span class="site-caption">软件源镜像</span>
+    <a class="admin-link" href="/admin/">管理后台</a>
   </div>
 </header>
 <main class="site-wrap">
@@ -98,10 +98,13 @@
 </thead>
 <tbody id="file-rows">
 {{- range .Items}}
-<tr data-name="{{.Name}}" data-kind="{{.Kind}}" data-group="{{.Group}}" data-dir="{{.Dir}}" data-bytes="{{.Bytes}}"
+<tr{{if .Dir}} class="is-dir"{{end}} data-name="{{.Name}}" data-kind="{{.Kind}}" data-group="{{.Group}}" data-dir="{{.Dir}}" data-bytes="{{.Bytes}}"
     data-modified="{{.Timestamp}}" data-status="{{.Status}}" data-last="{{.LastTimestamp}}" data-next="{{.NextTimestamp}}">
   <td class="name">
-    <a href="{{.URL}}" title="{{.Name}}"><span class="file-icon {{.Icon}}">{{template "icon" .Icon}}</span><span class="filename">{{.Name}}</span></a>
+    <a href="{{.URL}}" title="{{.Name}}">
+      {{- if .Dir}}<span class="filename">{{.Name}}</span><span class="dir-slash" aria-hidden="true">/</span>
+      {{- else}}<span class="file-icon {{.Icon}}">{{template "icon" .Icon}}</span><span class="filename">{{.Name}}</span>{{end -}}
+    </a>
   </td>
 {{- if $.Projects}}
   <td class="sync-status">

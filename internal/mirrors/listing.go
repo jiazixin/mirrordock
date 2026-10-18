@@ -170,7 +170,7 @@ func newListingItem(name, link string, dir bool, info os.FileInfo) listingItem {
 		Dir:      dir,
 	}
 	if dir {
-		item.Kind, item.Group, item.Icon = "目录", "folder", "folder"
+		item.Kind, item.Group, item.Icon = "目录", "folder", ""
 	}
 	if info == nil {
 		return item

@@ -115,9 +115,16 @@ svg {
   height:16px;
   stroke-width:3
 }
-.site-caption {
+.admin-link {
+  margin-right:-10px;
+  padding:6px 10px;
+  border-radius:8px;
   font-size:13px;
-  color:var(--t3)
+  color:var(--t2)
+}
+.admin-link:hover {
+  color:var(--brand);
+  background:var(--brand-soft)
 }
 
 /* Page heading */
@@ -392,6 +399,12 @@ tbody tr:hover {
   text-overflow:ellipsis;
   white-space:nowrap
 }
+/* Directories follow the mirror convention of a trailing slash instead of an icon. */
+.dir-slash {
+  margin-left:-10px;
+  font-weight:500;
+  color:var(--t3)
+}
 .name a:hover .filename {
   text-decoration:underline;
   text-underline-offset:3px;
@@ -411,11 +424,6 @@ tbody tr:hover {
 .file-icon svg {
   width:18px;
   height:18px
-}
-.file-icon.folder {
-  background:var(--brand-soft);
-  border-color:var(--brand-bd);
-  color:var(--brand)
 }
 .file-icon.package {
   background:var(--blue-bg);
@@ -676,6 +684,9 @@ tbody tr:hover {
     order:3;
     width:34px;
     height:0
+  }
+  tbody tr.is-dir::before {
+    content:none
   }
   tbody tr::after {
     content:"";
