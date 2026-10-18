@@ -1159,7 +1159,7 @@ td.center .stacked-time {
   color: var(--brand);
 }
 .records-table {
-  min-width: 980px;
+  min-width: 990px;
   table-layout: fixed;
 }
 .records-table th:first-child {
@@ -1175,6 +1175,9 @@ td.center .stacked-time {
 .records-table th:nth-child(5) {
   width: 110px;
 }
+.records-table th:nth-child(6) {
+  width: 200px;
+}
 .records-table th:last-child {
   width: 90px;
 }
@@ -1187,14 +1190,20 @@ td.center .stacked-time {
   line-height: 1.6;
   white-space: normal;
 }
+.record-reason > span {
+  display: block;
+}
 .record-reason strong {
+  display: block;
   font-size: 12px;
   color: var(--red);
   margin-bottom: 2px;
   font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
 }
 .record-reason p {
-  overflow-wrap: anywhere;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 /* Pagination */

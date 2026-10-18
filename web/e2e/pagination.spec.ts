@@ -296,15 +296,7 @@ test('management pagination covers complete history, filtering, page sizes, jump
     await expect(pager).toContainText('共 0 条记录')
     await page.getByRole('button', { name: '失败记录', exact: true }).click()
     await expect(pager).toContainText('共 0 条记录')
-    expect(await aligns('thead th')).toEqual([
-      'center',
-      'center',
-      'center',
-      'center',
-      'center',
-      'left',
-      'center',
-    ])
+    expect(await aligns('thead th')).toEqual(centered)
     await page.getByRole('link', { name: '系统设置', exact: true }).click()
     await page.getByRole('tab', { name: '系统配置', exact: true }).click()
     await expect(page.locator('.check-row')).toHaveCount(11)

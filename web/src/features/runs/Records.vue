@@ -27,6 +27,15 @@ const visible = computed(() =>
       .includes(search.value.toLowerCase()),
   ),
 )
+// 列表只展示首行主原因，完整错误见悬停提示与详情。
+function mainReason(error: string) {
+  return (
+    error
+      .split('\n')
+      .map((line) => line.trim())
+      .find(Boolean) ?? ''
+  )
+}
 async function clear() {
   const accepted = await confirmAction({
     title: '清理日志',
@@ -113,7 +122,7 @@ async function clear() {
               <th class="center">状态</th>
               <th class="center">耗时</th>
               <th class="center">数据量</th>
-              <th :class="{ center: tab === 'succeeded' }">
+              <th class="center">
                 {{ tab === 'succeeded' ? '处理结果' : '失败原因' }}
               </th>
               <th class="center">详情</th>
@@ -139,20 +148,19 @@ async function clear() {
                 <strong>{{ duration(run.elapsed_seconds) }}</strong>
               </td>
               <td class="center">{{ bytes(run.progress.bytes) }}</td>
-              <td
-                class="record-reason"
-                :class="{ center: !run.error_code }"
-              >
+              <td class="record-reason center">
                 <template v-if="run.error_code"
                   ><strong>{{ run.error_code }}</strong>
-                  <p>{{ run.error }}</p></template
+                  <p :title="run.error">{{ mainReason(run.error) }}</p></template
                 ><template v-else
-                  >成功发布<template
-                    v-if="run.type === 'github_release' || run.progress.success > 0"
-                  >
-                    · {{ run.progress.success }} 项</template
-                  ><span v-if="run.progress.skipped">
-                    · 复用 {{ run.progress.skipped }} 项</span
+                  ><span
+                    >成功发布<template
+                      v-if="run.type === 'github_release' || run.progress.success > 0"
+                    >
+                      · {{ run.progress.success }} 项</template
+                    ></span
+                  ><span v-if="run.progress.skipped"
+                    >复用 {{ run.progress.skipped }} 项</span
                   ></template
                 >
               </td>

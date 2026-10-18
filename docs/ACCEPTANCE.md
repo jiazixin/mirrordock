@@ -1,5 +1,21 @@
 # 验收记录
 
+## 运行记录处理结果上下排列、失败原因只显示主原因（2026-10-18）
+
+范围：修改 `web/src/features/runs/Records.vue`、`web/src/styles/global.css`；测试 `web/e2e/pagination.spec.ts`。用户要求：成功记录“成功发布”与“复用”上下两行，避免各行长短不一；失败原因只写主原因，列同样收窄。
+
+- 成功：第一行“成功发布 · N 项”，有复用时第二行“复用 N 项”。
+- 失败：第一行错误码，第二行只取错误首个非空行，单行省略，悬停 `title` 显示完整错误；完整内容仍在详情。表头与单元格统一居中。
+- 第 6 列固定 200px（原为吃满剩余宽度），表格最小宽度 990px，各列按比例分配多余宽度。
+
+| 检查 | 结果 |
+| --- | --- |
+| `npm --prefix web run format:check` / `npm --prefix web run build` | 通过 |
+| `pagination.spec.ts`（scratchpad 临时二进制） | 通过；失败页签表头断言由“第 6 列居左”改为全部居中 |
+| 截图 | scratchpad 临时用例 mock 运行列表，1440px 截成功页签（含 40 项 + 复用 40 项）与失败页签（长多行 SOURCE_EXHAUSTED、TASK_TIMEOUT）人工核对，临时文件不入库 |
+| open-code-review | 托管模式，未调用外部 LLM；`ocr delegate preview/rule`（v1.13.1）选出 2/2 可审文件（通用组），覆盖率 100%；排除的 `pagination.spec.ts`（default_path）已人工核对。无发现 |
+| 未执行 | 其余 E2E 未全量重跑（仅运行记录表格展示变更） |
+
 ## 镜像根配置外内容无条件公开（2026-10-18）
 
 范围：新增 `internal/mirrors/static.go`、`static_test.go`；修改 `internal/mirrors/http.go`（抽出 `serveFile`/`readListing`，删除只列路由的 `virtual`）、`mirrors.go`（保存已配置 dest 集合）、`internal/config/config.go`（导出 `ReservedTopLevel`）、README、DESIGN。用户确定：放进镜像根即公开，不设开关、不隐藏点文件、不为误放兜底；只保留保护程序正确性的排除（`.mirrordock`、同步临时名、保留顶级路由、已配置 dest、越出镜像根）。
