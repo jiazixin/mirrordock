@@ -594,8 +594,17 @@ test('real configuration, rsync failover, publication, records and responsive UI
         background: getComputedStyle(element).backgroundColor,
       })),
     )
-    // Source types are neutral labels; color is reserved for run anomalies.
-    expect(new Set(typeColors.map((item) => item.color)).size).toBe(1)
+    // Each sync method gets its own tint so types are distinguishable at a glance.
+    expect(new Set(typeColors.map((item) => item.color)).size).toBe(3)
+    expect(new Set(typeColors.map((item) => item.background)).size).toBe(3)
+    // The status column is centered like the latest-run column next to it.
+    for (const cell of await page.locator('.source-table td:nth-child(5)').all()) {
+      const cellBox = (await cell.boundingBox())!
+      const badgeBox = (await cell.locator('.badge').boundingBox())!
+      expect(
+        Math.abs(cellBox.x + cellBox.width / 2 - (badgeBox.x + badgeBox.width / 2)),
+      ).toBeLessThan(1.5)
+    }
     await expect(page.locator('.source-table .type-pill')).toHaveText([
       'Rsync',
       'Reposync',

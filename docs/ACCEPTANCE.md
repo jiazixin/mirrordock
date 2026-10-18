@@ -1,5 +1,21 @@
 # 验收记录
 
+## 同步源状态列居中与同步方式分色（2026-10-18）
+
+范围：`web/src/features/sources/Sources.vue`、`web/src/styles/global.css`、`web/e2e/mirrordock.spec.ts`。
+
+- 同步源表“状态”表头与单元格加 `center`，与相邻“最近运行”列一致；运行记录、通知记录等表头与内容同为左对齐，未改。
+- 同步方式标签按用户要求恢复分色：Rsync 保持品牌绿，Reposync 用紫（`--violet`），GitHub Release 用石板灰蓝（`--slate`）。同日首版 GitHub Release 用陶土色，批次记录里与红色“失败”胶囊并排时易混，改为石板色。批次记录的类型标签共用同一样式，一并变色。
+- E2E：原“同步方式标签保持单一颜色”断言改为三种文字色与底色各不相同；新增状态列胶囊中心与单元格中心偏差 < 1.5px 的断言。
+
+| 检查 | 结果 |
+| --- | --- |
+| `npm --prefix web run format:check` / `npm --prefix web run build`（含 `vue-tsc`） | 通过 |
+| E2E `mirrordock.spec.ts`（`MIRRORDOCK_TEST_RSYNC` 为 `.cache/rsync/rsync-3.5.1/rsync` 绝对路径，scratchpad 临时二进制） | 1/1 通过。首次运行误传相对路径导致 rsync `DEPENDENCY_MISSING` 失败，与本次改动无关，改为绝对路径后通过；最终配色修改后已重跑通过 |
+| 截图核对（E2E 输出 `sources-tags.png`、`batches-tags.png`，1440 宽） | 状态胶囊在列内居中；三种标签可区分，且与状态胶囊颜色不冲突 |
+| open-code-review | 未调用外部 LLM；`ocr delegate preview/rule` 选出 2/2 个可审文件（Sources.vue、global.css），由当前会话审查；排除的 `e2e/mirrordock.spec.ts`（default_path）已人工核对。未发现正确性、安全性或性能问题 |
+| 未执行 | 其他 E2E、窄屏截图核对 |
+
 ## 公开目录标题与表头对齐微调（2026-10-17）
 
 范围：`internal/mirrors/listing.{html,css}`、`internal/mirrors/listing_test.go`。

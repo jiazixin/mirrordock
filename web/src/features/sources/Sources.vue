@@ -139,7 +139,7 @@ async function remove(source: Source) {
               <th>来源</th>
               <th>目标</th>
               <th class="center">最近运行</th>
-              <th>状态</th>
+              <th class="center">状态</th>
               <th class="center">操作</th>
             </tr>
           </thead>
@@ -198,7 +198,7 @@ async function remove(source: Source) {
                   :datetime="latest(source.id)?.created_at"
                 />
               </td>
-              <td><StatusBadge :state="latest(source.id)?.state ?? 'idle'" /></td>
+              <td class="center"><StatusBadge :state="latest(source.id)?.state ?? 'idle'" /></td>
               <td class="center">
                 <div class="row-actions">
                   <button

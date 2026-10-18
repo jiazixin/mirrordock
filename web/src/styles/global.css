@@ -36,6 +36,10 @@
   --amb: #a5640c;
   --amb-soft: #fdf5e6;
   --amb-bd: #f0dcb2;
+  --violet: #6a4bb5;
+  --violet-bg: #f3effb;
+  --slate: #3a4a5c;
+  --slate-bg: #edf0f4;
   --gray-bg: #f3f5f4;
   --bar: #b9dcc6;
   --chart-ok: #4a9d6c;
@@ -831,6 +835,14 @@ td.center .stacked-time {
   color: var(--brand);
   font-weight: 500;
   white-space: nowrap;
+}
+.type-pill.reposync {
+  background: var(--violet-bg);
+  color: var(--violet);
+}
+.type-pill.github_release {
+  background: var(--slate-bg);
+  color: var(--slate);
 }
 .source-table .type-pill {
   margin-top: 8px;
