@@ -115,16 +115,16 @@ svg {
   height:16px;
   stroke-width:3
 }
+/* Mirrors the admin sidebar's "镜像目录" link so the two entry points read as a pair. */
 .admin-link {
-  margin-right:-10px;
-  padding:6px 10px;
-  border-radius:8px;
-  font-size:13px;
-  color:var(--t2)
+  font-size:13.5px;
+  font-weight:600;
+  color:var(--brand);
+  white-space:nowrap
 }
 .admin-link:hover {
-  color:var(--brand);
-  background:var(--brand-soft)
+  text-decoration:underline;
+  text-underline-offset:3px
 }
 
 /* Page heading */

@@ -1,5 +1,16 @@
 # 验收记录
 
+## 公开目录“管理后台”链接与管理台侧栏样式统一（2026-10-18）
+
+范围：修改 `internal/mirrors/listing.css`、DESIGN。用户选定：前台“管理后台”沿用管理台侧栏“镜像目录”链接的样式（`--brand` 绿、600 字重、13.5px、悬停下划线），仍在当前页打开、不带 ↗ 图标；去掉原灰字与浅绿底悬停块。
+
+| 检查 | 结果 |
+| --- | --- |
+| `go vet ./internal/mirrors/`、`go test -count=1 ./internal/mirrors/` | 通过 |
+| 截图 | 临时渲染页面，Playwright 截 1280px 页头、悬停态与 375px 页头：绿色加粗，悬停出现下划线，窄屏不换行 |
+| open-code-review | 托管模式，未调用外部 LLM；`ocr delegate preview/rule` 选出 1/1 可审文件（`listing.css`，通用组），覆盖率 100%；排除的 DESIGN、ACCEPTANCE 已人工核对。无发现 |
+| 未执行 | E2E 未重跑（仅样式变更，链接文字与 href 不变） |
+
 ## 公开目录目录行去掉尾部斜杠、悬停下划线可见（2026-10-18）
 
 范围：修改 `internal/mirrors/listing.html`、`listing.css`、DESIGN；测试 `listing_test.go`、`public-directory.spec.ts`。用户要求：目录名后不带“/”，改为常见的鼠标移入时名称下方出现横线。
