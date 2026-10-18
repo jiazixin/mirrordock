@@ -56,7 +56,7 @@ onBeforeUnmount(() => {
           aria-hidden="true"
           ><component
             :is="item.tone === 'error' ? CircleAlert : item.tone === 'info' ? Info : CircleCheck"
-            :size="18"
+            :size="22"
         /></span>
         <p
           class="toast-message"
@@ -71,7 +71,7 @@ onBeforeUnmount(() => {
           aria-label="关闭提示"
           @click="emit('dismiss', item.id)"
         >
-          <X :size="16" />
+          <X :size="18" />
         </button>
         <div
           class="toast-track"
@@ -90,10 +90,10 @@ onBeforeUnmount(() => {
   z-index: 200;
   top: calc(var(--header-height) + 16px);
   right: max(24px, env(safe-area-inset-right));
-  width: min(380px, calc(100vw - 32px));
+  width: min(420px, calc(100vw - 32px));
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 12px;
   pointer-events: none;
 }
 .toast-card {
@@ -101,10 +101,10 @@ onBeforeUnmount(() => {
   position: relative;
   display: flex;
   align-items: flex-start;
-  gap: 12px;
-  padding: 14px 12px 16px 16px;
+  gap: 14px;
+  padding: 18px 16px 20px 20px;
   border: 1px solid var(--line-strong);
-  border-radius: 6px;
+  border-radius: var(--radius);
   background: var(--raised);
   box-shadow: var(--shadow);
   overflow: hidden;
@@ -119,27 +119,29 @@ onBeforeUnmount(() => {
 .toast-icon {
   display: grid;
   place-items: center;
-  flex: 0 0 20px;
-  height: 22px;
+  flex: 0 0 24px;
+  height: 24px;
   color: var(--toast-color);
 }
 .toast-message {
   flex: 1;
   min-width: 0;
-  margin: 1px 0 0;
+  margin: 0;
   color: var(--t1);
-  font-size: 13px;
-  line-height: 1.6;
+  font-size: 15px;
+  font-weight: 500;
+  line-height: 1.55;
   overflow-wrap: anywhere;
 }
 .toast-close {
   pointer-events: auto;
   display: grid;
   place-items: center;
-  flex: 0 0 24px;
-  height: 24px;
+  flex: 0 0 30px;
+  height: 30px;
+  margin-block: -3px;
   border: 0;
-  border-radius: 4px;
+  border-radius: 8px;
   padding: 0;
   background: transparent;
   color: var(--t3);
@@ -156,7 +158,7 @@ onBeforeUnmount(() => {
 .toast-track {
   position: absolute;
   inset: auto 0 0;
-  height: 2px;
+  height: 3px;
   background: transparent;
 }
 .toast-countdown {

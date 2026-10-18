@@ -901,3 +901,11 @@ OCR 排除原因：default_path 18（测试与锁文件），unsupported_ext 17�
 - `npm --prefix web run format:check`、Web 构建（含类型检查）通过。使用现代 rsync 3.5.1 运行 E2E：notifications、preflight、mirrordock 共 10/10 通过（编辑同步源恢复两列前的构建）；恢复两列后，以最终构建重跑 mirrordock.spec 和 preflight 中切换源类型的用例，2/2 通过。
 - OCR 托管审查：`ocr delegate preview` 为 workspace 模式，reviewable 4/4 reviewed，无排除文件，规则为默认组。未发现正确性、安全或性能问题；SourceEditor 的最终网格改动在预览后做出，已人工复核。未调用外部 OCR LLM。
 - 未执行：375px 窄屏的人工截图检查；其余 E2E（analytics、log-controls、pagination、public-directory、toasts）未涉及这些组件，本轮未跑；无 Go 改动，未跑 Go 测试。
+
+## 2026-10-18：操作提示横幅放大
+
+当前范围：web/src/components/ToastStack.vue。原横幅只有 13px 字、上下内边距 14px、6px 圆角，看着又扁又小，和页面卡片、确认框不像一套。现在宽度 380px 改为 420px（窄屏仍为视口宽度减 32px），内边距 18/16/20/20px，消息字号 15px、字重 500，图标 22px，关闭按钮 30px，圆角改用全局 `--radius`（12px），倒计时条 2px 改为 3px。保持顶部对齐，长错误折成多行时图标和关闭按钮仍与第一行对齐。文案、时长和行为都没有改。
+
+- `npm --prefix web run format:check`、Web 构建（含类型检查）通过；以本轮构建的临时二进制运行 E2E：toasts、notifications 2/2 通过，并查看 toasts 用例输出的桌面、375px、320px 截图，布局正常。
+- OCR 托管审查：`ocr delegate preview` 为 workspace 模式，reviewable 1/1 reviewed，无排除文件，规则为默认组。审查发现：首版用垂直居中，多行错误时图标会悬在中间；已改回顶部对齐并去掉最小高度，修复后重跑上述检查。未调用外部 OCR LLM。
+- 未执行：其余 E2E 未涉及该组件，本轮未跑；无 Go 改动，未跑 Go 测试；多行长错误提示仅按样式推算，未截图实测。
