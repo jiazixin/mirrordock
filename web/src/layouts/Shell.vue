@@ -16,6 +16,7 @@ import {
 import { ref, watch, onBeforeUnmount } from 'vue'
 import ToastStack from '../components/ToastStack.vue'
 import ConfirmDialog from '../components/ConfirmDialog.vue'
+import ModalTransition from '../components/ModalTransition.vue'
 import { state, dismissToast, settleConfirmation } from '../app/state'
 import logo from '../assets/logo.svg'
 const emit = defineEmits<{ logout: [] }>()
@@ -94,16 +95,18 @@ function resetScroll() {
     :items="state.toasts"
     @dismiss="dismissToast"
   />
-  <ConfirmDialog
-    v-if="state.confirmation"
-    :key="state.confirmation.id"
-    :title="state.confirmation.title"
-    :message="state.confirmation.message"
-    :confirm-label="state.confirmation.confirmLabel"
-    :cancel-label="state.confirmation.cancelLabel"
-    :tone="state.confirmation.tone"
-    @settle="settleConfirmation"
-  />
+  <ModalTransition>
+    <ConfirmDialog
+      v-if="state.confirmation"
+      :key="state.confirmation.id"
+      :title="state.confirmation.title"
+      :message="state.confirmation.message"
+      :confirm-label="state.confirmation.confirmLabel"
+      :cancel-label="state.confirmation.cancelLabel"
+      :tone="state.confirmation.tone"
+      @settle="settleConfirmation"
+    />
+  </ModalTransition>
   <div class="app-shell">
     <aside class="sidebar">
       <div class="sidebar-top">

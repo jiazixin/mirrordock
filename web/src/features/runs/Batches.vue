@@ -2,9 +2,11 @@
 import SelectField from '../../components/SelectField.vue'
 import { computed, ref, onMounted, onBeforeUnmount } from 'vue'
 import Pagination from '../../components/Pagination.vue'
+import RefreshButton from '../../components/RefreshButton.vue'
+import ModalTransition from '../../components/ModalTransition.vue'
 import { useRunPage } from './useRunPage'
 import { timeRangeOptions } from './timeRanges'
-import { RefreshCw, Pause, Play, X, Info, Layers3, RotateCcw } from '@lucide/vue'
+import { Pause, Play, X, Info, Layers3, RotateCcw } from '@lucide/vue'
 import StatusBadge from '../../components/StatusBadge.vue'
 import RunDetail from './RunDetail.vue'
 import { state, refresh, perform, runAction, rerunSource } from '../../app/state'
@@ -71,12 +73,11 @@ const groups = computed(() => {
           >
         </h1>
       </div>
-      <button
+      <RefreshButton
         class="button"
-        @click="perform(refresh)"
+        :action="() => perform(refresh)"
+        >刷新</RefreshButton
       >
-        <RefreshCw :size="16" />刷新
-      </button>
     </div>
     <div class="panel batch-panel">
       <div class="filters-grid">
@@ -269,10 +270,12 @@ const groups = computed(() => {
         noun="个批次"
       />
     </div>
-    <RunDetail
-      v-if="detail"
-      :id="detail"
-      @close="detail = undefined"
-    />
+    <ModalTransition>
+      <RunDetail
+        v-if="detail"
+        :id="detail"
+        @close="detail = undefined"
+      />
+    </ModalTransition>
   </section>
 </template>

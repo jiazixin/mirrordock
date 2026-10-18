@@ -1129,7 +1129,6 @@ td.center .stacked-time {
   font-size: 15px;
   font-weight: 500;
   padding: 0 0 13px;
-  position: relative;
   white-space: nowrap;
   transition: color 0.2s linear;
 }
@@ -1142,22 +1141,26 @@ td.center .stacked-time {
   color: var(--brand);
   font-weight: 600;
 }
-.tabs a.router-link-exact-active::after,
-.tabs button.active::after {
+/* v-tab-indicator: one bar on the list slides to the active tab. */
+.tabs.tab-indicator {
+  position: relative;
+}
+.tabs.tab-indicator::after {
   content: '';
   position: absolute;
+  left: 0;
+  bottom: -1px;
+  width: var(--tab-w, 0);
   height: 2px;
   border-radius: 2px;
   background: var(--brand);
-  bottom: -1px;
-  left: 0;
-  right: 0;
-  animation: tab-indicator-in 0.2s linear;
+  transform: translateX(var(--tab-x, 0));
+  pointer-events: none;
 }
-@keyframes tab-indicator-in {
-  from {
-    transform: scaleX(0);
-  }
+.tabs.tab-indicator-ready::after {
+  transition:
+    transform 0.25s linear,
+    width 0.25s linear;
 }
 /* Runs whenever a panel is shown again, including v-show toggles from display: none. */
 [role='tabpanel'] {
@@ -1484,6 +1487,35 @@ tbody tr:hover td.empty-state {
   font-size: 17px;
   font-weight: 650;
 }
+/* ModalTransition: the scrim fades while the panel settles from slightly below; closing is quicker.
+   The backdrop only transitions opacity so Vue ends on its own transitionend. */
+.dialog-enter-active {
+  transition: opacity 0.2s linear;
+}
+.dialog-leave-active {
+  transition: opacity 0.12s linear;
+  pointer-events: none;
+}
+.dialog-enter-from,
+.dialog-leave-to {
+  opacity: 0;
+}
+.dialog-enter-active > .modal,
+.dialog-enter-active > .confirm-dialog {
+  transition: transform 0.2s linear;
+}
+.dialog-leave-active > .modal,
+.dialog-leave-active > .confirm-dialog {
+  transition: transform 0.12s linear;
+}
+.dialog-enter-from > .modal,
+.dialog-enter-from > .confirm-dialog {
+  transform: translateY(8px) scale(0.98);
+}
+.dialog-leave-to > .modal,
+.dialog-leave-to > .confirm-dialog {
+  transform: scale(0.98);
+}
 
 /* Run detail shared pieces */
 .detail-title {
@@ -1565,18 +1597,10 @@ tbody tr:hover td.empty-state {
   color: var(--acc);
   opacity: 1;
 }
-.log-refresh.is-loading svg {
-  animation: log-refresh-spin 1s linear infinite;
-}
 .log-follow[aria-pressed='true'] {
   color: var(--acc);
   border-color: var(--acc-soft);
   background: var(--acc-soft);
-}
-@keyframes log-refresh-spin {
-  to {
-    transform: rotate(360deg);
-  }
 }
 
 /* Sign-in */

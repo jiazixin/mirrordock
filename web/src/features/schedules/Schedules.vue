@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import Pagination from '../../components/Pagination.vue'
+import RefreshButton from '../../components/RefreshButton.vue'
 import { usePagination } from '../../lib/pagination/usePagination'
 import { computed } from 'vue'
-import { RefreshCw, Clock3, Play } from '@lucide/vue'
+import { Clock3, Play } from '@lucide/vue'
 import { clone, state, refresh, perform, runSource, saveConfiguration } from '../../app/state'
 import type { Source } from '../../app/types'
 import { time, sourceType } from '../../app/format'
@@ -37,12 +38,11 @@ async function cron(source: Source, event: Event) {
           >
         </h1>
       </div>
-      <button
+      <RefreshButton
         class="button"
-        @click="perform(refresh)"
+        :action="() => perform(refresh)"
+        >刷新</RefreshButton
       >
-        <RefreshCw :size="16" />刷新
-      </button>
     </div>
     <div class="panel">
       <div class="table-scroll">

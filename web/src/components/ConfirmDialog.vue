@@ -51,51 +51,49 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <Teleport to="body"
-    ><div
-      class="confirm-backdrop"
-      @click.self="emit('settle', false)"
-    >
-      <section
-        role="alertdialog"
-        aria-modal="true"
-        :aria-labelledby="`${id}-title`"
-        :aria-describedby="`${id}-message`"
-        class="confirm-dialog"
-        :class="tone"
-      >
-        <span
-          class="confirm-icon"
-          aria-hidden="true"
-          ><component
-            :is="icon"
-            :size="22"
-        /></span>
-        <div class="confirm-body">
-          <h2 :id="`${id}-title`">{{ title }}</h2>
-          <p :id="`${id}-message`">{{ message }}</p>
-        </div>
-        <footer class="confirm-actions">
-          <button
-            ref="cancelButton"
-            type="button"
-            class="button"
-            @click="emit('settle', false)"
-          >
-            {{ cancelLabel }}</button
-          ><button
-            ref="confirmButton"
-            type="button"
-            class="button"
-            :class="tone === 'primary' ? 'primary' : `tone-${tone}`"
-            @click="emit('settle', true)"
-          >
-            {{ confirmLabel }}
-          </button>
-        </footer>
-      </section>
-    </div></Teleport
+  <div
+    class="confirm-backdrop"
+    @click.self="emit('settle', false)"
   >
+    <section
+      role="alertdialog"
+      aria-modal="true"
+      :aria-labelledby="`${id}-title`"
+      :aria-describedby="`${id}-message`"
+      class="confirm-dialog"
+      :class="tone"
+    >
+      <span
+        class="confirm-icon"
+        aria-hidden="true"
+        ><component
+          :is="icon"
+          :size="22"
+      /></span>
+      <div class="confirm-body">
+        <h2 :id="`${id}-title`">{{ title }}</h2>
+        <p :id="`${id}-message`">{{ message }}</p>
+      </div>
+      <footer class="confirm-actions">
+        <button
+          ref="cancelButton"
+          type="button"
+          class="button"
+          @click="emit('settle', false)"
+        >
+          {{ cancelLabel }}</button
+        ><button
+          ref="confirmButton"
+          type="button"
+          class="button"
+          :class="tone === 'primary' ? 'primary' : `tone-${tone}`"
+          @click="emit('settle', true)"
+        >
+          {{ confirmLabel }}
+        </button>
+      </footer>
+    </section>
+  </div>
 </template>
 
 <style scoped>
@@ -108,7 +106,6 @@ onBeforeUnmount(() => {
   justify-content: center;
   padding: 32px;
   background: var(--scrim);
-  animation: confirm-fade 0.16s ease-out;
 }
 .confirm-dialog {
   --confirm-color: var(--ok);
@@ -125,7 +122,6 @@ onBeforeUnmount(() => {
   border-radius: 14px;
   background: var(--raised);
   box-shadow: var(--shadow);
-  animation: confirm-rise 0.18s ease-out;
 }
 .confirm-dialog.amber {
   --confirm-color: var(--amb);
@@ -175,17 +171,6 @@ onBeforeUnmount(() => {
 .confirm-actions .button:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 2px;
-}
-@keyframes confirm-fade {
-  from {
-    opacity: 0;
-  }
-}
-@keyframes confirm-rise {
-  from {
-    opacity: 0;
-    transform: translateY(8px) scale(0.98);
-  }
 }
 @media (max-width: 600px) {
   .confirm-backdrop {

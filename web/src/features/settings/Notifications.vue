@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
-import { CircleHelp, Save, Send, RotateCcw } from '@lucide/vue'
+import { CircleHelp, Save, Send } from '@lucide/vue'
 import Pagination from '../../components/Pagination.vue'
+import RefreshButton from '../../components/RefreshButton.vue'
 import OptionCard from '../../components/OptionCard.vue'
 import { api } from '../../app/api'
 import { state, notify } from '../../app/state'
@@ -420,13 +421,12 @@ onBeforeUnmount(() => {
     <section class="notification-records">
       <div class="records-heading">
         <h2>发送记录</h2>
-        <button
+        <RefreshButton
           class="button"
           :disabled="refreshing"
-          @click="refreshRecords"
+          :action="refreshRecords"
+          >{{ refreshing ? '刷新中…' : '刷新' }}</RefreshButton
         >
-          <RotateCcw :size="16" />{{ refreshing ? '刷新中…' : '刷新' }}
-        </button>
       </div>
       <div
         v-if="recordError"

@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import Pagination from '../../components/Pagination.vue'
+import RefreshButton from '../../components/RefreshButton.vue'
+import ModalTransition from '../../components/ModalTransition.vue'
 import { usePagination } from '../../lib/pagination/usePagination'
 import SelectField from '../../components/SelectField.vue'
 import { computed, ref } from 'vue'
-import { Plus, RefreshCw, Search, Play, Pencil, Trash2, FolderSync } from '@lucide/vue'
+import { Plus, Search, Play, Pencil, Trash2, FolderSync } from '@lucide/vue'
 import SourceEditor from './SourceEditor.vue'
 import StatusBadge from '../../components/StatusBadge.vue'
 import {
@@ -70,11 +72,10 @@ async function remove(source: Source) {
         </h1>
       </div>
       <div class="heading-actions">
-        <button
+        <RefreshButton
           class="button"
-          @click="perform(refresh)"
-        >
-          <RefreshCw :size="16" />刷新</button
+          :action="() => perform(refresh)"
+          >刷新</RefreshButton
         ><button
           class="button primary"
           @click="editSource()"
@@ -254,10 +255,12 @@ async function remove(source: Source) {
         noun="个同步源"
       />
     </div>
-    <SourceEditor
-      v-if="showEditor"
-      :source="edit"
-      @close="showEditor = false"
-    />
+    <ModalTransition>
+      <SourceEditor
+        v-if="showEditor"
+        :source="edit"
+        @close="showEditor = false"
+      />
+    </ModalTransition>
   </section>
 </template>

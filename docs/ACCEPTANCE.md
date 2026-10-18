@@ -1,5 +1,21 @@
 # 验收记录
 
+## 分析页签、刷新与弹窗动效（2026-10-18）
+
+范围：新增 `web/src/components/{RefreshButton,ModalTransition}.vue`、`web/src/lib/motion/tabIndicator.ts`；修改 `web/src/components/{Modal,ConfirmDialog}.vue`、`web/src/layouts/Shell.vue`、`web/src/styles/global.css`、`web/src/features/analytics/Analytics.vue`、`web/src/features/{overview/Overview,runs/Batches,runs/Records,runs/RunDetail,schedules/Schedules,settings/Settings,settings/EnvironmentChecks,settings/Notifications,sources/Sources}.vue`、DESIGN；测试 `web/e2e/shell-scroll.spec.ts`。用户要求：数据分析三个页签切换加线性动画，所有刷新给图标转一圈，按钮弹出的窗口加动画。
+
+- 页签：`v-tab-indicator` 在页签栏上画一条下划线，按当前项的 `offsetLeft/offsetWidth` 定位，0.25s 线性滑动；首次定位后才启用过渡，避免从左侧扫入；MutationObserver/ResizeObserver 跟踪激活类与尺寸。用于分析、运行记录、系统设置三个页签栏，删除了原先每项各自展开的下划线样式。分析页内容按“出错/加载/数据”三态放入 `Transition name="page" mode="out-in"`，与侧栏换页相同：旧内容 0.12s 淡出、新内容 0.2s 淡入上移；数据在淡出期间到达时直接进入，不闪“加载中”；手动刷新保留旧数据原地更新。
+- 刷新：`RefreshButton` 统一 11 处刷新（含“重新载入配置”，通知发送记录的图标由 RotateCcw 改为与其他一致的 RefreshCw）。点击的操作进行中或传入的 `spinning` 为真时旋转（0.7s/圈），至少一圈并在 `animationiteration` 时停在整圈；每次点击都执行操作（与原按钮一致，可中止卡住的请求再试）。运行详情与通知记录的定时轮询不旋转；日志按钮沿用读取期间旋转；减少动态效果时不旋转且立即复位。
+- 弹窗：`Modal` 与 `ConfirmDialog` 去掉内部 Teleport，由调用处的 `ModalTransition`（Teleport 到 body + `Transition name="dialog"`）包住 v-if 的组件，使关闭也有动画：遮罩 0.2s 淡入、面板从下方 8px/98% 缩放落位；关闭 0.12s 淡出，过程中 `pointer-events: none`。仅遮罩根节点做 opacity 过渡，Vue 以其 transitionend 结束。确认框原有的入场关键帧改由同一过渡提供。
+
+| 检查 | 结果 |
+| --- | --- |
+| `npm --prefix web run format:check` / `npm --prefix web run build`（含 `vue-tsc`） | 通过 |
+| E2E 全量（scratchpad 临时二进制，rsync 3.5.1） | 首轮 18 通过 1 失败：`shell-scroll.spec.ts` 在标题出现后立即断言内容列可滚动，分析内容现需多等一次 0.12s 淡出；改为 `expect.poll` 等待（断言不变）。审查修复后重跑全量 19 通过、0 跳过 |
+| 本机时序采样（隔离端口临时实例，内置浏览器 + 无头 Chromium，逐帧读取计算样式） | 分析 Rsync→Reposync：下划线 0→104px 线性滑动约 250ms；内容 0.12s 淡出后 0.2s 淡入。刷新：本地请求瞬间完成仍转满一圈（约 700ms）后复位为 0°。新增同步源弹窗：挂在 body 下，0.2s 内 opacity 0→1、transform 由 `translateY(8px) scale(.98)` 到 none，焦点在面板；Esc 关闭 0.12s 淡出、期间 pointer-events 为 none，随后移除 |
+| open-code-review | 托管模式，未调用外部 LLM；`ocr delegate preview/rule` 选出 17/17 可审文件，由当前会话审查；排除的 `web/e2e/shell-scroll.spec.ts`（default_path）已人工核对。修复 2 项：`RefreshButton` 初版在操作挂起时忽略后续点击，网络卡住时无法像原按钮那样再点重试（改为每次点击都执行、按计数判断进行中）；删除已无使用方的逐项下划线与 `tab-indicator-in` 关键帧及页签项多余的 `position: relative` |
+| 未执行 | 内置浏览器面板隐藏时 rAF 暂停，弹窗停在入场首帧，故弹窗时序改用无头 Chromium 采样；未逐帧目测确认框（`ConfirmDialog`）与运行详情弹窗，仅由同一过渡类与 E2E 覆盖；Linux 浏览器观感；Go 测试未运行（未改 Go 代码） |
+
 ## Rsync 下载代理：全局与按源跟随全局/直连/自定义（2026-10-18）
 
 范围：`internal/config/config.go`（`settings.rsync.proxy`、源 `rsync.proxy_mode`/`rsync.proxy`、`ParseProxyField`）、新增 `internal/sync/connect.go`（`rsync-connect` 内部命令）、`internal/sync/{runner,process}.go`、`internal/runs/{runs,snapshot}.go`、`cmd/mirrordock/main.go`、`web/src/app/types.ts`、`web/src/features/settings/{Settings,EnvironmentChecks}.vue`、`web/src/features/sources/SourceEditor.vue`、`configs/config.example.yaml`、README/DESIGN；测试 `internal/config/config_test.go`、新增 `internal/runs/proxy_test.go`、`internal/sync/connect_test.go`、`internal/sync/{runner,strays}_test.go`（`command` 新增 env 参数、复用 daemon 启动辅助）、`web/e2e/{mirrordock,pagination}.spec.ts`。GitHub Release 与 Reposync 行为未改动。

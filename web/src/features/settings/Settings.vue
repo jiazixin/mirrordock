@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
-import { Save, RotateCcw, ShieldCheck, Settings2, ArrowDownUp, FileText, Bell } from '@lucide/vue'
+import { Save, ShieldCheck, Settings2, ArrowDownUp, FileText, Bell } from '@lucide/vue'
 import { clone, state, saveConfiguration, reloadConfiguration, perform } from '../../app/state'
 import type { Configuration } from '../../app/types'
 import EnvironmentChecks from './EnvironmentChecks.vue'
 import Notifications from './Notifications.vue'
 import OptionCard from '../../components/OptionCard.vue'
+import RefreshButton from '../../components/RefreshButton.vue'
+import { vTabIndicator } from '../../lib/motion/tabIndicator'
 
 const tabs = [
   { id: 'rsync', label: 'Rsync', icon: ArrowDownUp },
@@ -104,13 +106,12 @@ async function save() {
         </h1>
       </div>
       <div class="heading-actions">
-        <button
+        <RefreshButton
           class="button"
           :disabled="busy"
-          @click="perform(reloadConfiguration)"
+          :action="() => perform(reloadConfiguration)"
+          >重新载入配置</RefreshButton
         >
-          <RotateCcw :size="16" />重新载入配置
-        </button>
         <button
           v-if="['execution', 'rsync', 'github'].includes(activeTab)"
           class="button primary"
@@ -141,6 +142,7 @@ async function save() {
       </button>
     </div>
     <div
+      v-tab-indicator
       class="tabs settings-tabs"
       role="tablist"
       aria-label="系统设置分类"

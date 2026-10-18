@@ -2,9 +2,12 @@
 import SelectField from '../../components/SelectField.vue'
 import { computed, ref } from 'vue'
 import Pagination from '../../components/Pagination.vue'
+import RefreshButton from '../../components/RefreshButton.vue'
+import ModalTransition from '../../components/ModalTransition.vue'
+import { vTabIndicator } from '../../lib/motion/tabIndicator'
 import { useRunPage } from './useRunPage'
 import { timeRangeOptions } from './timeRanges'
-import { CheckCircle2, CircleAlert, Search, RefreshCw, Trash2, Info } from '@lucide/vue'
+import { CheckCircle2, CircleAlert, Search, Trash2, Info } from '@lucide/vue'
 import StatusBadge from '../../components/StatusBadge.vue'
 import RunDetail from './RunDetail.vue'
 import { api } from '../../app/api'
@@ -55,15 +58,17 @@ async function clear() {
           @click="perform(clear)"
         >
           <Trash2 :size="16" />清理日志</button
-        ><button
+        ><RefreshButton
           class="button"
-          @click="perform(load)"
+          :action="() => perform(load)"
+          >刷新</RefreshButton
         >
-          <RefreshCw :size="16" />刷新
-        </button>
       </div>
     </div>
-    <div class="tabs">
+    <div
+      v-tab-indicator
+      class="tabs"
+    >
       <button
         :class="{ active: tab === 'succeeded' }"
         @click="tab = 'succeeded'"
@@ -186,10 +191,12 @@ async function clear() {
         :disabled="loading"
       />
     </div>
-    <RunDetail
-      v-if="detail"
-      :id="detail"
-      @close="detail = undefined"
-    />
+    <ModalTransition>
+      <RunDetail
+        v-if="detail"
+        :id="detail"
+        @close="detail = undefined"
+      />
+    </ModalTransition>
   </section>
 </template>

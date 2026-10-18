@@ -42,33 +42,32 @@ onBeforeUnmount(() => {
 })
 </script>
 <template>
-  <Teleport to="body"
-    ><div
-      class="modal-backdrop"
-      @click.self="emit('close')"
+  <div
+    class="modal-backdrop"
+    @click.self="emit('close')"
+  >
+    <section
+      ref="panel"
+      tabindex="-1"
+      role="dialog"
+      aria-modal="true"
+      :aria-label="title"
+      class="modal"
+      :class="{ wide }"
     >
-      <section
-        ref="panel"
-        tabindex="-1"
-        role="dialog"
-        aria-modal="true"
-        :aria-label="title"
-        class="modal"
-        :class="{ wide }"
-      >
-        <header>
-          <div>
-            <h2>{{ title }}</h2>
-          </div>
-          <button
-            class="icon-button"
-            aria-label="关闭"
-            @click="emit('close')"
-          >
-            <X :size="19" />
-          </button>
-        </header>
-        <slot />
-      </section></div
-  ></Teleport>
+      <header>
+        <div>
+          <h2>{{ title }}</h2>
+        </div>
+        <button
+          class="icon-button"
+          aria-label="关闭"
+          @click="emit('close')"
+        >
+          <X :size="19" />
+        </button>
+      </header>
+      <slot />
+    </section>
+  </div>
 </template>

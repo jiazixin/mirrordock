@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onBeforeUnmount, ref } from 'vue'
-import { RefreshCw, ShieldCheck } from '@lucide/vue'
+import { ShieldCheck } from '@lucide/vue'
+import RefreshButton from '../../components/RefreshButton.vue'
 import { api } from '../../app/api'
 import { perform, state } from '../../app/state'
 import type { SystemChecks } from '../../app/types'
@@ -158,13 +159,13 @@ onBeforeUnmount(() => controller.abort())
       <ShieldCheck :size="19" />
       <h2>环境检查</h2>
       <small>{{ checking ? '正在检查…' : checks ? '检查完成' : '尚未取得检查结果' }}</small
-      ><button
+      ><RefreshButton
         class="button compact"
         :disabled="checking"
-        @click="perform(check)"
+        :spinning="checking"
+        :action="() => perform(check)"
+        >{{ checking ? '刷新中…' : '刷新' }}</RefreshButton
       >
-        <RefreshCw :size="16" />{{ checking ? '刷新中…' : '刷新' }}
-      </button>
     </div>
     <div
       v-if="checks"

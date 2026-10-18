@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import SelectField from '../../components/SelectField.vue'
 import { computed, ref, watch } from 'vue'
-import { ChevronsDown, Download, RefreshCw } from '@lucide/vue'
+import { ChevronsDown, Download } from '@lucide/vue'
 import Modal from '../../components/Modal.vue'
+import RefreshButton from '../../components/RefreshButton.vue'
 import StatusBadge from '../../components/StatusBadge.vue'
 import StackedTime from '../../components/StackedTime.vue'
 import { time, duration, bytes, phases, sourceType, runStage, runStages } from '../../app/format'
@@ -71,14 +72,12 @@ function download() {
           </p>
         </div>
         <div class="detail-heading-actions">
-          <StatusBadge :state="run.state" /><button
+          <StatusBadge :state="run.state" /><RefreshButton
             class="icon-button"
             aria-label="刷新运行详情"
             :disabled="loading"
-            @click="refreshDetail"
-          >
-            <RefreshCw :size="16" />
-          </button>
+            :action="refreshDetail"
+          />
         </div>
       </div>
       <ol
@@ -237,17 +236,15 @@ function download() {
               "
             />
             <div class="log-actions">
-              <button
+              <RefreshButton
                 class="icon-button log-refresh"
                 :class="{ 'is-loading': logLoading }"
                 aria-label="刷新日志"
-                :aria-busy="logLoading"
+                :spinning="logLoading"
                 :disabled="logLoading || !run.attempts.length"
                 title="刷新日志"
-                @click="refreshLog()"
-              >
-                <RefreshCw :size="16" /></button
-              ><button
+                :action="() => refreshLog()"
+              /><button
                 class="icon-button log-follow"
                 aria-label="持续跟随最新日志"
                 :aria-pressed="followLatest"

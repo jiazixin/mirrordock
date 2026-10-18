@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { CircleAlert, CirclePause, Package, RefreshCw, Server, Tag, Unplug } from '@lucide/vue'
+import { CircleAlert, CirclePause, Package, Server, Tag, Unplug } from '@lucide/vue'
 import RunDetail from '../runs/RunDetail.vue'
 import SelectField from '../../components/SelectField.vue'
+import RefreshButton from '../../components/RefreshButton.vue'
+import ModalTransition from '../../components/ModalTransition.vue'
 import { api } from '../../app/api'
 import { state, notify, perform, runAction, rerunSource } from '../../app/state'
 import { bytes, duration, phases, sourceType } from '../../app/format'
@@ -66,7 +68,7 @@ function tick() {
 }
 function refresh() {
   now.value = Date.now()
-  void load()
+  return load()
 }
 const typeIcons: Record<string, typeof Server> = {
   rsync: Server,
@@ -371,13 +373,12 @@ const kpis = computed(() => {
           >
         </h1>
       </div>
-      <button
+      <RefreshButton
         class="button"
-        type="button"
-        @click="refresh"
+        :action="refresh"
+        :size="17"
+        >刷新</RefreshButton
       >
-        <RefreshCw :size="17" />刷新
-      </button>
     </div>
 
     <header class="overview-hero">
@@ -738,11 +739,13 @@ const kpis = computed(() => {
         </div>
       </section>
     </div>
-    <RunDetail
-      v-if="detail"
-      :id="detail"
-      @close="detail = undefined"
-    />
+    <ModalTransition>
+      <RunDetail
+        v-if="detail"
+        :id="detail"
+        @close="detail = undefined"
+      />
+    </ModalTransition>
   </section>
 </template>
 

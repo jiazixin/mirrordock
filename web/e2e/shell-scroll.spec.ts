@@ -55,7 +55,8 @@ test('desktop sidebar stays put and only the content column scrolls', async ({ p
         window: scrollY,
         sidebar: document.querySelector('.sidebar')!.getBoundingClientRect().top,
       }))
-    expect(await main.evaluate((el) => el.scrollHeight > el.clientHeight)).toBe(true)
+    // Analytics content swaps in after a short fade, so wait for it to make the column scrollable.
+    await expect.poll(() => main.evaluate((el) => el.scrollHeight > el.clientHeight)).toBe(true)
 
     // Wheel input over the sidebar must not reach the content column or the document.
     const sidebar = (await page.locator('.sidebar').boundingBox())!
