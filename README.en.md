@@ -98,11 +98,12 @@ Run from the repository root. The web UI must be built first, because `web/embed
 
 ```sh
 npm --prefix web ci
-sh scripts/build.sh
+npm --prefix web run build
+go build -trimpath -o bin/mirrordock ./cmd/mirrordock
 ./bin/mirrordock --version
 ```
 
-Cross-compile with `GOOS=linux GOARCH=amd64 CGO_ENABLED=0 sh scripts/build.sh`.
+The web build is platform-independent, so cross-compiling only changes the `go build` step: `GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -o bin/mirrordock-linux-amd64 ./cmd/mirrordock`.
 
 ## Configuration
 
@@ -188,9 +189,8 @@ internal/{config,observability,database,sync,runs,mirrors,notifications,app}/
 web/                      The only npm/Vite boundary: Vue app, E2E tests, embed.go
 configs/                  Annotated example; local instances are ignored
 deploy/                   systemd unit
-scripts/                  Build, CI test environment, favicon and directory-icon tools
 docs/                     Deployment, design, implementation and acceptance docs
-.github/workflows/        GitHub Actions CI and tag releases
+.github/                  GitHub Actions CI, tag releases and the test-environment composite action
 .goreleaser.yaml          GoReleaser multi-target release config
 bin/ data/ .cache/        Ignored local binaries (incl. bin/release/), state and cache
 test-results/             Ignored Go/OCR/build reports

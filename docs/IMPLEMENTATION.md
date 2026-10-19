@@ -52,19 +52,18 @@ GitHub 原始日志有资产结果，当前没有每资产独立数据库检索�
 
 ```sh
 npm --prefix web ci
-sh scripts/build.sh
+npm --prefix web run build
+go build -trimpath -o bin/mirrordock ./cmd/mirrordock
 ./bin/mirrordock --version
 ```
 
 发布 tag 采用 `v主版本.次版本.修订版本`，例如 `v1.1.0`、`v1.2.0`，预发布为 `v1.2.0-rc.1`；不使用 `1.1`、`v1.2` 等非规范 tag。普通构建不需要注入版本：Go 1.24 起会在可识别的 Git 仓库中将模块版本写入二进制，本项目通过 `debug.ReadBuildInfo().Main.Version` 读取。精确标准 tag 显示对应版本，非标签提交显示 Go 生成的伪版本，未提交修改保留 `+dirty`；额外显示 12 位提交 ID。应以包路径构建，并保留 `.git` 与对应 tag，不使用 `-buildvcs=false` 关闭此能力。Go 模块的 tag 必须匹配模块路径的主版本及子目录规则，见 [Go 官方版本说明](https://go.dev/ref/mod#versions)。
 
-版本优先级为显式链接注入（非空且非 `dev`）→ Go 主模块版本（非空且非 `(devel)`）→ 12 位提交 ID → `dev`。显式覆盖仍保留可取得的 modified 状态；运行时不调用 Git。管理台“系统配置”和 `/api/system/info` 显示与 CLI 相同的实际构建版本。`--version` 和 `--help` 不读取配置或启动服务。直接构建与交叉编译如下：
+版本优先级为显式链接注入（非空且非 `dev`）→ Go 主模块版本（非空且非 `(devel)`）→ 12 位提交 ID → `dev`。显式覆盖仍保留可取得的 modified 状态；运行时不调用 Git。管理台“系统配置”和 `/api/system/info` 显示与 CLI 相同的实际构建版本。`--version` 和 `--help` 不读取配置或启动服务。交叉编译时 Web 产物不变，只给 Go 编译指定目标平台：
 
 ```sh
 npm --prefix web run build
-go build -trimpath -o bin/mirrordock ./cmd/mirrordock
-# 或由脚本先构建 Web，再交叉编译 Go
-GOOS=linux GOARCH=amd64 CGO_ENABLED=0 sh scripts/build.sh
+GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -o bin/mirrordock-linux-amd64 ./cmd/mirrordock
 ```
 
 源码压缩包没有 Git 信息时可显式注入；以下 `v1.1.0` 是示例，必须替换为与源码对应的真实版本，不能把未知来源或未提交修改标为正式发行版：
@@ -92,7 +91,7 @@ goreleaser release --snapshot --clean
 
 `web/dist/` 是唯一 Web 输出，由 `web/embed.go` 嵌入二进制，不提交 Git。干净检出直接执行 Go 构建或全量测试会因缺少嵌入文件失败。容器构建也先构建 Web。Docker 上下文不包含 Git，需传入 VERSION；未传时显示 dev，容器构建不附带 Git dirty 元数据。管理页面按路由加载，资源随二进制发布，无 CDN 或远程字体。
 
-Logo 唯一源为 `web/src/assets/logo.svg`。修改后用安装了 Pillow 的 Python 执行 `python3 scripts/generate-favicon.py`，再构建；普通构建不需要 Python。公开目录 Phosphor Regular 图标随 `internal/mirrors/listing-icons.html` 嵌入，包含 MIT 授权；`scripts/import-directory-icons.py` 仅用于从固定上游提交重新导入。
+Logo 唯一源为 `web/src/assets/logo.svg`；`web/public/favicon.ico`（16–256 px 多尺寸 ICO）由它导出并提交，修改 logo 后用任意图像工具重新导出该文件再构建，构建本身不依赖图像工具。公开目录的 Phosphor Regular 图标以 SVG 路径形式收录在 `internal/mirrors/listing-icons.html`，文件头记录上游固定提交与 MIT 授权；新增或替换图标时从同一上游的 `assets/regular/` 手工复制，只保留路径元素且颜色仅用 `currentColor`。
 
 ## 开发验证
 
@@ -126,7 +125,7 @@ GitHub Actions 配置只维护在 [.github/workflows/ci.yml](../.github/workflow
 - E2E（ubuntu-24.04）：构建测试二进制后运行全部 Playwright 用例。
 - GoReleaser：`goreleaser check` 与 `release --snapshot --clean`，确认全部发布目标可交叉编译和打包。
 
-Go 与 E2E 作业先执行 [scripts/ci-test-env.sh](../scripts/ci-test-env.sh)：Linux 运行器为 ext4，脚本挂载开启 reflink 的稀疏 XFS 镜像并设为 `TMPDIR`，并以系统 rsync 设置 `MIRRORDOCK_TEST_RSYNC`，因此 CI 不跳过 rsync 用例。脚本只在 Actions 中运行；本地等价命令即上文“开发验证”。CI 只覆盖 GitHub 托管运行器，不等于目标 EL 发行版实机验收。
+Go 与 E2E 作业先执行组合 Action [.github/actions/test-env](../.github/actions/test-env/action.yml)：Linux 运行器为 ext4，它挂载开启 reflink 的稀疏 XFS 镜像并设为 `TMPDIR`，并以系统 rsync 设置 `MIRRORDOCK_TEST_RSYNC`，因此 CI 不跳过 rsync 用例。该 Action 只在 Actions 中运行；本地等价命令即上文“开发验证”。CI 只覆盖 GitHub 托管运行器，不等于目标 EL 发行版实机验收。
 
 ### 依赖来源校验
 

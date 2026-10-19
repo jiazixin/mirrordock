@@ -96,11 +96,12 @@ mkdir -p mirrors
 
 ```sh
 npm --prefix web ci
-sh scripts/build.sh
+npm --prefix web run build
+go build -trimpath -o bin/mirrordock ./cmd/mirrordock
 ./bin/mirrordock --version
 ```
 
-交叉编译：`GOOS=linux GOARCH=amd64 CGO_ENABLED=0 sh scripts/build.sh`。
+交叉编译时 Web 产物不变，只需给 `go build` 加目标平台：`GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -o bin/mirrordock-linux-amd64 ./cmd/mirrordock`。
 
 ## 配置
 
@@ -184,9 +185,8 @@ internal/{config,observability,database,sync,runs,mirrors,notifications,app}/
 web/                     唯一 npm/Vite 边界；Vue、E2E、embed.go
 configs/                 注释案例；本地实例忽略
 deploy/                  systemd 定义
-scripts/                 构建、CI 测试环境、favicon 与目录图标生成工具
 docs/                    部署、设计、实施与验收
-.github/workflows/       GitHub Actions CI 与 tag 发布
+.github/                 GitHub Actions CI、tag 发布与测试环境组合 Action
 .goreleaser.yaml         GoReleaser 多目标发布配置
 bin/ data/ .cache/        忽略的本机二进制（含 bin/release/ 发布预演）、状态与缓存
 test-results/            忽略的 Go/OCR/构建报告

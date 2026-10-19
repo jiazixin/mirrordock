@@ -48,8 +48,7 @@ jobs:
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
-      - name: 准备 reflink 临时目录与测试 rsync
-        run: sh scripts/ci-test-env.sh
+      - uses: ./.github/actions/test-env
       # The Go embed package needs web/dist before any vet, test or build.
       - run: npm --prefix web ci --ignore-scripts
       - run: npm --prefix web run build
@@ -80,8 +79,7 @@ jobs:
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
-      - name: 准备 reflink 临时目录与测试 rsync
-        run: sh scripts/ci-test-env.sh
+      - uses: ./.github/actions/test-env
       - run: npm --prefix web ci --ignore-scripts
       - run: npm --prefix web run build
       - name: 构建测试二进制
