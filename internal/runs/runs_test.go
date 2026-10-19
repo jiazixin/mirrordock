@@ -171,13 +171,17 @@ func TestFailoverUsesOneRunAndRedactsLogs(t *testing.T) {
 func TestFailoverSharesTimeoutAndLocalErrorsDoNotSwitch(t *testing.T) {
 	for _, retry := range []bool{false, true} {
 		t.Run(fmt.Sprint(retry), func(t *testing.T) {
+			// The first source fails halfway through a 400ms budget. Switching
+			// sources persists the run twice (fsync), so leave 200ms for that on
+			// slow CI disks. A shared budget times out near 0.4s; a reset one
+			// would run the second source for another 0.4s, past 0.6s.
 			var calls atomic.Int32
-			e, _, _, _ := testEngine(t, "120ms", runnerFunc(func(ctx context.Context, task syncer.Task, emit func(syncer.Progress), log io.Writer) error {
+			e, _, _, _ := testEngine(t, "400ms", runnerFunc(func(ctx context.Context, task syncer.Task, emit func(syncer.Progress), log io.Writer) error {
 				if calls.Add(1) == 1 {
 					select {
 					case <-ctx.Done():
 						return ctx.Err()
-					case <-time.After(65 * time.Millisecond):
+					case <-time.After(200 * time.Millisecond):
 						return &syncer.Failure{Code: "TEST", Message: "test", Retryable: retry}
 					}
 				}
@@ -193,7 +197,7 @@ func TestFailoverSharesTimeoutAndLocalErrorsDoNotSwitch(t *testing.T) {
 				state = "timed_out"
 			}
 			r = waitState(t, e, r.ID, state)
-			if retry && (calls.Load() != 2 || r.ElapsedSeconds > .19) {
+			if retry && (calls.Load() != 2 || r.ElapsedSeconds > .5) {
 				t.Fatalf("budget reset: %+v", r)
 			}
 			if !retry && calls.Load() != 1 {

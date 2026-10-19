@@ -1,5 +1,18 @@
 # 验收记录
 
+## 放宽来源切换预算测试的时间余量（2026-10-19）
+
+范围：仅 `internal/runs/runs_test.go` 的 `TestFailoverSharesTimeoutAndLocalErrorsDoNotSwitch`。CI 运行 39231050434（提交 6dfee60，只改文档与许可证）中 `/true` 子测试失败：预算 120ms、首个来源 65ms 失败后，切换来源的两次 SQLite 持久化（fsync，测试库位于 CI 的 loop XFS 上）耗尽剩余约 55ms，第二个来源尚未启动即超时（`calls=1`，`ElapsedSeconds=0.135`）。预算计入来源切换时间是既定行为，判定为测试余量不足，产品代码未改。
+
+- 调整：预算改为 400ms，首个来源 200ms 时失败，给切换留 200ms；断言改为 `ElapsedSeconds ≤ 0.5`。共享预算约 0.4s 超时，若切换时重置预算则至少 0.6s，仍能区分。
+
+| 检查 | 结果 |
+| --- | --- |
+| 目标测试 | `go test -race -count=20 -run TestFailoverSharesTimeoutAndLocalErrorsDoNotSwitch ./internal/runs` 通过（本机 macOS/APFS） |
+| 所在包 | `go test -race -count=1 ./internal/runs` 通过；`gofmt -l` 无输出 |
+| open-code-review | 托管模式，未调用外部 LLM；`ocr delegate preview` 以 default_path 排除测试文件（0 个可审文件），按 Go 规则组人工审查该 diff，无问题 |
+| 未执行 | 未在 CI 慢盘上复现或验证，待推送后由 CI 确认 |
+
 ## README 改为开源项目结构并新增英文版（2026-10-19）
 
 范围：重写 `README.md`（中文主入口：特性、运行要求、快速开始、配置要点、部署、开发、版本发布、文档索引、目录树与目录例外、贡献、许可证说明），新增英文翻译 `README.en.md`；原 README 的详细运维内容原文迁入新增的 `docs/DEPLOYMENT.md`，构建、版本、发布、开发验证、CI 与依赖校验原文迁入 `docs/IMPLEMENTATION.md`；同步 `docs/DESIGN.md`、`docs/IMPLEMENTATION.md` 的入口引用；`.goreleaser.yaml` 发布包增加 `README.en.md` 与 `docs/DEPLOYMENT.md`，并更新注释引用。随后按用户决定新增根 `LICENSE`（Apache License 2.0 官方全文，SHA-256 与 apache.org 及 Go 模块缓存中的标准副本一致），README 加许可证徽章与说明，发布包加入 `LICENSE`。之后按用户决定删除 `scripts/build.sh`（仅包装 Web 构建与 `go build` 两条命令，CI、Dockerfile 与 GoReleaser 均未使用），README、README.en.md 与 IMPLEMENTATION 改为直接写两条命令。随后按用户决定移除整个 `scripts/`：`ci-test-env.sh` 原样改为组合 Action `.github/actions/test-env/action.yml`（`shell: sh`，保持原 POSIX 语义），`ci.yml` 两处改为 `uses: ./.github/actions/test-env`；删除 `generate-favicon.py`（只支持 rect/polygon，已无法处理当前含 path 的 logo）与 `import-directory-icons.py`，`listing-icons.html` 文件头改为记录上游来源与手工维护约定；README 目录树与 IMPLEMENTATION 同步。业务代码与配置协议未改动。用户要求：按一般开源项目重写 README，中英文一起提供，提交并推送。
