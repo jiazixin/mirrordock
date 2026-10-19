@@ -2,7 +2,7 @@
 
 ## GitHub Actions CI 与 GoReleaser 多目标发布（2026-10-19）
 
-范围：新增 `.github/workflows/ci.yml`、`.github/workflows/release.yml`、`.goreleaser.yaml`、`scripts/ci-test-env.sh`；修改 README（发布、CI、目录树、目录例外 `bin/release/`）。业务代码、配置协议与 Dockerfile 未改动。用户要求：加 GitHub CI，并用 GoReleaser 在提交 tag 后产出多架构、多目标的 Release 文件。
+范围：新增 `.github/workflows/ci.yml`（初版含 macOS 运行器，按用户决定改为仅 Linux，macOS 只交叉检查）、`.github/workflows/release.yml`、`.goreleaser.yaml`、`scripts/ci-test-env.sh`；修改 README（发布、CI、目录树、目录例外 `bin/release/`）。业务代码、配置协议与 Dockerfile 未改动。用户要求：加 GitHub CI，并用 GoReleaser 在提交 tag 后产出多架构、多目标的 Release 文件。
 
 - 目标：linux amd64/arm64/ppc64le/s390x/riscv64/loong64，darwin amd64/arm64。`linux/386`、`linux/arm` 因 `internal/mirrors/clone_linux.go` 的 `Stat_t.Ctim` 为 int32 无法编译，不发布（未改源码）。
 - 发布构建不注入 `main.version`，依赖 Go 从 Git tag 写入的模块版本；GoReleaser 输出放在忽略的 `bin/release/`，避免根 `dist/` 让 Go 标记 dirty。
@@ -16,7 +16,7 @@
 | 再提交一次后 `goreleaser release --snapshot --clean` | 通过；二进制显示 Go 伪版本，未冒充 tag |
 | `scripts/ci-test-env.sh` + Go 检查（colima 特权容器 ubuntu:24.04 arm64，非 root + sudo，Go 1.27.2） | 脚本安装 xfsprogs、挂载 16G 稀疏 XFS（reflink=1）为 TMPDIR，使用 rsync 3.2.7；`go mod verify`、gofmt、`go vet ./...` 通过；`go test -race -count=1 ./...` 9 个包全部通过（未统计子测试跳过数） |
 | open-code-review | 托管模式，未调用外部 LLM；`ocr delegate preview/rule`（v1.13.1）选出 4/4 可审文件（工作流规则组、YAML 组、通用组），由当前会话审查，覆盖率 100%；排除的 README.md（unsupported_ext）已人工核对。修复 3 项：作业缺 `timeout-minutes`；发布作业恢复 npm/Go 缓存存在缓存投毒面（改为不用缓存）；`git rev-parse --short=12` 在前缀冲突时可能长于 12 位，与 Go 固定截断不一致（改为 `cut -c1-12`）。容器验证另发现 gofmt 步骤 `tee /dev/stderr` 在 sudo 切换身份时无权限，改为变量判断 |
-| 未执行 | GitHub 上真实运行（仓库当前无 remote，未推送）；Linux 下 E2E 与 Playwright 依赖安装；macOS 运行器上 Homebrew rsync 路径；x86_64 运行器（容器为 arm64）；ppc64le/s390x/riscv64/loong64 与 darwin amd64 二进制仅交叉编译，未实机运行；真实 GitHub Release 上传 |
+| 未执行 | GitHub 上真实运行（仓库当前无 remote，未推送）；Linux 下 E2E 与 Playwright 依赖安装；macOS 上的 Go 测试（按用户决定 CI 不设 macOS 运行器，仅 `GOOS=darwin go vet` 与交叉编译）；x86_64 运行器（容器为 arm64）；ppc64le/s390x/riscv64/loong64 与 darwin amd64 二进制仅交叉编译，未实机运行；真实 GitHub Release 上传 |
 
 ## 运行记录处理结果上下排列、失败原因只显示主原因（2026-10-18）
 

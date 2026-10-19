@@ -32,12 +32,8 @@ jobs:
       - run: npm --prefix web run build
 
   go:
-    name: Go 测试 (${{ matrix.os }})
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-24.04, macos-15]
-    runs-on: ${{ matrix.os }}
+    name: Go 检查与测试
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -63,6 +59,8 @@ jobs:
           unformatted=$(gofmt -l cmd internal web/embed.go)
           [ -z "$unformatted" ] || { echo "$unformatted"; exit 1; }
       - run: go vet ./...
+      # macOS is cross-checked only; release-snapshot also cross-compiles it.
+      - run: GOOS=darwin GOARCH=arm64 go vet ./...
       - run: go test -race -count=1 ./...
 
   e2e:

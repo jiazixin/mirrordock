@@ -176,11 +176,11 @@ PATH=/path/to/modern-rsync:$PATH MIRRORDOCK_TEST_RSYNC=/path/to/modern-rsync/rsy
 GitHub Actions 配置只维护在 [.github/workflows/ci.yml](.github/workflows/ci.yml)，推送 main 与 Pull Request 时运行，Action 均按提交 SHA 固定：
 
 - Web：`npm ci --ignore-scripts`、`format:check`、构建。
-- Go（ubuntu-24.04、macos-15）：先构建 Web，再 `go mod verify`、gofmt、`go vet`、`go test -race -count=1 ./...`。
+- Go（ubuntu-24.04）：先构建 Web，再 `go mod verify`、gofmt、`go vet`（含 `GOOS=darwin` 交叉检查）、`go test -race -count=1 ./...`。不设 macOS 运行器，macOS 只做交叉 vet 与交叉编译。
 - E2E（ubuntu-24.04）：构建测试二进制后运行全部 Playwright 用例。
 - GoReleaser：`goreleaser check` 与 `release --snapshot --clean`，确认全部发布目标可交叉编译和打包。
 
-Go 与 E2E 作业先执行 [scripts/ci-test-env.sh](scripts/ci-test-env.sh)：Linux 运行器为 ext4，脚本挂载开启 reflink 的稀疏 XFS 镜像并设为 `TMPDIR`，使用系统 rsync；macOS 运行器的临时目录在 APFS，脚本用 Homebrew 安装现代 rsync。两者都设置 `MIRRORDOCK_TEST_RSYNC`，因此 CI 不跳过 rsync 用例。脚本只在 Actions 中运行；本地等价命令即上文“开发验证”。CI 只覆盖 GitHub 托管运行器，不等于目标 EL 发行版实机验收。
+Go 与 E2E 作业先执行 [scripts/ci-test-env.sh](scripts/ci-test-env.sh)：Linux 运行器为 ext4，脚本挂载开启 reflink 的稀疏 XFS 镜像并设为 `TMPDIR`，并以系统 rsync 设置 `MIRRORDOCK_TEST_RSYNC`，因此 CI 不跳过 rsync 用例。脚本只在 Actions 中运行；本地等价命令即上文“开发验证”。CI 只覆盖 GitHub 托管运行器，不等于目标 EL 发行版实机验收。
 
 ### 依赖来源校验
 
