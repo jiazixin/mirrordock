@@ -1,6 +1,6 @@
 # MirrorDock 当前设计
 
-本文件描述已实施的架构和约束。配置字段以 [config.example.yaml](../configs/config.example.yaml) 为准，运维入口见 [README.md](../README.md)，实际检查与环境限制见 [ACCEPTANCE.md](ACCEPTANCE.md)。
+本文件描述已实施的架构和约束。配置字段以 [config.example.yaml](../configs/config.example.yaml) 为准，使用入口见 [README.md](../README.md)，运维细节见 [DEPLOYMENT.md](DEPLOYMENT.md)，实际检查与环境限制见 [ACCEPTANCE.md](ACCEPTANCE.md)。
 
 ## 架构与所有权
 

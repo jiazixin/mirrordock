@@ -1,5 +1,5 @@
 # yaml-language-server: $schema=https://goreleaser.com/static/schema.json
-# Release artifacts for tags vMAJOR.MINOR.PATCH[-pre]; see README “发布”.
+# Release artifacts for tags vMAJOR.MINOR.PATCH[-pre]; see docs/IMPLEMENTATION.md “发布”.
 version: 2
 
 project_name: mirrordock
@@ -46,6 +46,8 @@ archives:
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     files:
       - README.md
+      - README.en.md
+      - docs/DEPLOYMENT.md
       - configs/config.example.yaml
       - deploy/mirrordock.service
 

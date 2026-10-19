@@ -1,5 +1,15 @@
 # 验收记录
 
+## README 改为开源项目结构并新增英文版（2026-10-19）
+
+范围：重写 `README.md`（中文主入口：特性、运行要求、快速开始、配置要点、部署、开发、版本发布、文档索引、目录树与目录例外、贡献、许可证说明），新增英文翻译 `README.en.md`；原 README 的详细运维内容原文迁入新增的 `docs/DEPLOYMENT.md`，构建、版本、发布、开发验证、CI 与依赖校验原文迁入 `docs/IMPLEMENTATION.md`；同步 `docs/DESIGN.md`、`docs/IMPLEMENTATION.md` 的入口引用；`.goreleaser.yaml` 发布包增加 `README.en.md` 与 `docs/DEPLOYMENT.md`，并更新注释引用。业务代码与配置协议未改动。用户要求：按一般开源项目重写 README，中英文一起提供，提交并推送。
+
+| 检查 | 结果 |
+| --- | --- |
+| 文档链接 | 脚本检查 README.md、README.en.md、DEPLOYMENT、IMPLEMENTATION、DESIGN 的全部相对链接与锚点，0 处失效 |
+| open-code-review | 托管模式，未调用外部 LLM；`ocr delegate preview/rule`（v1.13.1）选出 1/1 可审文件 `.goreleaser.yaml`（YAML 规则组），由当前会话审查，覆盖率 100%，无问题；5 个 Markdown 文件因 unsupported_ext 排除，已人工核对命令、路径与原 README 内容一致 |
+| 未执行 | 按用户要求本次不运行测试；本机无 goreleaser，未执行 `goreleaser check`，发布包新增文件由推送后 CI 的 GoReleaser 快照作业验证 |
+
 ## GitHub Actions CI 与 GoReleaser 多目标发布（2026-10-19）
 
 范围：新增 `.github/workflows/ci.yml`（初版含 macOS 运行器，按用户决定改为仅 Linux，macOS 只交叉检查）、`.github/workflows/release.yml`、`.goreleaser.yaml`、`scripts/ci-test-env.sh`；修改 README（发布、CI、目录树、目录例外 `bin/release/`）。业务代码、配置协议与 Dockerfile 未改动。用户要求：加 GitHub CI，并用 GoReleaser 在提交 tag 后产出多架构、多目标的 Release 文件。
