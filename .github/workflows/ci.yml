@@ -1,0 +1,122 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+# Actions are pinned by commit; the comment names the reviewed tag.
+jobs:
+  web:
+    name: Web 格式与构建
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm --prefix web ci --ignore-scripts
+      - run: npm --prefix web run format:check
+      - run: npm --prefix web run build
+
+  go:
+    name: Go 测试 (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - name: 准备 reflink 临时目录与测试 rsync
+        run: sh scripts/ci-test-env.sh
+      # The Go embed package needs web/dist before any vet, test or build.
+      - run: npm --prefix web ci --ignore-scripts
+      - run: npm --prefix web run build
+      - run: go mod verify
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l cmd internal web/embed.go)
+          [ -z "$unformatted" ] || { echo "$unformatted"; exit 1; }
+      - run: go vet ./...
+      - run: go test -race -count=1 ./...
+
+  e2e:
+    name: E2E (Chromium)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - name: 准备 reflink 临时目录与测试 rsync
+        run: sh scripts/ci-test-env.sh
+      - run: npm --prefix web ci --ignore-scripts
+      - run: npm --prefix web run build
+      - name: 构建测试二进制
+        run: |
+          go build -trimpath -o "$RUNNER_TEMP/mirrordock" ./cmd/mirrordock
+          echo "MIRRORDOCK_TEST_BINARY=$RUNNER_TEMP/mirrordock" >> "$GITHUB_ENV"
+      - name: 安装 Chromium
+        working-directory: web
+        run: npm exec -- playwright install --with-deps chromium
+      - run: npm --prefix web run test:e2e
+
+  release-snapshot:
+    name: GoReleaser 多目标快照构建
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
+        with:
+          distribution: goreleaser
+          version: v2.18.3
+          install-only: true
+      - run: goreleaser check
+      - run: goreleaser release --snapshot --clean

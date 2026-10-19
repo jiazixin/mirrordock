@@ -34,6 +34,20 @@ npm --prefix web run build
 go build -trimpath -ldflags='-X main.version=v1.1.0' -o bin/mirrordock ./cmd/mirrordock
 ```
 
+### 发布
+
+推送标准 tag（如 `git tag v1.2.0 && git push origin v1.2.0`，预发布 `v1.2.0-rc.1` 自动标为 Pre-release）触发 [.github/workflows/release.yml](.github/workflows/release.yml)：先构建一次并核对 `--version` 恰为 `mirrordock <tag> (revision=<12 位提交>)`，不一致即中止；再由 GoReleaser v2.18.3 按 [.goreleaser.yaml](.goreleaser.yaml) 先构建 Web，再以 `CGO_ENABLED=0 -trimpath -ldflags='-s -w'` 交叉编译，上传 GitHub Release。版本仍由 Go 从 Git tag 自动写入，发布构建不注入 `main.version`。
+
+产物为 `mirrordock_<版本>_<系统>_<架构>.tar.gz`（含二进制、README、`configs/config.example.yaml`、`deploy/mirrordock.service`）与 `checksums.txt`（SHA-256）。目标：linux amd64、arm64、ppc64le、s390x、riscv64、loong64，darwin amd64、arm64。32 位目标无法编译，不发布；除 linux amd64/arm64 与 darwin 外的架构仅交叉编译，未经实机运行。
+
+本地预演（不发布，输出在忽略的 `bin/release/`）：
+
+```sh
+go install github.com/goreleaser/goreleaser/v2@v2.18.3
+goreleaser check   # 需要 Git remote
+goreleaser release --snapshot --clean
+```
+
 `web/dist/` 是唯一 Web 输出，由 `web/embed.go` 嵌入二进制，不提交 Git。干净检出直接执行 Go 构建或全量测试会因缺少嵌入文件失败。容器构建也先构建 Web。Docker 上下文不包含 Git，需传入 VERSION；未传时显示 dev，容器构建不附带 Git dirty 元数据。管理页面按路由加载，资源随二进制发布，无 CDN 或远程字体。
 
 Logo 唯一源为 `web/src/assets/logo.svg`。修改后用安装了 Pillow 的 Python 执行 `python3 scripts/generate-favicon.py`，再构建；普通构建不需要 Python。公开目录 Phosphor Regular 图标随 `internal/mirrors/listing-icons.html` 嵌入，包含 MIT 授权；`scripts/import-directory-icons.py` 仅用于从固定上游提交重新导入。
@@ -155,7 +169,18 @@ PATH=/path/to/modern-rsync:$PATH MIRRORDOCK_TEST_RSYNC=/path/to/modern-rsync/rsy
   MIRRORDOCK_TEST_BINARY=/absolute/temp/mirrordock npm --prefix web run test:e2e
 ```
 
-未设置测试 rsync 时部分协议测试会跳过；测试通过不代表跳过项已验证。报告位于根 `test-results/` 和 `web/test-results/`，均忽略。项目未连接外部 CI，不宣称运行远程流水线。
+未设置测试 rsync 时部分协议测试会跳过；测试通过不代表跳过项已验证。报告位于根 `test-results/` 和 `web/test-results/`，均忽略。
+
+### CI
+
+GitHub Actions 配置只维护在 [.github/workflows/ci.yml](.github/workflows/ci.yml)，推送 main 与 Pull Request 时运行，Action 均按提交 SHA 固定：
+
+- Web：`npm ci --ignore-scripts`、`format:check`、构建。
+- Go（ubuntu-24.04、macos-15）：先构建 Web，再 `go mod verify`、gofmt、`go vet`、`go test -race -count=1 ./...`。
+- E2E（ubuntu-24.04）：构建测试二进制后运行全部 Playwright 用例。
+- GoReleaser：`goreleaser check` 与 `release --snapshot --clean`，确认全部发布目标可交叉编译和打包。
+
+Go 与 E2E 作业先执行 [scripts/ci-test-env.sh](scripts/ci-test-env.sh)：Linux 运行器为 ext4，脚本挂载开启 reflink 的稀疏 XFS 镜像并设为 `TMPDIR`，使用系统 rsync；macOS 运行器的临时目录在 APFS，脚本用 Homebrew 安装现代 rsync。两者都设置 `MIRRORDOCK_TEST_RSYNC`，因此 CI 不跳过 rsync 用例。脚本只在 Actions 中运行；本地等价命令即上文“开发验证”。CI 只覆盖 GitHub 托管运行器，不等于目标 EL 发行版实机验收。
 
 ### 依赖来源校验
 
@@ -199,9 +224,11 @@ internal/{config,observability,database,sync,runs,mirrors,notifications,app}/
 web/                     唯一 npm/Vite 边界；Vue、E2E、embed.go
 configs/                 注释案例；本地实例忽略
 deploy/                  systemd 定义
-scripts/                 构建、favicon 与目录图标生成工具
+scripts/                 构建、CI 测试环境、favicon 与目录图标生成工具
 docs/                    当前设计、实施与验收
-bin/ data/ .cache/        忽略的本机二进制、状态与缓存
+.github/workflows/       GitHub Actions CI 与 tag 发布
+.goreleaser.yaml         GoReleaser 多目标发布配置
+bin/ data/ .cache/        忽略的本机二进制（含 bin/release/ 发布预演）、状态与缓存
 test-results/            忽略的 Go/OCR/构建报告
 ```
 
@@ -210,4 +237,5 @@ test-results/            忽略的 Go/OCR/构建报告
 | §7.1 配置入口与覆盖 | -f/--config；默认 cwd/config.yaml；无字段环境覆盖 | 用户确认的 YAML 协议 | 本程序；仅用户要求改变时评估 |
 | §7.1 密钥注入 | GitHub Token 直接 YAML；通知凭据 YAML 密文；GitHub/Rsync 全局与按源代理 URL 管理端回填 | 已确认配置与代理编辑协议（Rsync 代理沿用 GitHub 代理样式） | 配置 API/任务；凭据协议改变时评估 |
 | §11 工具必需路径 | web/embed.go 嵌入 web/dist | Go embed 与 Vite 的实际构建边界 | Web 资源；交付方式改变时评估 |
+| §4 `bin/` 只放可执行文件 | GoReleaser 输出（二进制、tar.gz、checksums、元数据）在 `bin/release/` | 默认根 `dist/` 未被忽略会让 Go 标记 dirty，且 `dist/` 保留给 Node/Web 产物 | 发布构建；更换发布工具时评估 |
 | §7.2 日志位置 | log.path 可为部署绝对路径或相对配置目录 | 已确认顶层 log 字段；验证与镜像/敏感路径隔离 | 程序日志；日志协议改变时评估 |

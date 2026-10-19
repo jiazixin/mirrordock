@@ -1,0 +1,63 @@
+# yaml-language-server: $schema=https://goreleaser.com/static/schema.json
+# Release artifacts for tags vMAJOR.MINOR.PATCH[-pre]; see README “发布”.
+version: 2
+
+project_name: mirrordock
+
+# Kept under the ignored bin/ so the tree stays clean and Go stamps the tag.
+dist: bin/release
+
+before:
+  hooks:
+    # The Go embed package needs web/dist before any Go build.
+    - npm --prefix web ci --ignore-scripts
+    - npm --prefix web run build
+
+builds:
+  - id: mirrordock
+    main: ./cmd/mirrordock
+    binary: mirrordock
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    # No -X main.version: Go embeds the exact tag (or a pseudo-version)
+    # from the Git checkout, as for any other build of this module.
+    ldflags:
+      - -s -w
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    # Only Linux and macOS are supported; 32-bit targets do not compile.
+    goos: [linux, darwin]
+    goarch: [amd64, arm64, ppc64le, s390x, riscv64, loong64]
+    ignore:
+      - goos: darwin
+        goarch: ppc64le
+      - goos: darwin
+        goarch: s390x
+      - goos: darwin
+        goarch: riscv64
+      - goos: darwin
+        goarch: loong64
+
+archives:
+  - id: mirrordock
+    ids: [mirrordock]
+    formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - README.md
+      - configs/config.example.yaml
+      - deploy/mirrordock.service
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-snapshot+{{ .ShortCommit }}"
+
+changelog:
+  sort: asc
+
+release:
+  prerelease: auto

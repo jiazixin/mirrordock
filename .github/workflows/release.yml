@@ -1,0 +1,59 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+      - "v[0-9]+.[0-9]+.[0-9]+-*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+# Actions are pinned by commit; the comment names the reviewed tag.
+jobs:
+  goreleaser:
+    name: GoReleaser 发布
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      # No dependency or build caches: release builds must not restore
+      # state written by other workflow runs.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - run: go mod verify
+      # Publish only when Go embeds exactly this tag and a clean tree, the
+      # same metadata the GoReleaser builds below carry.
+      - name: 核对 tag 与内置版本
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          npm --prefix web ci --ignore-scripts
+          npm --prefix web run build
+          go build -trimpath -o "$RUNNER_TEMP/mirrordock" ./cmd/mirrordock
+          got=$("$RUNNER_TEMP/mirrordock" --version)
+          want="mirrordock $TAG (revision=$(git rev-parse HEAD | cut -c1-12))"
+          if [ "$got" != "$want" ]; then
+            printf 'version mismatch\n  got:  %s\n  want: %s\n' "$got" "$want" >&2
+            exit 1
+          fi
+          echo "$got"
+      - uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
+        with:
+          distribution: goreleaser
+          version: v2.18.3
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
