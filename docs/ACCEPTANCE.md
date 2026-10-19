@@ -2,7 +2,7 @@
 
 ## README 改为开源项目结构并新增英文版（2026-10-19）
 
-范围：重写 `README.md`（中文主入口：特性、运行要求、快速开始、配置要点、部署、开发、版本发布、文档索引、目录树与目录例外、贡献、许可证说明），新增英文翻译 `README.en.md`；原 README 的详细运维内容原文迁入新增的 `docs/DEPLOYMENT.md`，构建、版本、发布、开发验证、CI 与依赖校验原文迁入 `docs/IMPLEMENTATION.md`；同步 `docs/DESIGN.md`、`docs/IMPLEMENTATION.md` 的入口引用；`.goreleaser.yaml` 发布包增加 `README.en.md` 与 `docs/DEPLOYMENT.md`，并更新注释引用。业务代码与配置协议未改动。用户要求：按一般开源项目重写 README，中英文一起提供，提交并推送。
+范围：重写 `README.md`（中文主入口：特性、运行要求、快速开始、配置要点、部署、开发、版本发布、文档索引、目录树与目录例外、贡献、许可证说明），新增英文翻译 `README.en.md`；原 README 的详细运维内容原文迁入新增的 `docs/DEPLOYMENT.md`，构建、版本、发布、开发验证、CI 与依赖校验原文迁入 `docs/IMPLEMENTATION.md`；同步 `docs/DESIGN.md`、`docs/IMPLEMENTATION.md` 的入口引用；`.goreleaser.yaml` 发布包增加 `README.en.md` 与 `docs/DEPLOYMENT.md`，并更新注释引用。随后按用户决定新增根 `LICENSE`（Apache License 2.0 官方全文，SHA-256 与 apache.org 及 Go 模块缓存中的标准副本一致），README 加许可证徽章与说明，发布包加入 `LICENSE`。业务代码与配置协议未改动。用户要求：按一般开源项目重写 README，中英文一起提供，提交并推送。
 
 | 检查 | 结果 |
 | --- | --- |

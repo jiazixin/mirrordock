@@ -13,6 +13,7 @@
   <a href="https://github.com/jiazixin/mirrordock/releases/latest"><img src="https://img.shields.io/github/v/release/jiazixin/mirrordock?sort=semver" alt="Release"></a>
   <img src="https://img.shields.io/badge/Go-1.27.2-00ADD8?logo=go&logoColor=white" alt="Go 1.27.2">
   <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS-4c8b3f" alt="Linux | macOS">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="License: Apache-2.0"></a>
 </p>
 
 <p align="center">
@@ -63,7 +64,7 @@ tar -xzf mirrordock_1.0.0_linux_amd64.tar.gz
 ./mirrordock --version
 ```
 
-Each archive contains the binary, both READMEs, the [deployment reference](docs/DEPLOYMENT.md) (Chinese), the annotated [example config](configs/config.example.yaml), and a [systemd unit](deploy/mirrordock.service).
+Each archive contains the binary, the LICENSE, both READMEs, the [deployment reference](docs/DEPLOYMENT.md) (Chinese), the annotated [example config](configs/config.example.yaml), and a [systemd unit](deploy/mirrordock.service).
 
 > The macOS builds are ad-hoc signed and not notarized. If Gatekeeper blocks a binary downloaded with a browser, run `xattr -d com.apple.quarantine mirrordock`.
 
@@ -207,4 +208,4 @@ Issues and pull requests are welcome. Before submitting:
 
 ## License
 
-The repository does not include a LICENSE file yet. Until one is added, all rights are reserved by default.
+MirrorDock is licensed under the [Apache License 2.0](LICENSE). The Phosphor icons embedded in the public directory page keep their own MIT license (see `internal/mirrors/listing-icons.html`).

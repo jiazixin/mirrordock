@@ -78,7 +78,7 @@ go build -trimpath -ldflags='-X main.version=v1.1.0' -o bin/mirrordock ./cmd/mir
 
 推送标准 tag（如 `git tag v1.2.0 && git push origin v1.2.0`，预发布 `v1.2.0-rc.1` 自动标为 Pre-release）触发 [.github/workflows/release.yml](../.github/workflows/release.yml)：先构建一次并核对 `--version` 恰为 `mirrordock <tag> (revision=<12 位提交>)`，不一致即中止；再由 GoReleaser v2.18.3 按 [.goreleaser.yaml](../.goreleaser.yaml) 先构建 Web，再以 `CGO_ENABLED=0 -trimpath -ldflags='-s -w'` 交叉编译，上传 GitHub Release。版本仍由 Go 从 Git tag 自动写入，发布构建不注入 `main.version`。
 
-产物为 `mirrordock_<版本>_<系统>_<架构>.tar.gz`（含二进制、`README.md`、`README.en.md`、`docs/DEPLOYMENT.md`、`configs/config.example.yaml`、`deploy/mirrordock.service`）与 `checksums.txt`（SHA-256）。目标：linux amd64、arm64、ppc64le、s390x、riscv64、loong64，darwin amd64、arm64。32 位目标无法编译，不发布；除 linux amd64/arm64 与 darwin 外的架构仅交叉编译，未经实机运行。
+产物为 `mirrordock_<版本>_<系统>_<架构>.tar.gz`（含二进制、`LICENSE`、`README.md`、`README.en.md`、`docs/DEPLOYMENT.md`、`configs/config.example.yaml`、`deploy/mirrordock.service`）与 `checksums.txt`（SHA-256）。目标：linux amd64、arm64、ppc64le、s390x、riscv64、loong64，darwin amd64、arm64。32 位目标无法编译，不发布；除 linux amd64/arm64 与 darwin 外的架构仅交叉编译，未经实机运行。
 
 本地预演（不发布，输出在忽略的 `bin/release/`）：
 

@@ -13,6 +13,7 @@
   <a href="https://github.com/jiazixin/mirrordock/releases/latest"><img src="https://img.shields.io/github/v/release/jiazixin/mirrordock?sort=semver" alt="Release"></a>
   <img src="https://img.shields.io/badge/Go-1.27.2-00ADD8?logo=go&logoColor=white" alt="Go 1.27.2">
   <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS-4c8b3f" alt="Linux | macOS">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="License: Apache-2.0"></a>
 </p>
 
 <p align="center">
@@ -61,7 +62,7 @@ tar -xzf mirrordock_1.0.0_linux_amd64.tar.gz
 ./mirrordock --version
 ```
 
-包内包含二进制、本 README、英文 README、[部署与运维参考](docs/DEPLOYMENT.md)、带注释的 [配置示例](configs/config.example.yaml) 和 [systemd 单元](deploy/mirrordock.service)。
+包内包含二进制、LICENSE、本 README、英文 README、[部署与运维参考](docs/DEPLOYMENT.md)、带注释的 [配置示例](configs/config.example.yaml) 和 [systemd 单元](deploy/mirrordock.service)。
 
 > macOS 包只有 ad-hoc 签名、未经公证。用浏览器下载后如被 Gatekeeper 拦截，可执行 `xattr -d com.apple.quarantine mirrordock`。
 
@@ -212,4 +213,4 @@ test-results/            忽略的 Go/OCR/构建报告
 
 ## 许可证
 
-仓库目前还没有 LICENSE 文件。在添加许可证之前，代码默认保留所有权利。
+本项目基于 [Apache License 2.0](LICENSE) 开源。公开目录内嵌的 Phosphor 图标遵循其自带的 MIT 许可（见 `internal/mirrors/listing-icons.html`）。

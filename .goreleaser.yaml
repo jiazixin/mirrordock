@@ -45,6 +45,7 @@ archives:
     formats: [tar.gz]
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     files:
+      - LICENSE
       - README.md
       - README.en.md
       - docs/DEPLOYMENT.md
