@@ -234,7 +234,10 @@ func TestActivationFilteringAndSnapshots(t *testing.T) {
 func TestRetriesStopAndRestartRecovery(t *testing.T) {
 	s, cfg, store := fixture(t)
 	var hits atomic.Int32
-	receiver := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { hits.Add(1); http.Error(w, "sensitive-secret", 503) }))
+	receiver := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		http.Error(w, "sensitive-secret", http.StatusServiceUnavailable)
+	}))
 	defer receiver.Close()
 	saveChannel(t, s, "webhook", Update{Endpoint: receiver.URL, Enabled: true})
 	task := createRun(t, store, "failed", 1)
@@ -429,7 +432,7 @@ func TestBusinessErrorsLimitsRedirectAndRedaction(t *testing.T) {
 	var followed atomic.Int32
 	dest := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { followed.Add(1) }))
 	defer dest.Close()
-	redirect := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, dest.URL, 302) }))
+	redirect := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, dest.URL, http.StatusFound) }))
 	defer redirect.Close()
 	client := newClient()
 	defer client.CloseIdleConnections()

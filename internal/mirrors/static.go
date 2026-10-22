@@ -129,15 +129,15 @@ func (m *Manager) static(w http.ResponseWriter, r *http.Request, name string, ta
 	}
 	directory := !onDisk || info.IsDir() || len(routed) > 0
 	if directory && !strings.HasSuffix(r.URL.Path, "/") {
-		http.Redirect(w, r, r.URL.EscapedPath()+"/", 301)
+		http.Redirect(w, r, r.URL.EscapedPath()+"/", http.StatusMovedPermanently)
 		return
 	}
 	var file *os.File
 	if onDisk {
 		// Bound descriptors before opening, as for published files.
 		select {
-		case m.fileGates <- struct{}{}:
-			defer func() { <-m.fileGates }()
+		case m.openFiles <- struct{}{}:
+			defer func() { <-m.openFiles }()
 		default:
 			w.Header().Set("Retry-After", "3")
 			http.Error(w, "file capacity reached", http.StatusServiceUnavailable)
@@ -174,7 +174,7 @@ func (m *Manager) static(w http.ResponseWriter, r *http.Request, name string, ta
 	if !m.acquireListing(w) {
 		return
 	}
-	defer func() { <-m.listingGates }()
+	defer func() { <-m.listingRenders }()
 	items := []listingItem{}
 	var infos map[string]SourceListingInfo
 	for child := range routed {

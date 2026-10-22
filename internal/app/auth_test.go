@@ -18,7 +18,7 @@ func TestConfiguredAccountRequiresRestart(t *testing.T) {
 	if err := os.WriteFile(file, []byte(text), 0600); err != nil {
 		t.Fatal(err)
 	}
-	a, err := Open(file)
+	a, err := openFile(file)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,7 +36,7 @@ func TestConfiguredAccountRequiresRestart(t *testing.T) {
 	if err := os.WriteFile(file, []byte(text), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := a.Config.Reload(); err != nil {
+	if err := reloadConfig(a.Config); err != nil {
 		t.Fatal(err)
 	}
 	if !a.Config.View().RestartRequired || !a.auth.authorized(request) {
@@ -51,7 +51,7 @@ func TestConfiguredAccountRequiresRestart(t *testing.T) {
 	if err := a.Close(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	b, err := Open(file)
+	b, err := openFile(file)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,5 +1,28 @@
 # 验收记录
 
+## 代码质量整改与工具链升级 Go 1.27.3 / Node 26.12.1（2026-10-22）
+
+范围：全仓 Go 与 Web 源码的死代码、未用变量与命名可读性整改；Go 工具链 1.27.2 → 1.27.3；CI、Release 与 Dockerfile 的 Node 由浮动 24 改为 26.12.1（2026-10-21 安全补丁版）；依赖安全升级。配置协议、HTTP API 字段与页面行为未改动。用户要求：代码质量检查并全部修复、升级 Go 与 CI Node 以规避现有漏洞、提交推送并打新 tag。
+
+- 静态检查：`staticcheck`（全部检查）、`deadcode`（含/不含测试）、`go fix -diff`、`vue-tsc --noUnusedLocals --noUnusedParameters`、Web 导出与 `global.css` 类名引用扫描、`govulncheck`、`npm audit`。
+- 死代码：删除无任何调用方的 `runs.Engine.ValidateChange`、`runs.Engine.List`；仅测试使用的 `app.Open`、`config.Manager.Reload`、`runs.Engine.Get`/`ClearLogs`、`notifications.Service.Records` 移入各包 `helpers_test.go`，生产二进制不再包含（`app` 测试经 `openFile`/`reloadConfig` 辅助函数，跨包处改用 `GetContext`/`ReloadChecked`）；`runs_test.go` 一处从未读取的赋值；Web 删除未使用的 `.text-left`，`normalizePrefix` 取消无外部使用的导出。
+- 可读性：HTTP 状态码数字改为 `http.Status*` 常量；`mirrors.Manager` 中含义易混的信号量重命名（`gates`→`largeDownloads`、`metadataGates`→`smallDownloads`、`listingGates`→`listingRenders`、`fileGates`→`openFiles`、`active`→`activeDownloads`、`bytes`→`sentBytes`），字段分组并注明锁的保护范围，`Stats` 的 JSON 键保持不变；`runs.Engine` 字段分组注释（锁顺序 configMu/logMu 先于 mu），`data`→`dataDir`，三处重复拼接的日志路径收敛为 `logDir`/`logPath`；`App` 的 `once`/`progress`/`listing`/`sse` 改为 `closeOnce`/`progressFrames`/`listingFrames`/`eventStreams`；`notifications.Service` 的 `testing`/`start` 改为 `testsInFlight`/`startOnce`；`config.Manager` 补字段说明；公开目录面包屑按 `go fix` 改用 `strings.Builder`。
+- 保留未改：staticcheck ST1005 的 8 处（错误信息以 Release、Packages、Bot Token、Bark、Telegram 等专有名词开头，属面向用户的中文提示）。
+- 版本与依赖：`go.mod` 为 `go 1.27.3`；Dockerfile 基础镜像 `golang:1.27.3-bookworm`、`node:26.12.1-bookworm-slim`（摘要经 Docker Hub registry API 解析的多架构索引）；CI 与 Release 的 `setup-node` 固定 `26.12.1`。Go 依赖升级 x/crypto 0.58.0、x/sys 0.49.0、klauspost/compress 1.20.3、modernc.org/sqlite 1.61.0（libc 1.79.0）等；Web 在 semver 范围内 `npm update`，修复 `npm audit` 报告的 vite 7.3.6 高危漏洞（升至 7.3.7），audit 0 漏洞。actions/checkout v7.0.1、setup-node v7.1.0、setup-go v7.0.0、goreleaser-action v7.3.0 与 GoReleaser v2.18.3 均已是最新稳定版且提交 SHA 一致，未改动。
+- `govulncheck`：代码未调用任何已知漏洞；模块级仅 GO-2026-5932（`golang.org/x/crypto/openpgp` 已停止维护，上游无修复版本），本项目未导入该包。
+
+| 检查 | 结果 |
+| --- | --- |
+| `staticcheck ./...` / `deadcode ./...` / `go fix -diff ./...` | 除上述 ST1005 外无输出 |
+| `go mod verify` / `gofmt -l cmd internal` / `go vet ./...` / `GOOS=darwin GOARCH=arm64 go vet ./...` / `GOOS=linux GOARCH=amd64 go vet ./...` | 通过 |
+| `go test -race -count=1 ./...`（`MIRRORDOCK_TEST_RSYNC=.cache/rsync/rsync-3.5.1/rsync`，本机 macOS/APFS，Go 1.27.3） | 9 个包通过；320 个测试（含子测试）通过，0 失败，0 跳过，无 data race |
+| `go test ./internal/mirrors -run '^$' -bench BenchmarkPublicHTTP -benchmem`（本机合成，Apple M2 Max） | 6483 MB/s，10362 B/op，136 allocs/op；只用于确认字段改名后下载路径无回退，不代表 Linux 性能 |
+| `GOOS=linux GOARCH={amd64,arm64} CGO_ENABLED=0 go build` | 通过（仅编译） |
+| `npm --prefix web run format:check` / `npm --prefix web run build`（含 `vue-tsc`） / `npm audit` | 通过；0 漏洞 |
+| E2E 全量（scratchpad 临时二进制，rsync 3.5.1，本机 Node 26） | 19 通过、0 跳过 |
+| open-code-review | 托管模式，未调用外部 LLM；`ocr delegate preview/rule` 选出 14/14 可审文件（ci.yml、release.yml、Dockerfile、config.example.yaml、app.go、config.go、mirrors/{http,listing,mirrors,static}.go、notifications/service.go、runs/runs.go、githubBatch.ts、global.css），由当前会话审查，覆盖率 100%；排除的 AGENTS/README/README.en/IMPLEMENTATION（unsupported_ext）、go.mod/go.sum/package-lock.json 与 19 个测试文件（default_path）已人工核对。修复 2 项：本轮新增的 `runs.Engine` 注释漏写 `mu` 同时保护 `clearing`、`logMu` 也先于 `mu` 获取；测试钩子注释未覆盖两个间隔字段 |
+| 未执行 | Docker 镜像构建（本机 docker 无 buildx，仅核对基础镜像摘要）；`goreleaser check` 与快照构建（本机未安装，由 CI 执行）；CI 上 Node 26.12.1 与 Go 1.27.3 的实际运行待推送后确认；Linux/EL 实机 |
+
 ## 放宽来源切换预算测试的时间余量（2026-10-19）
 
 范围：仅 `internal/runs/runs_test.go` 的 `TestFailoverSharesTimeoutAndLocalErrorsDoNotSwitch`。CI 运行 39231050434（提交 6dfee60，只改文档与许可证）中 `/true` 子测试失败：预算 120ms、首个来源 65ms 失败后，切换来源的两次 SQLite 持久化（fsync，测试库位于 CI 的 loop XFS 上）耗尽剩余约 55ms，第二个来源尚未启动即超时（`calls=1`，`ElapsedSeconds=0.135`）。预算计入来源切换时间是既定行为，判定为测试余量不足，产品代码未改。

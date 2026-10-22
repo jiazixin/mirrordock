@@ -559,9 +559,6 @@ code {
 .center {
   text-align: center;
 }
-.text-left {
-  text-align: left;
-}
 
 /* Summary strip: one pale-green card holding the page's headline figures. */
 .stat-grid {

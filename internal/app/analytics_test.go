@@ -17,7 +17,7 @@ func TestAnalyticsAuthenticationValidationAndEmptyResponse(t *testing.T) {
 	if err := os.WriteFile(file, []byte("listen: 127.0.0.1\npath: ./data\nmirror_root: ./mirror\nauth:\n  username: admin\n  password: fixture-password\nsources: []\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	a, err := Open(file)
+	a, err := openFile(file)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -21,7 +21,7 @@ func TestLatestSourceStatusAndExpiredEventStream(t *testing.T) {
 	if err := os.WriteFile(file, []byte(text), 0600); err != nil {
 		t.Fatal(err)
 	}
-	a, err := Open(file)
+	a, err := openFile(file)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -34,7 +34,7 @@ func TestGitHubReuseKeepsGenerationAndRefreshesSummary(t *testing.T) {
 				io.WriteString(w, `[{"id":20,"name":"asset.bin","size":3}]`)
 			}
 		case "/repos/o/r/releases/assets/20", "/repos/o/r/releases/assets/21":
-			http.Redirect(w, r, server.URL+"/asset", 302)
+			http.Redirect(w, r, server.URL+"/asset", http.StatusFound)
 		case "/asset":
 			if changed.Load() {
 				io.WriteString(w, "xyz")
@@ -188,12 +188,12 @@ func TestFileDescriptorsBoundBeforeOpen(t *testing.T) {
 	if _, err := m.Publish(t.Context(), s, 1); err != nil {
 		t.Fatal(err)
 	}
-	for range cap(m.fileGates) {
-		m.fileGates <- struct{}{}
+	for range cap(m.openFiles) {
+		m.openFiles <- struct{}{}
 	}
 	defer func() {
-		for len(m.fileGates) > 0 {
-			<-m.fileGates
+		for len(m.openFiles) > 0 {
+			<-m.openFiles
 		}
 	}()
 	for _, method := range []string{"GET", "HEAD"} {

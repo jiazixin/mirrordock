@@ -109,17 +109,19 @@ const (
 )
 
 type Service struct {
-	mu      sync.Mutex
-	scanMu  sync.Mutex
-	testing map[string]bool
-	cfg     *config.Manager
-	store   *database.Store
-	aead    cipher.AEAD
-	client  *http.Client
-	ctx     context.Context
-	cancel  context.CancelFunc
-	wg      sync.WaitGroup
-	start   sync.Once
+	mu     sync.Mutex
+	scanMu sync.Mutex
+	// testsInFlight marks channels with a test message being sent; guarded
+	// by mu.
+	testsInFlight map[string]bool
+	cfg           *config.Manager
+	store         *database.Store
+	aead          cipher.AEAD
+	client        *http.Client
+	ctx           context.Context
+	cancel        context.CancelFunc
+	wg            sync.WaitGroup
+	startOnce     sync.Once
 }
 
 func timestamp() string { return time.Now().UTC().Format(time.RFC3339Nano) }
@@ -137,13 +139,13 @@ func New(cfg *config.Manager, store *database.Store) (*Service, error) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &Service{
-		cfg:     cfg,
-		store:   store,
-		aead:    key,
-		client:  newClient(),
-		testing: map[string]bool{},
-		ctx:     ctx,
-		cancel:  cancel,
+		cfg:           cfg,
+		store:         store,
+		aead:          key,
+		client:        newClient(),
+		testsInFlight: map[string]bool{},
+		ctx:           ctx,
+		cancel:        cancel,
 	}
 	if err = s.ValidateConfig(cfg.Current()); err != nil {
 		cancel()
@@ -175,7 +177,7 @@ func (s *Service) ValidateConfig(c config.Config) error {
 }
 
 func (s *Service) Start() {
-	s.start.Do(func() {
+	s.startOnce.Do(func() {
 		s.wg.Go(func() {
 			ticker := time.NewTicker(scanInterval)
 			defer ticker.Stop()
@@ -538,11 +540,6 @@ func (s *Service) deliverNext() (bool, error) {
 	return err == nil, err
 }
 
-func (s *Service) Records() ([]Record, error) {
-	records, _, err := s.RecordPage(s.ctx, 30, 0)
-	return records, err
-}
-
 func (s *Service) RecordPage(ctx context.Context, limit, offset int) ([]Record, int, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
@@ -577,14 +574,14 @@ func (s *Service) Test(ctx context.Context, kind string) error {
 		s.mu.Unlock()
 		return errors.New("不支持的通知渠道")
 	}
-	if s.testing[kind] {
+	if s.testsInFlight[kind] {
 		s.mu.Unlock()
 		return errors.New("该渠道正在发送测试，请稍后")
 	}
-	s.testing[kind] = true
+	s.testsInFlight[kind] = true
 	defer func() {
 		s.mu.Lock()
-		delete(s.testing, kind)
+		delete(s.testsInFlight, kind)
 		s.mu.Unlock()
 	}()
 	channel, err := s.plain(kind, s.cfg.Current().Settings.Notifications[kind])

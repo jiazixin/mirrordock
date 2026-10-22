@@ -76,7 +76,7 @@ func TestLogChunksPreserveUTF8(t *testing.T) {
 	e, _, _, _ := testEngine(t, "2s", runnerFunc(func(context.Context, syncer.Task, func(syncer.Progress), io.Writer) error { return nil }))
 	r := logFixture(t, e, "succeeded", 1)
 	content := strings.Repeat("a", (128<<10)-1) + "中文尾部"
-	name := filepath.Join(e.data, "logs", fmt.Sprint(r.ID), "1.log")
+	name := filepath.Join(e.dataDir, "logs", fmt.Sprint(r.ID), "1.log")
 	if err := os.WriteFile(name, []byte(content), 0600); err != nil {
 		t.Fatal(err)
 	}

@@ -56,7 +56,7 @@ function normalizeRepository(token: string): string | null {
   return repoPattern.test(repository) ? repository : null
 }
 
-export function normalizePrefix(prefix: string) {
+function normalizePrefix(prefix: string) {
   return prefix.trim().split('/').filter(Boolean).join('/')
 }
 

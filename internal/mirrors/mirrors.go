@@ -59,32 +59,45 @@ const (
 )
 
 type Manager struct {
-	probeMu       sync.Mutex
-	collectMu     sync.Mutex
-	storageMu     sync.Mutex
-	workMu        sync.Mutex
-	syncing       map[int64]bool
-	clone         func(*os.File, string) error
-	space         func(string) (DiskSpace, error)
-	mu            sync.Mutex
-	routeMu       sync.RWMutex
-	Root          string
-	store         *database.Store
-	table         atomic.Pointer[routes]
-	dests         atomic.Pointer[map[string]bool] // configured dests, routed or not
-	retired       []*opened
-	active        atomic.Int64
-	gates         chan struct{}
-	metadataGates chan struct{}
-	listingGates  chan struct{}
-	fileGates     chan struct{}
-	requests      atomic.Int64
-	bytes         atomic.Int64
-	cache         *metadataCache
-	roots         *rootCache
-	ListingInfo   func(context.Context) map[string]SourceListingInfo
-	issueMu       sync.Mutex
-	issues        []SourceIssue
+	Root  string
+	store *database.Store
+
+	// mu serializes changes to publications and generations (reconcile,
+	// publish, collect, Close); routeMu guards route leases, the table swap
+	// and retired routes.
+	mu        sync.Mutex
+	routeMu   sync.RWMutex
+	probeMu   sync.Mutex
+	collectMu sync.Mutex
+	storageMu sync.Mutex
+	workMu    sync.Mutex
+
+	// syncing holds the run IDs admitted by BeginSync; guarded by storageMu.
+	syncing map[int64]bool
+	clone   func(*os.File, string) error
+	space   func(string) (DiskSpace, error)
+
+	table   atomic.Pointer[routes]
+	dests   atomic.Pointer[map[string]bool] // configured dests, routed or not
+	retired []*opened
+
+	// Semaphores bounding public serving: GET slots for files above and up
+	// to smallDownloadBytes, directory listing renders, and open descriptors.
+	largeDownloads chan struct{}
+	smallDownloads chan struct{}
+	listingRenders chan struct{}
+	openFiles      chan struct{}
+
+	// Download counters reported by Stats.
+	activeDownloads atomic.Int64
+	requests        atomic.Int64
+	sentBytes       atomic.Int64
+
+	cache       *metadataCache
+	roots       *rootCache
+	ListingInfo func(context.Context) map[string]SourceListingInfo
+	issueMu     sync.Mutex
+	issues      []SourceIssue
 }
 
 func New(root string, store *database.Store, sources []config.Source) (*Manager, error) {
@@ -100,16 +113,16 @@ func New(root string, store *database.Store, sources []config.Source) (*Manager,
 	}
 	files, _ := DescriptorLimits()
 	m := &Manager{
-		Root:          canonical,
-		store:         store,
-		gates:         make(chan struct{}, largeDownloadSlots),
-		metadataGates: make(chan struct{}, smallDownloadSlots),
-		listingGates:  make(chan struct{}, listingSlots),
-		fileGates:     make(chan struct{}, files),
-		cache:         newCache(metadataCacheEntries),
-		syncing:       map[int64]bool{},
-		clone:         cloneFile,
-		space:         diskSpace,
+		Root:           canonical,
+		store:          store,
+		largeDownloads: make(chan struct{}, largeDownloadSlots),
+		smallDownloads: make(chan struct{}, smallDownloadSlots),
+		listingRenders: make(chan struct{}, listingSlots),
+		openFiles:      make(chan struct{}, files),
+		cache:          newCache(metadataCacheEntries),
+		syncing:        map[int64]bool{},
+		clone:          cloneFile,
+		space:          diskSpace,
 	}
 	m.table.Store(&routes{entries: map[string]*opened{}})
 	m.roots, err = newRootCache(canonical, rootCacheLimit())
@@ -830,12 +843,14 @@ func (m *Manager) restrictLocked(sources []config.Source) {
 
 func (m *Manager) Stats() map[string]int64 {
 	return map[string]int64{
-		"active":            m.active.Load(),
-		"requests":          m.requests.Load(),
-		"bytes":             m.bytes.Load(),
-		"capacity":          int64(cap(m.gates) + cap(m.metadataGates)),
-		"file_capacity":     int64(cap(m.gates)),
-		"metadata_capacity": int64(cap(m.metadataGates)),
+		"active":   m.activeDownloads.Load(),
+		"requests": m.requests.Load(),
+		"bytes":    m.sentBytes.Load(),
+		"capacity": int64(cap(m.largeDownloads) + cap(m.smallDownloads)),
+		// file_capacity is the large-download share; the key is kept for API
+		// compatibility.
+		"file_capacity":     int64(cap(m.largeDownloads)),
+		"metadata_capacity": int64(cap(m.smallDownloads)),
 	}
 }
 
@@ -852,7 +867,7 @@ func (m *Manager) Collect(now time.Time) error { return m.CollectContext(context
 
 // Busy reports that large downloads use more than three quarters of their
 // slots; queued synchronizations then wait.
-func (m *Manager) Busy() bool { return m.active.Load() > int64(cap(m.gates)*3/4) }
+func (m *Manager) Busy() bool { return m.activeDownloads.Load() > int64(cap(m.largeDownloads)*3/4) }
 
 func (m *Manager) CollectContext(ctx context.Context, now time.Time) error {
 	m.collectMu.Lock()

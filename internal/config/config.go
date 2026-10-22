@@ -202,8 +202,11 @@ type View struct {
 }
 
 type Manager struct {
-	mu       sync.RWMutex
-	file     string
+	mu   sync.RWMutex
+	file string
+	// cfg is the configuration in effect and revision the digest of the YAML
+	// it was read from; startup keeps the version loaded at process start for
+	// the settings that only apply after a restart.
 	cfg      Config
 	revision string
 	startup  Config
@@ -903,10 +906,6 @@ func (m *Manager) View() View {
 	c.Auth.Password = ""
 	view.Config = c
 	return view
-}
-
-func (m *Manager) Reload() error {
-	return m.ReloadChecked(func(Config) error { return nil })
 }
 
 func (m *Manager) ReloadChecked(check func(Config) error) error {

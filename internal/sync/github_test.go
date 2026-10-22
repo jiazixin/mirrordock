@@ -66,7 +66,7 @@ func testDownloadIdle(client *github.Client, httpClient *http.Client, id AssetId
 }
 
 func TestAssetReplacementCannotReuseOldSameSize(t *testing.T) {
-	client, _ := assetClient(t, func(w http.ResponseWriter, r *http.Request) { http.Error(w, "failure", 503) })
+	client, _ := assetClient(t, func(w http.ResponseWriter, r *http.Request) { http.Error(w, "failure", http.StatusServiceUnavailable) })
 	target := filepath.Join(t.TempDir(), "asset.bin")
 	os.WriteFile(target, []byte("old"), 0644)
 	old := AssetIdentity{ID: 1, Size: 3}
@@ -91,7 +91,7 @@ func TestAssetResumeAndInvalidRangeRestart(t *testing.T) {
 			var assetURL string
 			client, server := assetClient(t, func(w http.ResponseWriter, r *http.Request) {
 				if strings.HasPrefix(r.URL.Path, "/repos/") {
-					http.Redirect(w, r, assetURL, 302)
+					http.Redirect(w, r, assetURL, http.StatusFound)
 					return
 				}
 				downloads.Add(1)
@@ -161,7 +161,7 @@ func TestGitHubSelectsNewestAssetsWithoutSourceArchives(t *testing.T) {
 		case "/repos/o/r/releases/2/assets":
 			io.WriteString(w, `[{"id":20,"name":"linux-amd64.bin","size":3}]`)
 		case "/repos/o/r/releases/assets/20":
-			http.Redirect(w, r, assetURL, 302)
+			http.Redirect(w, r, assetURL, http.StatusFound)
 		case "/asset":
 			io.WriteString(w, "abc")
 		default:
@@ -308,7 +308,7 @@ func TestTruncatedAssetCanResumeAfterNetworkFailure(t *testing.T) {
 	var assetURL string
 	client, server := assetClient(t, func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/repos/") {
-			http.Redirect(w, r, assetURL, 302)
+			http.Redirect(w, r, assetURL, http.StatusFound)
 			return
 		}
 		if downloads.Add(1) == 1 {
@@ -344,7 +344,7 @@ func TestFailedAssetRetainsBytesSinceLastProgressTick(t *testing.T) {
 	payload := strings.Repeat("x", 70<<10)
 	client, server := assetClient(t, func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/repos/") {
-			http.Redirect(w, r, assetURL, 302)
+			http.Redirect(w, r, assetURL, http.StatusFound)
 			return
 		}
 		w.Header().Set("Content-Length", "102400")
@@ -431,7 +431,7 @@ func TestAssetIdleTimeoutRetainsPartialAndRetries(t *testing.T) {
 	var finish atomic.Bool
 	client, server := assetClient(t, func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/repos/") {
-			http.Redirect(w, r, assetURL, 302)
+			http.Redirect(w, r, assetURL, http.StatusFound)
 			return
 		}
 		if finish.Load() {
@@ -488,10 +488,10 @@ func TestGitHubPrunesObsoleteAssetsOnlyAfterSuccess(t *testing.T) {
 		case "/repos/o/r/releases/1/assets":
 			io.WriteString(w, `[{"id":2,"name":"new.bin","size":3}]`)
 		case "/repos/o/r/releases/assets/2":
-			http.Redirect(w, r, assetURL, 302)
+			http.Redirect(w, r, assetURL, http.StatusFound)
 		case "/asset":
 			if fail.Load() {
-				http.Error(w, "failure", 503)
+				http.Error(w, "failure", http.StatusServiceUnavailable)
 			} else {
 				io.WriteString(w, "new")
 			}

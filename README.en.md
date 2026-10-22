@@ -11,7 +11,7 @@
 <p align="center">
   <a href="https://github.com/jiazixin/mirrordock/actions/workflows/ci.yml"><img src="https://github.com/jiazixin/mirrordock/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
   <a href="https://github.com/jiazixin/mirrordock/releases/latest"><img src="https://img.shields.io/github/v/release/jiazixin/mirrordock?sort=semver" alt="Release"></a>
-  <img src="https://img.shields.io/badge/Go-1.27.2-00ADD8?logo=go&logoColor=white" alt="Go 1.27.2">
+  <img src="https://img.shields.io/badge/Go-1.27.3-00ADD8?logo=go&logoColor=white" alt="Go 1.27.3">
   <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS-4c8b3f" alt="Linux | macOS">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="License: Apache-2.0"></a>
 </p>
@@ -48,7 +48,7 @@ MirrorDock is a single Go binary with an embedded Vue 3 admin console for runnin
 | Filesystem | Reflink support on the mirror root; work and published trees on the same filesystem |
 | rsync | 3.1 or later with your distribution's security patches (the macOS system rsync is too old) |
 | Reposync (optional) | DNF 4 and `dnf-plugins-core`, plus `rpmkeys` when GPG checks are on; DNF5 is not supported |
-| Building from source | Go 1.27.2, Node.js ≥ 22.12, npm |
+| Building from source | Go 1.27.3, Node.js ≥ 22.12, npm |
 
 ## Quick start
 

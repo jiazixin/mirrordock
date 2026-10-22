@@ -46,7 +46,7 @@ GitHub 原始日志有资产结果，当前没有每资产独立数据库检索�
 
 ## 构建与版本
 
-需要 Go 1.27.2、Node.js >=22.12、npm。部署 rsync 应为包含发行版安全补丁的 **3.1+** 版本；macOS 自带旧版本不支持所需参数。Reposync 使用 DNF 4、`dnf-plugins-core` 和开启 GPG 检查时所需的 `rpmkeys`；受控仓库已验证 Rocky 9 和 AlmaLinux 10.2，具体架构与范围见验收记录，不承诺兼容 DNF5。GitHub 下载不需要 gh。
+需要 Go 1.27.3、Node.js >=22.12、npm。部署 rsync 应为包含发行版安全补丁的 **3.1+** 版本；macOS 自带旧版本不支持所需参数。Reposync 使用 DNF 4、`dnf-plugins-core` 和开启 GPG 检查时所需的 `rpmkeys`；受控仓库已验证 Rocky 9 和 AlmaLinux 10.2，具体架构与范围见验收记录，不承诺兼容 DNF5。GitHub 下载不需要 gh。
 
 从仓库根执行，必须先生成 Web，再编译 Go：
 

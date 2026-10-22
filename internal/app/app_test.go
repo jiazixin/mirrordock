@@ -32,12 +32,12 @@ func TestAdminAuthenticationWritebackAndPublicIsolation(t *testing.T) {
 	if err := os.WriteFile(file, []byte(text), 0600); err != nil {
 		t.Fatal(err)
 	}
-	a, err := Open(file)
+	a, err := openFile(file)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer a.Close(context.Background())
-	if other, err := Open(file); err == nil {
+	if other, err := openFile(file); err == nil {
 		other.Close(context.Background())
 		t.Fatal("same data dir opened twice")
 	}
@@ -125,9 +125,9 @@ func TestAdminAuthenticationWritebackAndPublicIsolation(t *testing.T) {
 		t.Fatal("authenticated status omitted configured username")
 	}
 	generation := func() uint64 {
-		a.progress.mu.Lock()
-		defer a.progress.mu.Unlock()
-		return a.progress.generation
+		a.progressFrames.mu.Lock()
+		defer a.progressFrames.mu.Unlock()
+		return a.progressFrames.generation
 	}
 	// Anonymous login attempts must not force fresh SSE snapshot queries.
 	if generation() != 0 {
@@ -215,7 +215,7 @@ func TestTLSHTTP2PublicDownload(t *testing.T) {
 	os.WriteFile(keyFile, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER}), 0600)
 	file := filepath.Join(dir, "config.yaml")
 	os.WriteFile(file, []byte("listen: 127.0.0.1\nport: 8080\npath: ./data\nmirror_root: ./mirror\nauth:\n  username: operator\n  password: correct password 123\ntls:\n  cert: ./cert.pem\n  key: ./key.pem\nsources:\n  - id: repo\n    name: Repo\n    type: rsync\n    dest: repo\n    src1: rsync://localhost/repo/\n"), 0600)
-	a, err := Open(file)
+	a, err := openFile(file)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -309,7 +309,7 @@ func TestSystemInfoUsesStartupDeployment(t *testing.T) {
 	if err := os.WriteFile(file, []byte(original), 0600); err != nil {
 		t.Fatal(err)
 	}
-	a, err := Open(file)
+	a, err := openFile(file)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -319,7 +319,7 @@ func TestSystemInfoUsesStartupDeployment(t *testing.T) {
 	if err := os.WriteFile(file, []byte(updated), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := a.Config.Reload(); err != nil {
+	if err := reloadConfig(a.Config); err != nil {
 		t.Fatal(err)
 	}
 	if !a.Config.View().RestartRequired {
@@ -363,7 +363,7 @@ func TestListenFailureLeavesQueuedTaskUntouched(t *testing.T) {
 	if err := os.WriteFile(file, []byte("listen: 127.0.0.1\npath: ./data\nmirror_root: ./mirror\nauth:\n  username: admin\n  password: fixture\nsources:\n  - id: repo\n    name: Repo\n    type: rsync\n    enabled: true\n    dest: repo\n    src1: rsync://127.0.0.1:1/repo/\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	a, err := Open(file)
+	a, err := openFile(file)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -382,7 +382,7 @@ func TestListenFailureLeavesQueuedTaskUntouched(t *testing.T) {
 	if err := a.Serve(); err == nil {
 		t.Fatal("occupied port accepted")
 	}
-	got, err := a.Runs.Get(run.ID)
+	got, err := a.Runs.GetContext(t.Context(), run.ID)
 	if err != nil || got.State != "queued" || len(got.Attempts) != 0 {
 		t.Fatal(got, err)
 	}

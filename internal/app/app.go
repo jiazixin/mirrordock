@@ -48,21 +48,17 @@ type App struct {
 	Notifications *notifications.Service
 	auth          *auth
 	location      *time.Location
-	lock          *os.File
-	Server        *http.Server
-	once          sync.Once
-	progress      progressFrames
-	listing       progressFrames
-	sse           chan struct{}
-	closing       chan struct{}
-}
-
-func Open(file string) (*App, error) {
-	cfg, err := config.Open(file)
-	if err != nil {
-		return nil, err
-	}
-	return OpenConfig(cfg)
+	// lock holds the exclusive flock on the data directory.
+	lock      *os.File
+	Server    *http.Server
+	closeOnce sync.Once
+	// progressFrames caches the admin SSE progress payload; listingFrames
+	// caches the per-source state shown in the public directory.
+	progressFrames progressFrames
+	listingFrames  progressFrames
+	// eventStreams is a semaphore bounding concurrent SSE connections.
+	eventStreams chan struct{}
+	closing      chan struct{}
 }
 
 // OpenConfig uses the configuration already validated during process startup.
@@ -132,7 +128,7 @@ func OpenConfig(cfg *config.Manager) (*App, error) {
 		auth:          auth,
 		location:      location,
 		lock:          lock,
-		sse:           make(chan struct{}, maxEventStreams),
+		eventStreams:  make(chan struct{}, maxEventStreams),
 		closing:       make(chan struct{}),
 		connections:   &connections{entries: map[net.Conn]*connection{}, limit: connectionLimit()},
 	}
@@ -154,7 +150,7 @@ func OpenConfig(cfg *config.Manager) (*App, error) {
 // listingInfo reports the latest state, last success and next schedule of
 // each source for the public directory, shared through a one-second frame.
 func (a *App) listingInfo(ctx context.Context) map[string]mirrors.SourceListingInfo {
-	encoded, err := a.listing.get(ctx, a.readListingInfo)
+	encoded, err := a.listingFrames.get(ctx, a.readListingInfo)
 	if err != nil {
 		return nil
 	}
@@ -251,7 +247,7 @@ func (a *App) Serve() error {
 
 func (a *App) Close(ctx context.Context) error {
 	var err error
-	a.once.Do(func() {
+	a.closeOnce.Do(func() {
 		a.serveMu.Lock()
 		close(a.closing)
 		a.serveMu.Unlock()
@@ -320,7 +316,7 @@ func (a *App) Handler() http.Handler {
 			// Authenticated writes may create or change runs; the next SSE frame
 			// must not replay a cached snapshot from before the write. Anonymous
 			// login attempts never trigger a fresh query.
-			a.progress.invalidate()
+			a.progressFrames.invalidate()
 		}
 	}))
 	mux.HandleFunc("/admin/", a.frontend)
@@ -632,8 +628,8 @@ func checkWritable(dir string) bool {
 
 func (a *App) events(w http.ResponseWriter, r *http.Request) {
 	select {
-	case a.sse <- struct{}{}:
-		defer func() { <-a.sse }()
+	case a.eventStreams <- struct{}{}:
+		defer func() { <-a.eventStreams }()
 	default:
 		respond(w, 503, map[string]string{"error": "事件连接数量已满"})
 		return
@@ -651,8 +647,8 @@ func (a *App) events(w http.ResponseWriter, r *http.Request) {
 		if !a.auth.authorized(r) {
 			return
 		}
-		changed := a.progress.changes()
-		frame, err := a.progress.get(r.Context(), a.readProgress)
+		changed := a.progressFrames.changes()
+		frame, err := a.progressFrames.get(r.Context(), a.readProgress)
 		if err != nil {
 			return
 		}
@@ -701,7 +697,7 @@ var adminContentSecurityPolicy = strings.Join([]string{
 
 func (a *App) frontend(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "GET" && r.Method != "HEAD" {
-		http.Error(w, "method not allowed", 405)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 	w.Header().Set("X-Content-Type-Options", "nosniff")

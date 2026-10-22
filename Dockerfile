@@ -1,7 +1,7 @@
 # Base images are pinned by digest. To update, resolve the new digest of the
 # same tag from the official registry and review the change, for example:
-#   docker buildx imagetools inspect node:24-bookworm-slim
-FROM node:24-bookworm-slim@sha256:a5f4366e834695d5f363b920c104953a535d3a9864d1bdf74566a0ebe01daee5 AS web
+#   docker buildx imagetools inspect node:26.12.1-bookworm-slim
+FROM node:26.12.1-bookworm-slim@sha256:28147155d47dc31abe0a46e0d12b59b2fb3d0a2dcc5dc65fce76a074180b16fe AS web
 WORKDIR /build/web
 COPY web/package.json web/package-lock.json ./
 # The lockfile pins every package by integrity hash; no install script runs.
@@ -9,7 +9,7 @@ RUN npm ci --ignore-scripts
 COPY web/ ./
 RUN npm run build
 
-FROM golang:1.27.2-bookworm@sha256:5cf287a799e6b94384bad13d16b14904c531f51ba65792237e122ce42b392f61 AS go
+FROM golang:1.27.3-bookworm@sha256:972b4110ba0f47539a975c31e52c64765e1ff19f2d74469ae4a595c6676e80a5 AS go
 ARG VERSION=dev
 ARG GOPROXY=https://proxy.golang.org,direct
 # Modules are verified against go.sum and the public checksum database even

@@ -11,7 +11,7 @@
 <p align="center">
   <a href="https://github.com/jiazixin/mirrordock/actions/workflows/ci.yml"><img src="https://github.com/jiazixin/mirrordock/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
   <a href="https://github.com/jiazixin/mirrordock/releases/latest"><img src="https://img.shields.io/github/v/release/jiazixin/mirrordock?sort=semver" alt="Release"></a>
-  <img src="https://img.shields.io/badge/Go-1.27.2-00ADD8?logo=go&logoColor=white" alt="Go 1.27.2">
+  <img src="https://img.shields.io/badge/Go-1.27.3-00ADD8?logo=go&logoColor=white" alt="Go 1.27.3">
   <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS-4c8b3f" alt="Linux | macOS">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="License: Apache-2.0"></a>
 </p>
@@ -46,7 +46,7 @@ MirrorDock 是 Go 后端加内嵌 Vue 3 管理台的单二进制程序，用来�
 | 文件系统 | 镜像根需支持 reflink，且 work 与 published 位于同一文件系统 |
 | rsync | 3.1 及以上，并包含发行版的安全补丁（macOS 自带版本过旧） |
 | Reposync（可选） | DNF 4、`dnf-plugins-core`，开启 GPG 检查时还需要 `rpmkeys`；不承诺兼容 DNF5 |
-| 从源码构建 | Go 1.27.2、Node.js ≥ 22.12、npm |
+| 从源码构建 | Go 1.27.3、Node.js ≥ 22.12、npm |
 
 ## 快速开始
 

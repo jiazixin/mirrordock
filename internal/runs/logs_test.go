@@ -19,7 +19,7 @@ func logFixture(t *testing.T, e *Engine, state string, attempts int) *Run {
 	if _, err := e.store.CreateRun(r.SourceID, state, time.Now().UTC().Format(time.RFC3339Nano), r); err != nil {
 		t.Fatal(err)
 	}
-	dir := filepath.Join(e.data, "logs", fmt.Sprint(r.ID))
+	dir := filepath.Join(e.dataDir, "logs", fmt.Sprint(r.ID))
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		t.Fatal(err)
 	}

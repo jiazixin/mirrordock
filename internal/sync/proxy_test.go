@@ -42,14 +42,14 @@ func testHTTPProxy(t *testing.T, secure bool, target string, requests *atomic.In
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodConnect || r.Header.Get("Proxy-Authorization") != "Basic "+base64.StdEncoding.EncodeToString([]byte("proxy-user:proxy-password")) {
 			t.Error("proxy CONNECT or authentication missing")
-			http.Error(w, "proxy authentication required", 407)
+			http.Error(w, "proxy authentication required", http.StatusProxyAuthRequired)
 			return
 		}
 		requests.Add(1)
 		upstream, err := net.DialTimeout("tcp", target, time.Second)
 		if err != nil {
 			t.Error(err)
-			http.Error(w, "fixture unavailable", 502)
+			http.Error(w, "fixture unavailable", http.StatusBadGateway)
 			return
 		}
 		downstream, buffered, err := w.(http.Hijacker).Hijack()
@@ -180,7 +180,7 @@ func TestGitHubProxyAPIAndAssetDownloads(t *testing.T) {
 				case "/repos/o/r/releases/1/assets":
 					_, _ = io.WriteString(w, `[{"id":1,"name":"linux.bin","size":3}]`)
 				case "/repos/o/r/releases/assets/1":
-					http.Redirect(w, r, assetURL, 302)
+					http.Redirect(w, r, assetURL, http.StatusFound)
 				default:
 					t.Error("unexpected API request", r.URL.Path)
 					http.NotFound(w, r)

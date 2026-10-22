@@ -103,34 +103,49 @@ const (
 )
 
 type Engine struct {
-	mu                 sync.Mutex
-	logMu              sync.RWMutex
-	clearMu            sync.Mutex
-	clearing           map[int64]chan struct{}
-	removeLog          func(string) error
-	configMu           sync.Mutex
-	cfg                *config.Manager
-	store              *database.Store
-	mirror             *mirrors.Manager
-	runner             syncer.Runner
-	data               string
-	ctx                context.Context
-	cancel             context.CancelFunc
-	wg                 sync.WaitGroup
-	pending            []*Run
-	current            map[int64]*Run
-	working            map[int64]*active
-	wake               chan struct{}
-	cleanupWake        chan struct{}
+	cfg    *config.Manager
+	store  *database.Store
+	mirror *mirrors.Manager
+	runner syncer.Runner
+	// dataDir is the state directory; attempt logs live under its logs/.
+	dataDir string
+	ctx     context.Context
+	cancel  context.CancelFunc
+	wg      sync.WaitGroup
+
+	// mu guards current, pending, working and clearing. configMu orders
+	// configuration changes with enqueueing and logMu orders log reads with
+	// log removal; both are taken before mu.
+	mu       sync.Mutex
+	configMu sync.Mutex
+	// current holds every reserved run by ID, pending the queued ones in
+	// dispatch order, and working the runs whose executor is running.
+	current map[int64]*Run
+	pending []*Run
+	working map[int64]*active
+
+	logMu   sync.RWMutex
+	clearMu sync.Mutex
+	// clearing marks runs whose logs are being removed; the channel closes
+	// when that removal ends.
+	clearing  map[int64]chan struct{}
+	removeLog func(string) error
+
+	wake        chan struct{}
+	cleanupWake chan struct{}
+	// Replaced in tests; production uses the mirror manager's admission and
+	// capacity checks and the default intervals.
 	admitSync          func(int64) error
 	storageCheck       func() error
 	checkpointInterval time.Duration
-	cron               *cron.Cron
 	retryDelay         time.Duration
-	location           *time.Location
-	scheduleIDs        map[string]cron.EntryID
-	ConfigValidator    func(config.Config) error
-	ConfigApplied      func() error
+
+	cron        *cron.Cron
+	location    *time.Location
+	scheduleIDs map[string]cron.EntryID
+
+	ConfigValidator func(config.Config) error
+	ConfigApplied   func() error
 }
 
 func New(
@@ -146,7 +161,7 @@ func New(
 		store:              store,
 		mirror:             mirror,
 		runner:             runner,
-		data:               config.Resolve(cfg.File(), cfg.Startup().Path),
+		dataDir:            config.Resolve(cfg.File(), cfg.Startup().Path),
 		ctx:                ctx,
 		cancel:             cancel,
 		current:            map[int64]*Run{},
@@ -361,12 +376,6 @@ func (e *Engine) busySource(id string) bool {
 		}
 	}
 	return false
-}
-
-func (e *Engine) ValidateChange(c config.Config) error {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	return e.validateChange(c)
 }
 
 func (e *Engine) validateChange(c config.Config) error {
@@ -676,10 +685,6 @@ func (e *Engine) requestCleanup() {
 	}
 }
 
-func (e *Engine) Get(id int64) (*Run, error) {
-	return e.GetContext(e.ctx, id)
-}
-
 // liveCopy returns a copy of a reserved run with its current elapsed budget,
 // or nil when the run is not held in memory. Callers hold e.mu.
 func (e *Engine) liveCopy(id int64) *Run {
@@ -708,10 +713,6 @@ func (e *Engine) GetContext(ctx context.Context, id int64) (*Run, error) {
 		return nil, err
 	}
 	return &r, nil
-}
-
-func (e *Engine) List(state, source string, limit, offset int, filters ...database.RunFilter) ([]*Run, int, error) {
-	return e.ListContext(e.ctx, state, source, limit, offset, filters...)
 }
 
 func (e *Engine) ListContext(
@@ -1159,13 +1160,21 @@ func (e *Engine) attempt(
 	return attemptErr, secrets, e.save(r)
 }
 
+// logDir is the directory holding the attempt logs of run id.
+func (e *Engine) logDir(id int64) string {
+	return filepath.Join(e.dataDir, "logs", fmt.Sprint(id))
+}
+
+// logPath is the log file of one attempt, numbered from 1.
+func (e *Engine) logPath(id int64, attempt int) string {
+	return filepath.Join(e.logDir(id), fmt.Sprint(attempt)+".log")
+}
+
 func (e *Engine) openAttemptLog(id int64, attempt int) (*os.File, error) {
-	dir := filepath.Join(e.data, "logs", fmt.Sprint(id))
-	if err := os.MkdirAll(dir, 0700); err != nil {
+	if err := os.MkdirAll(e.logDir(id), 0700); err != nil {
 		return nil, err
 	}
-	name := filepath.Join(dir, fmt.Sprint(attempt)+".log")
-	return os.OpenFile(name, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+	return os.OpenFile(e.logPath(id, attempt), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
 }
 
 // progressReporter stores executor progress on the live run. Percent and
@@ -1440,7 +1449,7 @@ func (e *Engine) LogSnapshot(id int64, attempt int) (file *os.File, size int64, 
 	if r.Attempts[attempt-1].LogCleared {
 		return nil, 0, errLogCleared
 	}
-	file, err = os.Open(filepath.Join(e.data, "logs", fmt.Sprint(id), fmt.Sprint(attempt)+".log"))
+	file, err = os.Open(e.logPath(id, attempt))
 	if err != nil {
 		return nil, 0, err
 	}
@@ -1450,10 +1459,6 @@ func (e *Engine) LogSnapshot(id int64, attempt int) (file *os.File, size int64, 
 		return nil, 0, err
 	}
 	return file, info.Size(), nil
-}
-
-func (e *Engine) ClearLogs() (int, error) {
-	return e.ClearLogsContext(e.ctx)
 }
 
 func (e *Engine) ClearLogsContext(ctx context.Context) (int, error) {
@@ -1533,8 +1538,7 @@ func (e *Engine) clearRunLogs(ctx context.Context, r Run) (cleared int, err erro
 		if r.Attempts[i].LogCleared {
 			continue
 		}
-		name := filepath.Join(e.data, "logs", fmt.Sprint(r.ID), fmt.Sprint(i+1)+".log")
-		if err = e.removeLog(name); err != nil && !errors.Is(err, os.ErrNotExist) {
+		if err = e.removeLog(e.logPath(r.ID, i+1)); err != nil && !errors.Is(err, os.ErrNotExist) {
 			break
 		}
 		err = nil

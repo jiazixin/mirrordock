@@ -88,7 +88,7 @@ func hidden(name string) bool {
 func (m *Manager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "GET" && r.Method != "HEAD" {
 		w.Header().Set("Allow", "GET, HEAD")
-		http.Error(w, "method not allowed", 405)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 	m.requests.Add(1)
@@ -142,8 +142,8 @@ func (m *Manager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Bound descriptors before opening files, including HEAD and directory
 	// requests. This also bounds HTTP/2 streams sharing a single connection.
 	select {
-	case m.fileGates <- struct{}{}:
-		defer func() { <-m.fileGates }()
+	case m.openFiles <- struct{}{}:
+		defer func() { <-m.openFiles }()
 	default:
 		w.Header().Set("Retry-After", "3")
 		http.Error(w, "file capacity reached", http.StatusServiceUnavailable)
@@ -161,7 +161,7 @@ func (m *Manager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "public, no-cache")
 	if st.IsDir() {
 		if !strings.HasSuffix(r.URL.Path, "/") {
-			http.Redirect(w, r, r.URL.EscapedPath()+"/", 301)
+			http.Redirect(w, r, r.URL.EscapedPath()+"/", http.StatusMovedPermanently)
 			return
 		}
 		m.directory(w, r, file, entry)
@@ -178,20 +178,20 @@ func (m *Manager) serveFile(w http.ResponseWriter, r *http.Request, file *os.Fil
 		return
 	}
 	if r.Method == "GET" {
-		pool := m.gates
+		pool := m.largeDownloads
 		if st.Size() <= smallDownloadBytes {
-			pool = m.metadataGates
+			pool = m.smallDownloads
 		}
 		select {
 		case pool <- struct{}{}:
 			defer func() { <-pool }()
 		default:
 			w.Header().Set("Retry-After", "3")
-			http.Error(w, "download capacity reached", 503)
+			http.Error(w, "download capacity reached", http.StatusServiceUnavailable)
 			return
 		}
-		m.active.Add(1)
-		defer m.active.Add(-1)
+		m.activeDownloads.Add(1)
+		defer m.activeDownloads.Add(-1)
 	}
 	meta := m.cache.get(generation, rel, st)
 	w.Header().Set("ETag", meta.etag)
@@ -250,7 +250,7 @@ func (w *countWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
 func (w *countWriter) Write(p []byte) (int, error) {
 	n, err := w.ResponseWriter.Write(p)
-	w.manager.bytes.Add(int64(n))
+	w.manager.sentBytes.Add(int64(n))
 	return n, err
 }
 
@@ -264,7 +264,7 @@ func (w *countWriter) ReadFrom(r io.Reader) (int64, error) {
 		n, err = io.CopyBuffer(struct{ io.Writer }{w.ResponseWriter}, r, *buffer)
 		contentBuffers.Put(buffer)
 	}
-	w.manager.bytes.Add(n)
+	w.manager.sentBytes.Add(n)
 	return n, err
 }
 
@@ -276,7 +276,7 @@ func (m *Manager) directory(w http.ResponseWriter, r *http.Request, f *os.File, 
 	if !m.acquireListing(w) {
 		return
 	}
-	defer func() { <-m.listingGates }()
+	defer func() { <-m.listingRenders }()
 	var publication Publication
 	if len(publications) > 0 {
 		publication = publications[0].Publication

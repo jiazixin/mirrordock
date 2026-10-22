@@ -229,7 +229,7 @@ func BenchmarkDirectoryListing1000(b *testing.B) {
 			b.Fatal(err)
 		}
 	}
-	m := &Manager{listingGates: make(chan struct{}, 8)}
+	m := &Manager{listingRenders: make(chan struct{}, 8)}
 	r := httptest.NewRequest("GET", "/repo/", nil)
 	b.ReportAllocs()
 	for b.Loop() {
@@ -258,8 +258,8 @@ func TestSaturatedListingPreservesDownloadsAndHEAD(t *testing.T) {
 	if _, err := m.Publish(t.Context(), source, 1); err != nil {
 		t.Fatal(err)
 	}
-	for range cap(m.listingGates) {
-		m.listingGates <- struct{}{}
+	for range cap(m.listingRenders) {
+		m.listingRenders <- struct{}{}
 	}
 	for _, tc := range []struct {
 		method, path string

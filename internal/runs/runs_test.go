@@ -28,7 +28,7 @@ func TestLogSnapshotExcludesLaterWritesAndSurvivesCleanup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dir := filepath.Join(e.data, "logs", fmt.Sprint(id))
+	dir := filepath.Join(e.dataDir, "logs", fmt.Sprint(id))
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -426,7 +426,7 @@ func TestRetryWaitHonorsBudgetPauseCancelAndRestart(t *testing.T) {
 				if err = e.Action(r.ID, "cancel"); err != nil {
 					t.Fatal(err)
 				}
-				r = waitState(t, e, r.ID, "cancelled")
+				waitState(t, e, r.ID, "cancelled")
 				if calls.Load() != 2 {
 					t.Fatal("cancel retried")
 				}

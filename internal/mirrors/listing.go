@@ -259,7 +259,7 @@ type listingCrumb struct{ Name, URL string }
 // bursts cannot consume the slots reserved for package or repository downloads.
 func (m *Manager) acquireListing(w http.ResponseWriter) bool {
 	select {
-	case m.listingGates <- struct{}{}:
+	case m.listingRenders <- struct{}{}:
 		return true
 	default:
 		w.Header().Set("Retry-After", "3")
@@ -289,13 +289,14 @@ func renderListing(w http.ResponseWriter, r *http.Request, items []listingItem, 
 		items, more = items[:maxListedEntries], true
 	}
 	crumbs := []listingCrumb{{Name: "镜像目录", URL: "/"}}
-	link := "/"
+	var link strings.Builder
+	link.WriteString("/")
 	for segment := range strings.SplitSeq(strings.Trim(r.URL.Path, "/"), "/") {
 		if segment == "" {
 			continue
 		}
-		link += url.PathEscape(segment) + "/"
-		crumbs = append(crumbs, listingCrumb{Name: segment, URL: link})
+		link.WriteString(url.PathEscape(segment) + "/")
+		crumbs = append(crumbs, listingCrumb{Name: segment, URL: link.String()})
 	}
 	title, heading := "镜像目录", "镜像目录"
 	if len(crumbs) > 1 {

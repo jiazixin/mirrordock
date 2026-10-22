@@ -145,8 +145,8 @@ func TestSaturatedDownloadsPreserveMetadataAndHEAD(t *testing.T) {
 	if _, err = m.Publish(t.Context(), s, 1); err != nil {
 		t.Fatal(err)
 	}
-	for range cap(m.gates) {
-		m.gates <- struct{}{}
+	for range cap(m.largeDownloads) {
+		m.largeDownloads <- struct{}{}
 	}
 	for _, check := range []struct {
 		method, path string
