@@ -1,5 +1,19 @@
 # 验收记录
 
+## 配置短参数改为 -c（2026-10-22）
+
+范围：按用户要求将配置短参数 `-f` 替换为 `-c`，旧参数不再接受；`--config`、默认 `config.yaml`、相对路径基准与冲突检查保持原行为。同步 CLI 帮助、参数测试、中英文 README、AGENTS、DESIGN、DEPLOYMENT 与示例配置注释。
+
+| 检查 | 结果 |
+| --- | --- |
+| `use-modern-go list --file-path cmd/mirrordock/cli.go` | 已完整读取 Go 1.27.3 适用指南；本次仅修改参数注册、校验与测试 |
+| `npm --prefix web run build` | 通过，先生成 Go 嵌入所需的 Web 资源 |
+| `go test -race -count=1 ./cmd/mirrordock` | 通过；覆盖 `-c file`、`-c=file`、`--config`、同值组合、空值/缺值、冲突与拒绝旧 `-f`，以及默认配置、帮助和版本 |
+| `go vet ./cmd/mirrordock` / `git diff --check` | 通过 |
+| OCR 托管审查 | `ocr delegate preview/rule --format json`（v1.13.2），当前代理审查，未调用外部 OCR LLM。可审文件共 2 个，已审 2 个、跳过 0 个，覆盖率 100%：`cmd/mirrordock/cli.go`、`configs/config.example.yaml`（均 modified）。未发现正确性、安全性或性能问题 |
+| 排除与人工补审 | `cmd/mirrordock/cli_test.go` 因 default_path 排除；`AGENTS.md`、`README.md`、`README.en.md`、`docs/DESIGN.md`、`docs/DEPLOYMENT.md`、本验收记录因 unsupported_ext 排除。上述文件均人工核对；全仓检索确认有效使用说明已无旧参数 |
+| 未执行 | 全量 Go 测试、Web E2E、Linux/容器验收与性能测试（本次仅 CLI 参数及说明变更）；未启动同步或读取用户运行配置 |
+
 ## 代码质量整改与工具链升级 Go 1.27.3 / Node 26.12.1（2026-10-22）
 
 范围：全仓 Go 与 Web 源码的死代码、未用变量与命名可读性整改；Go 工具链 1.27.2 → 1.27.3；CI、Release 与 Dockerfile 的 Node 由浮动 24 改为 26.12.1（2026-10-21 安全补丁版）；依赖安全升级。配置协议、HTTP API 字段与页面行为未改动。用户要求：代码质量检查并全部修复、升级 Go 与 CI Node 以规避现有漏洞、提交推送并打新 tag。

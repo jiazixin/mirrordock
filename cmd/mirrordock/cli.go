@@ -12,8 +12,8 @@ type cliOptions struct {
 }
 
 const usageText = `mirrordock — 源仓
-用法：mirrordock [-f config.yaml | --config config.yaml]
-  -f, --config  YAML 配置文件（默认 config.yaml）
+用法：mirrordock [-c config.yaml | --config config.yaml]
+  -c, --config  YAML 配置文件（默认 config.yaml）
   -h, --help    显示帮助
       --version 显示版本
 管理页面位于 /admin/；同步与服务设置使用 YAML 配置。
@@ -24,7 +24,7 @@ func parseArgs(args []string) (*cliOptions, error) {
 	fs := flag.NewFlagSet("mirrordock", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	var short, long string
-	fs.StringVar(&short, "f", "", "配置文件路径")
+	fs.StringVar(&short, "c", "", "配置文件路径")
 	fs.StringVar(&long, "config", "", "配置文件路径")
 	fs.BoolVar(&options.Help, "h", false, "显示帮助")
 	fs.BoolVar(&options.Help, "help", false, "显示帮助")
@@ -34,7 +34,7 @@ func parseArgs(args []string) (*cliOptions, error) {
 	}
 	invalidEmpty := false
 	fs.Visit(func(f *flag.Flag) {
-		if (f.Name == "f" || f.Name == "config") && f.Value.String() == "" {
+		if (f.Name == "c" || f.Name == "config") && f.Value.String() == "" {
 			invalidEmpty = true
 		}
 	})
@@ -46,7 +46,7 @@ func parseArgs(args []string) (*cliOptions, error) {
 	}
 	if long != "" {
 		if short != "" && short != long {
-			return nil, fmt.Errorf("-f 和 --config 不一致")
+			return nil, fmt.Errorf("-c 和 --config 不一致")
 		}
 		options.ConfigPath = long
 	}

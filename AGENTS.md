@@ -4,7 +4,7 @@
 
 本项目是一个 Go 后端配套 Vue Web 应用。Go 工具链固定 **1.27.3**，使用 `use-modern-go` 技能及其版本指南；新增 JSON 使用 `encoding/json/v2`。前端使用 Vue 3、TypeScript、Vite、npm，唯一输出为 `web/dist/`，由 `web/embed.go` 嵌入；凡需编译嵌入包的检查先构建 Web。
 
-用户已确定的配置协议优先于目录基线的默认协议：`-f` / `--config` 选择 YAML，无参数读取工作目录的 `config.yaml`，相对路径以配置文件目录为基准；数据库为 `<path>/data.sqlite`。具体字段见 `configs/config.example.yaml`，不擅自恢复用户删除的配置字段。程序使用启动时区。源下载直接使用 `/<dest>/`，管理页面使用 `/admin/`，管理 API 使用 `/api/`。
+用户已确定的配置协议优先于目录基线的默认协议：`-c` / `--config` 选择 YAML，无参数读取工作目录的 `config.yaml`，相对路径以配置文件目录为基准；数据库为 `<path>/data.sqlite`。具体字段见 `configs/config.example.yaml`，不擅自恢复用户删除的配置字段。程序使用启动时区。源下载直接使用 `/<dest>/`，管理页面使用 `/admin/`，管理 API 使用 `/api/`。
 
 同步调用系统 rsync、可选的 `dnf reposync`；GitHub Release 使用 `google/go-github` 和 Go 下载器，仅下载 assets。多来源与暂停共用累计运行预算。YAML 是配置真源，SQLite 保存运行事实；保留记录，页面手动清理终态日志。更新 YAML 保留注释、检查 revision 并原子写入，管理员密码、Token 和通知凭据不进入读取 API；完整代理 URL 回填为用户已确认的例外，见 README。凭证不进入审计、日志或运行快照。
 

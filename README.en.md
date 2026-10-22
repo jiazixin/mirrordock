@@ -84,7 +84,7 @@ auth:
 sources: []
 YAML
 mkdir -p mirrors
-./mirrordock            # reads ./config.yaml by default; use -f / --config to pick another file
+./mirrordock            # reads ./config.yaml by default; use -c / --config to pick another file
 ```
 
 Open `http://127.0.0.1:8080/admin/`, sign in with the YAML account, add a source and run it once by hand. The public directory index is at `http://127.0.0.1:8080/`.
@@ -109,7 +109,7 @@ The web build is platform-independent, so cross-compiling only changes the `go b
 
 Every field is documented in [configs/config.example.yaml](configs/config.example.yaml); behavioural details are in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) (Chinese). The essentials:
 
-- `-f <file>` and `--config <file>` are equivalent. Without either, `config.yaml` in the working directory is read; if it does not exist the program exits instead of creating one.
+- `-c <file>` and `--config <file>` are equivalent. Without either, `config.yaml` in the working directory is read; if it does not exist the program exits instead of creating one.
 - Relative paths are resolved against the config file's directory. The database is `<path>/data.sqlite`, and task logs are `<path>/logs/<run-id>/<attempt>.log`.
 - Environment variables do not override config fields. Scheduling, the admin console and the public index use the time zone the process starts with; set e.g. `TZ=Asia/Shanghai` in the service environment.
 - Changes to `listen`, `port`, `path`, `mirror_root`, `tls`, `auth` and `log` need a restart. Sources, schedules and notifications can be edited in the console and take effect on save.

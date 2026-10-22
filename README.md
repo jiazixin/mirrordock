@@ -82,7 +82,7 @@ auth:
 sources: []
 YAML
 mkdir -p mirrors
-./mirrordock            # 不带参数时读取当前目录的 config.yaml；也可用 -f / --config 指定
+./mirrordock            # 不带参数时读取当前目录的 config.yaml；也可用 -c / --config 指定
 ```
 
 打开 `http://127.0.0.1:8080/admin/`，用 YAML 里的账号登录，在页面上添加同步源并手动执行一次同步。公开目录首页是 `http://127.0.0.1:8080/`。
@@ -107,7 +107,7 @@ go build -trimpath -o bin/mirrordock ./cmd/mirrordock
 
 完整字段与注释见 [configs/config.example.yaml](configs/config.example.yaml)，行为细节见 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)。要点如下：
 
-- `-f <文件>` 与 `--config <文件>` 等价。不带参数时读取工作目录的 `config.yaml`，文件不存在就报错，不会自动生成。
+- `-c <文件>` 与 `--config <文件>` 等价。不带参数时读取工作目录的 `config.yaml`，文件不存在就报错，不会自动生成。
 - 相对路径以配置文件所在目录为基准。数据库为 `<path>/data.sqlite`，任务日志为 `<path>/logs/<run-id>/<attempt>.log`。
 - 不支持用环境变量覆盖配置项。调度、管理台和公开目录使用程序启动时的时区，可在启动环境设置 `TZ=Asia/Shanghai`。
 - `listen`、`port`、`path`、`mirror_root`、`tls`、`auth`、`log` 修改后需重启；同步源、计划、通知等可在页面修改，保存即生效。
@@ -197,7 +197,7 @@ test-results/            忽略的 Go/OCR/构建报告
 | 基线规则 | 实际行为 | 原因与依据 | 适用范围 / 重新评估条件 |
 | --- | --- | --- | --- |
 | §3 根目录 README | 中文 `README.md` 为主入口，英文翻译为 `README.en.md` | 用户要求中英文 README | 两份同步维护；放弃英文版时评估 |
-| §7.1 配置入口与覆盖 | -f/--config；默认 cwd/config.yaml；无字段环境覆盖 | 用户确认的 YAML 协议 | 本程序；仅用户要求改变时评估 |
+| §7.1 配置入口与覆盖 | -c/--config；默认 cwd/config.yaml；无字段环境覆盖 | 用户确认的 YAML 协议 | 本程序；仅用户要求改变时评估 |
 | §7.1 密钥注入 | GitHub Token 直接 YAML；通知凭据 YAML 密文；GitHub/Rsync 全局与按源代理 URL 管理端回填 | 已确认配置与代理编辑协议（Rsync 代理沿用 GitHub 代理样式） | 配置 API/任务；凭据协议改变时评估 |
 | §11 工具必需路径 | web/embed.go 嵌入 web/dist | Go embed 与 Vite 的实际构建边界 | Web 资源；交付方式改变时评估 |
 | §4 `bin/` 只放可执行文件 | GoReleaser 输出（二进制、tar.gz、checksums、元数据）在 `bin/release/` | 默认根 `dist/` 未被忽略会让 Go 标记 dirty，且 `dist/` 保留给 Node/Web 产物 | 发布构建；更换发布工具时评估 |

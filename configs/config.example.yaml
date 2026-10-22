@@ -1,5 +1,5 @@
 # MirrorDock / 源仓：Go 1.27.3 + Vue 实现的完整注释配置。
-# 启动：mirrordock -f /path/to/config.yaml（或 --config）。
+# 启动：mirrordock -c /path/to/config.yaml（或 --config）。
 # 调度与页面使用程序启动时区；通知独立使用最近登录浏览器的时区，不在 YAML 中配置。
 # 相对文件路径以配置文件所在目录为基准。
 

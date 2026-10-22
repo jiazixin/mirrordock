@@ -10,7 +10,7 @@
 
 ## 配置协议
 
-`-f <文件>` 与 `--config <文件>` 等价，同时指定不同文件报错。无参数读取工作目录 `config.yaml`，不存在就报错，不生成或覆盖。相对路径以配置文件目录为基准，数据库为 `<path>/data.sqlite`，任务日志为 `<path>/logs/<run-id>/<attempt>.log`。启动自动建表/索引并保留原有记录。
+`-c <文件>` 与 `--config <文件>` 等价，同时指定不同文件报错。无参数读取工作目录 `config.yaml`，不存在就报错，不生成或覆盖。相对路径以配置文件目录为基准，数据库为 `<path>/data.sqlite`，任务日志为 `<path>/logs/<run-id>/<attempt>.log`。启动自动建表/索引并保留原有记录。
 
 用户确认的 YAML 协议优先于 [目录规范.md](../目录规范.md) 的默认协议。不使用 CONFIG_FILE 或环境变量覆盖配置，不恢复 version、timezone、maxconcurrent、exec、token_env、records 字段；按类型并发使用用户确认的 `settings.concurrency`。系统启动时区用于调度、管理台和公开目录；可在启动环境设 `TZ=Asia/Shanghai`。通知时区单独由登录浏览器同步，未同步时 UTC。
 
