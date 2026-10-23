@@ -10,9 +10,9 @@
 
 ## 配置协议
 
-`-c <文件>` 与 `--config <文件>` 等价，同时指定不同文件报错。无参数读取工作目录 `config.yaml`，不存在就报错，不生成或覆盖。相对路径以配置文件目录为基准，数据库为 `<path>/data.sqlite`，任务日志为 `<path>/logs/<run-id>/<attempt>.log`。启动自动建表/索引并保留原有记录。
+`-c <文件>` 与 `--config <文件>` 等价，同时指定不同文件报错。选择顺序为 `--config` > `CONFIG_FILE` > 工作目录的 `configs/config.local.yaml`，文件不存在就报错，不生成或覆盖；配置错误以 `mirrordock: config: <错误>` 写入 stderr 并以 1 退出，参数错误以 2 退出。相对路径以配置文件目录为基准，数据库为 `<path>/data.sqlite`，任务日志为 `<path>/logs/<run-id>/<attempt>.log`。启动自动建表/索引并保留原有记录。
 
-用户确认的 YAML 协议优先于 [目录规范.md](../目录规范.md) 的默认协议。不使用 CONFIG_FILE 或环境变量覆盖配置，不恢复 version、timezone、maxconcurrent、exec、token_env、records 字段；按类型并发使用用户确认的 `settings.concurrency`。系统启动时区用于调度、管理台和公开目录；可在启动环境设 `TZ=Asia/Shanghai`。通知时区单独由登录浏览器同步，未同步时 UTC。
+用户确认的 YAML 协议优先于 [目录规范.md](../目录规范.md) 的默认协议。`CONFIG_FILE` 只用于选择配置文件，不使用环境变量覆盖配置项，不恢复 version、timezone、maxconcurrent、exec、token_env、records 字段；按类型并发使用用户确认的 `settings.concurrency`。系统启动时区用于调度、管理台和公开目录；可在启动环境设 `TZ=Asia/Shanghai`。通知时区单独由登录浏览器同步，未同步时 UTC。
 
 - `listen`、`port`、`path`、`mirror_root`、TLS、`auth`、`log` 修改后重启。系统配置页仅显示路径和环境检查；页面保存其他配置时保留这些部署字段。
 - YAML 是配置真源；保存保留注释、检查 revision，使用同目录临时文件、fsync 与 rename。配置文件及父目录必须允许程序身份写入，应挂载整个配置目录。外部编辑后用“重新载入配置”，冲突时重新打开编辑器。设置页保留未保存草稿：通知/源更新可合并，实际设置冲突时须显式载入最新设置后重新编辑。

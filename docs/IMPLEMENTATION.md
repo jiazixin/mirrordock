@@ -57,9 +57,9 @@ go build -trimpath -o bin/mirrordock ./cmd/mirrordock
 ./bin/mirrordock --version
 ```
 
-发布 tag 采用 `v主版本.次版本.修订版本`，例如 `v1.1.0`、`v1.2.0`，预发布为 `v1.2.0-rc.1`；不使用 `1.1`、`v1.2` 等非规范 tag。普通构建不需要注入版本：Go 1.24 起会在可识别的 Git 仓库中将模块版本写入二进制，本项目通过 `debug.ReadBuildInfo().Main.Version` 读取。精确标准 tag 显示对应版本，非标签提交显示 Go 生成的伪版本，未提交修改保留 `+dirty`；额外显示 12 位提交 ID。应以包路径构建，并保留 `.git` 与对应 tag，不使用 `-buildvcs=false` 关闭此能力。Go 模块的 tag 必须匹配模块路径的主版本及子目录规则，见 [Go 官方版本说明](https://go.dev/ref/mod#versions)。
+发布 tag 采用 `v主版本.次版本.修订版本`，例如 `v1.1.0`、`v1.2.0`，预发布为 `v1.2.0-rc.1`；不使用 `1.1`、`v1.2` 等非规范 tag。普通构建不需要注入版本：Go 1.24 起会在可识别的 Git 仓库中将模块版本写入二进制，本项目通过 `debug.ReadBuildInfo().Main.Version` 读取。精确标准 tag 显示对应版本并附 12 位提交 ID（如 `mirrordock v1.2.0 (revision=0123456789ab)`）；非标签提交显示 Go 生成的伪版本，其中已含提交号，不再重复；未提交修改保留 `+dirty` 并附 `modified`。应以包路径构建，并保留 `.git` 与对应 tag，不使用 `-buildvcs=false` 关闭此能力。Go 模块的 tag 必须匹配模块路径的主版本及子目录规则，见 [Go 官方版本说明](https://go.dev/ref/mod#versions)。
 
-版本优先级为显式链接注入（非空且非 `dev`）→ Go 主模块版本（非空且非 `(devel)`）→ 12 位提交 ID → `dev`。显式覆盖仍保留可取得的 modified 状态；运行时不调用 Git。管理台“系统配置”和 `/api/system/info` 显示与 CLI 相同的实际构建版本。`--version` 和 `--help` 不读取配置或启动服务。交叉编译时 Web 产物不变，只给 Go 编译指定目标平台：
+版本优先级为显式链接注入（非空且非 `dev`）→ Go 主模块版本（非空且非 `(devel)`）→ 12 位提交 ID → `dev`。显式覆盖仍保留可取得的 modified 状态；运行时不调用 Git。管理台“系统配置”和 `/api/system/info` 显示与 CLI 相同的实际构建版本。`--version` 和 `--help`（英文）输出到 stdout、退出码 0，不读取配置或启动服务；参数错误退出码 2，配置、启动或运行失败为 1。交叉编译时 Web 产物不变，只给 Go 编译指定目标平台：
 
 ```sh
 npm --prefix web run build

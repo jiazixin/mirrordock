@@ -84,7 +84,7 @@ auth:
 sources: []
 YAML
 mkdir -p mirrors
-./mirrordock            # reads ./config.yaml by default; use -c / --config to pick another file
+./mirrordock -c config.yaml   # without -c: CONFIG_FILE, then configs/config.local.yaml
 ```
 
 Open `http://127.0.0.1:8080/admin/`, sign in with the YAML account, add a source and run it once by hand. The public directory index is at `http://127.0.0.1:8080/`.
@@ -109,9 +109,9 @@ The web build is platform-independent, so cross-compiling only changes the `go b
 
 Every field is documented in [configs/config.example.yaml](configs/config.example.yaml); behavioural details are in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) (Chinese). The essentials:
 
-- `-c <file>` and `--config <file>` are equivalent. Without either, `config.yaml` in the working directory is read; if it does not exist the program exits instead of creating one.
+- `-c <file>` and `--config <file>` are equivalent; naming different files with both is an error. The file is chosen as `--config` > the `CONFIG_FILE` environment variable > `configs/config.local.yaml` under the working directory; if it does not exist the program exits instead of creating one.
 - Relative paths are resolved against the config file's directory. The database is `<path>/data.sqlite`, and task logs are `<path>/logs/<run-id>/<attempt>.log`.
-- Environment variables do not override config fields. Scheduling, the admin console and the public index use the time zone the process starts with; set e.g. `TZ=Asia/Shanghai` in the service environment.
+- Apart from `CONFIG_FILE` selecting the file, environment variables do not override config fields. Scheduling, the admin console and the public index use the time zone the process starts with; set e.g. `TZ=Asia/Shanghai` in the service environment.
 - Changes to `listen`, `port`, `path`, `mirror_root`, `tls`, `auth` and `log` need a restart. Sources, schedules and notifications can be edited in the console and take effect on save.
 - The admin password, GitHub token and notification credentials are never returned by read APIs. **Exception:** by the agreed protocol, full GitHub / rsync proxy URLs are echoed back to the signed-in console in plain text; their credentials still never reach run snapshots, audit records or logs.
 - Set both `tls.cert` and `tls.key` to serve HTTPS on the same port (HTTP/2 is supported; sendfile is not used over TLS).
@@ -163,7 +163,8 @@ E2E and real-rsync tests need a modern rsync and a test binary; see [docs/IMPLEM
 ## Versioning and releases
 
 - Versions come from Git tags of the form `vMAJOR.MINOR.PATCH` (pre-releases such as `v1.2.0-rc.1`). Go stamps the module version at build time; untagged commits get a pseudo-version, and uncommitted changes add `+dirty`.
-- Check the version with `mirrordock --version`. It does not read a config or start the service.
+- Check the version with `mirrordock --version`, which prints e.g. `mirrordock v1.2.0 (revision=0123456789ab)` (a pseudo-version already contains the commit, so no revision is appended; `modified` is added for uncommitted changes). `--version` and `--help` (in English) print to stdout and neither reads a config nor starts the service.
+- Exit codes: 0 success, 2 usage error, 1 configuration, startup or runtime failure. Errors before logging is set up (arguments, config, log setup) are written to stderr as plain text `mirrordock: <error>`, and usage errors add `Run 'mirrordock --help' for usage.`; later startup and runtime errors still go to the program log.
 - For source archives without `.git`, inject the matching version explicitly: `go build -trimpath -ldflags='-X main.version=v1.0.0' -o bin/mirrordock ./cmd/mirrordock`.
 - Pushing a standard tag triggers the [release workflow](.github/workflows/release.yml). It checks `--version` first, then GoReleaser builds every target and uploads the tar.gz archives and `checksums.txt`.
 

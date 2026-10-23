@@ -1,57 +1,75 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"strings"
 )
 
-type cliOptions struct {
-	ConfigPath    string
-	Help, Version bool
-}
+const usage = `mirrordock - sync and serve package mirrors
 
-const usageText = `mirrordock — 源仓
-用法：mirrordock [-c config.yaml | --config config.yaml]
-  -c, --config  YAML 配置文件（默认 config.yaml）
-  -h, --help    显示帮助
-      --version 显示版本
-管理页面位于 /admin/；同步与服务设置使用 YAML 配置。
+Usage:
+  mirrordock [options]
+
+Options:
+  -c, --config <file>  Configuration file (default: configs/config.local.yaml)
+  -h, --help           Print this help and exit
+      --version        Print version information and exit
+
+Environment:
+  CONFIG_FILE          Configuration file, used when --config is not given
+
+The admin console is served at /admin/; sync and service settings are read
+from the configuration file.
 `
 
-func parseArgs(args []string) (*cliOptions, error) {
-	options := &cliOptions{ConfigPath: "config.yaml"}
-	fs := flag.NewFlagSet("mirrordock", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	var short, long string
-	fs.StringVar(&short, "c", "", "配置文件路径")
-	fs.StringVar(&long, "config", "", "配置文件路径")
-	fs.BoolVar(&options.Help, "h", false, "显示帮助")
-	fs.BoolVar(&options.Help, "help", false, "显示帮助")
-	fs.BoolVar(&options.Version, "version", false, "显示版本")
-	if err := fs.Parse(args); err != nil {
-		return nil, err
-	}
-	invalidEmpty := false
-	fs.Visit(func(f *flag.Flag) {
-		if (f.Name == "c" || f.Name == "config") && f.Value.String() == "" {
-			invalidEmpty = true
+type options struct {
+	configFile string // empty: CONFIG_FILE or the default file
+	help       bool
+	version    bool
+}
+
+// parseArgs accepts -x and --x spellings, "--config file" and "--config=file".
+func parseArgs(args []string) (options, error) {
+	var o options
+	flags := flag.NewFlagSet("mirrordock", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	setConfig := func(v string) error {
+		if strings.TrimSpace(v) == "" {
+			return errors.New("configuration path must not be empty")
 		}
-	})
-	if invalidEmpty {
-		return nil, fmt.Errorf("配置文件路径不能留空")
-	}
-	if short != "" {
-		options.ConfigPath = short
-	}
-	if long != "" {
-		if short != "" && short != long {
-			return nil, fmt.Errorf("-c 和 --config 不一致")
+		if o.configFile != "" && o.configFile != v {
+			return errors.New("-c and --config name different files")
 		}
-		options.ConfigPath = long
+		o.configFile = v
+		return nil
 	}
-	if fs.NArg() > 0 {
-		return nil, fmt.Errorf("不接受额外位置参数")
+	flags.Func("c", "", setConfig)
+	flags.Func("config", "", setConfig)
+	flags.BoolVar(&o.help, "h", false, "")
+	flags.BoolVar(&o.help, "help", false, "")
+	flags.BoolVar(&o.version, "version", false, "")
+	if err := flags.Parse(args); err != nil {
+		return options{}, err
 	}
-	return options, nil
+	if flags.NArg() > 0 {
+		return options{}, fmt.Errorf("unexpected argument %q", flags.Arg(0))
+	}
+	return o, nil
+}
+
+// configPath returns --config, then CONFIG_FILE, then the default file.
+func (o options) configPath(lookupEnv func(string) (string, bool)) (string, error) {
+	if o.configFile != "" {
+		return o.configFile, nil
+	}
+	if path, ok := lookupEnv("CONFIG_FILE"); ok {
+		if strings.TrimSpace(path) == "" {
+			return "", errors.New("CONFIG_FILE is set but empty")
+		}
+		return path, nil
+	}
+	return "configs/config.local.yaml", nil
 }

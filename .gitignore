@@ -6,6 +6,7 @@
 /configs/*.local.yaml
 /config.yaml
 /configs/config.yaml
+/configs/config.local.yaml
 /.env
 /.env.*
 !/.env.example

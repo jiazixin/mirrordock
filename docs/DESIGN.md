@@ -38,7 +38,7 @@ flowchart LR
 
 ## 配置与管理边界
 
-用户确定的 `-c`/`--config` 协议优先于目录基线默认值；无参数读 cwd/config.yaml。相对路径以配置目录为基准，数据库为 `<path>/data.sqlite`。不恢复已删除的配置字段。监听、数据/镜像路径、TLS、auth、log 使用启动值；页面保存保留部署字段，外部修改需重载并按提示重启。
+配置文件按 `-c`/`--config` > `CONFIG_FILE` > cwd 下 `configs/config.local.yaml` 选择，文件必须存在。相对路径以配置目录为基准，数据库为 `<path>/data.sqlite`。不恢复已删除的配置字段。监听、数据/镜像路径、TLS、auth、log 使用启动值；页面保存保留部署字段，外部修改需重载并按提示重启。
 
 保存通过 revision 同时检测其他管理员与磁盘编辑，保留 YAML 注释，临时文件写入/fsync/rename，文件权限 0600。源编辑器保存打开时的 revision，旧编辑不能覆盖新配置。Token 与通知凭据只返回存在标记，管理员密码不参与 JSON 序列化；**完整 GitHub 代理地址与 Rsync 全局/按源代理地址按已确认协议向登录管理员回填**。所有运行快照、审计与错误日志继续脱敏。
 
