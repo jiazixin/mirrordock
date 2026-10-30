@@ -1,18 +1,47 @@
-import { reactive } from 'vue'
-import { api, cancelSessionRequests } from './api'
-import type { ConfigView, Configuration, Publication, Run, SystemInfo } from './types'
+import { clientError, errorText } from './errors'
+import { reactive, readonly, toRaw } from 'vue'
+import { api, cancelSessionRequests, taggedApi, decodeProgress } from './api'
+import { warningText } from './error-text'
+import type { ConfigView, Configuration, Run, SystemInfo } from './types'
 
-export const state = reactive({
-  config: null as ConfigView | null,
-  runs: [] as Run[],
-  liveRuns: [] as Run[],
-  info: null as SystemInfo | null,
+type AppState = {
+  config: ConfigView | null
+  runs: Run[]
+  liveRuns: Run[]
+  info: SystemInfo | null
+  username: string
+  toasts: { id: number; message: string; tone: 'success' | 'error' | 'info' }[]
+  confirmation: (ConfirmRequest & { id: number }) | null
+  connected: boolean
+  revision: number
+  refreshing: boolean
+  refreshError: string
+}
+const mutableState = reactive<AppState>({
+  config: null,
+  runs: [],
+  liveRuns: [],
+  info: null,
   username: '',
-  toasts: [] as { id: number; message: string; tone: 'success' | 'error' | 'info' }[],
-  confirmation: null as (ConfirmRequest & { id: number }) | null,
+  toasts: [],
+  confirmation: null,
   connected: false,
   revision: 0,
+  refreshing: false,
+  refreshError: '',
 })
+export const state = readonly(mutableState)
+
+export function setUsername(username: string) {
+  mutableState.username = username
+}
+export function clearToasts() {
+  mutableState.toasts = []
+}
+export function setConfiguration(config: ConfigView) {
+  mutableState.config = config
+}
+
 let stream: EventSource | null = null
 let refreshID = 0
 let refreshController: AbortController | undefined
@@ -25,57 +54,83 @@ export async function refresh() {
   const controller = new AbortController()
   refreshController = controller
   const current = ++refreshID
+  mutableState.refreshing = true
+  mutableState.refreshError = ''
   try {
     const [config, runs, info] = await Promise.all([
-      api<ConfigView>('/config', 'GET', undefined, controller.signal),
-      api<{ items: Run[] }>('/runs?latest=1', 'GET', undefined, controller.signal),
-      api<SystemInfo>('/system/info', 'GET', undefined, controller.signal),
+      taggedApi<ConfigView>({ scope: 'session', path: '/config', signal: controller.signal }),
+      api<{ items: Run[] }>({
+        scope: 'session',
+        path: '/runs?latest=true',
+        signal: controller.signal,
+      }),
+      api<SystemInfo>({ scope: 'session', path: '/system/info', signal: controller.signal }),
     ])
     if (current !== refreshID || controller.signal.aborted) return
-    state.config = config
+    mutableState.config = { ...config.data, revision: config.etag }
     // While connected, the event stream is the only ordered source of run states;
     // mixing this response with older stream frames made states jump back.
-    if (!state.connected) state.runs = runs.items
-    state.info = info
-    state.revision++
+    if (!mutableState.connected) mutableState.runs = runs.items
+    mutableState.info = info
+    mutableState.revision++
   } catch (error) {
-    if (!controller.signal.aborted) throw error
+    if (!controller.signal.aborted && current === refreshID) {
+      mutableState.refreshError = errorText(error)
+      throw error
+    }
+  } finally {
+    if (current === refreshID) mutableState.refreshing = false
   }
 }
 
-export async function saveConfiguration(
-  config: Configuration,
-  token?: string,
-  proxy?: string,
-  revision = state.config?.revision,
-) {
-  if (!revision) throw new Error('请重新登录后保存配置')
+export async function saveConfiguration({
+  config,
+  token,
+  proxy,
+  revision = mutableState.config?.revision,
+  signal,
+}: {
+  config: Configuration
+  token?: string
+  proxy?: string
+  revision?: string
+  signal?: AbortSignal
+}) {
+  if (!revision) throw clientError('config_revision_missing')
   refreshController?.abort()
   refreshID++
   const session = sessionID
-  const saved = await api<ConfigView>('/config', 'PUT', {
-    config,
-    revision,
-    token_update: token ?? null,
-    proxy_update: proxy ?? null,
+  const { data: saved, etag } = await taggedApi<ConfigView>({
+    path: '/config',
+    method: 'PUT',
+    signal,
+    headers: { 'If-Match': revision },
+    body: {
+      config,
+      ...(token === undefined ? {} : { token_update: token }),
+      ...(proxy === undefined ? {} : { proxy_update: proxy }),
+    },
   })
   if (session !== sessionID) return
-  state.config = saved
+  mutableState.config = { ...saved, revision: etag }
   await refresh()
   if (session !== sessionID) return
   // The YAML is already written even when follow-up integration failed.
-  if (saved.warning) notify(saved.warning, 'error')
+  if (saved.warning) notify(warningText(saved.warning), 'error')
   else notify('配置已写回 YAML' + (saved.restart_required ? '，部分设置重启生效' : ''))
 }
 
 export async function reloadConfiguration() {
   const session = sessionID
-  const loaded = await api<ConfigView>('/config/reload', 'POST')
+  const { data: loaded, etag } = await taggedApi<ConfigView>({
+    path: '/config/reload',
+    method: 'POST',
+  })
   if (session !== sessionID) return
-  state.config = loaded
+  mutableState.config = { ...loaded, revision: etag }
   await refresh()
   if (session !== sessionID) return
-  if (loaded.warning) notify(loaded.warning, 'error')
+  if (loaded.warning) notify(warningText(loaded.warning), 'error')
   else notify('已重新载入磁盘配置')
 }
 
@@ -85,26 +140,31 @@ export function connectEvents() {
   stream = current
   current.addEventListener('progress', (event) => {
     if (stream !== current) return
-    const payload = JSON.parse((event as MessageEvent).data) as {
-      runs: Run[]
-      downloads: SystemInfo['downloads']
-      publications: Publication[]
-      schedules: Record<string, string>
+    let payload
+    try {
+      payload = decodeProgress(event.data)
+    } catch (error: unknown) {
+      mutableState.refreshError = errorText(error)
+      mutableState.connected = false
+      return
     }
-    state.liveRuns = payload.runs
-    state.runs = payload.runs
-    if (state.info) {
-      state.info.downloads = payload.downloads
-      state.info.publications = payload.publications
-      state.info.schedules = payload.schedules
+    mutableState.liveRuns = payload.runs
+    mutableState.runs = payload.runs
+    if (mutableState.info) {
+      mutableState.info.downloads = payload.downloads
+      mutableState.info.publications = payload.publications
+      mutableState.info.schedules = payload.schedules
     }
-    state.connected = true
+    mutableState.connected = true
   })
   current.onerror = async () => {
     if (stream !== current) return
-    state.connected = false
+    mutableState.connected = false
     try {
-      const status = await api<{ authenticated: boolean }>('/auth/status')
+      const status = await api<{ authenticated: boolean }>({
+        path: '/auth/session',
+        scope: 'session',
+      })
       if (stream === current && !status.authenticated)
         window.dispatchEvent(new Event('session-expired'))
     } catch {
@@ -116,8 +176,8 @@ export function connectEvents() {
 export function disconnectEvents() {
   stream?.close()
   stream = null
-  state.liveRuns = []
-  state.connected = false
+  mutableState.liveRuns = []
+  mutableState.connected = false
 }
 
 export function resetState() {
@@ -127,35 +187,43 @@ export function resetState() {
   refreshController?.abort()
   disconnectEvents()
   settleConfirmation(false)
-  state.toasts = []
-  state.username = ''
-  state.config = null
-  state.runs = []
-  state.info = null
+  mutableState.toasts = []
+  mutableState.username = ''
+  mutableState.config = null
+  mutableState.runs = []
+  mutableState.info = null
+  mutableState.refreshError = ''
+  mutableState.refreshing = false
 }
 
 let toastId = 0
 export function dismissToast(id: number) {
-  state.toasts = state.toasts.filter((item) => item.id !== id)
+  mutableState.toasts = mutableState.toasts.filter((item) => item.id !== id)
 }
 export function notify(message: string, tone: 'success' | 'error' | 'info' = 'success') {
-  state.toasts = [...state.toasts.slice(-2), { id: ++toastId, message, tone }]
+  mutableState.toasts = [...mutableState.toasts.slice(-2), { id: ++toastId, message, tone }]
 }
 export async function perform<T>(operation: () => Promise<T>): Promise<T | undefined> {
   try {
     return await operation()
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') return undefined
-    notify(error instanceof Error ? error.message : String(error), 'error')
+    notify(errorText(error), 'error')
     return undefined
   }
 }
 export async function runSource(id: string) {
-  await api(`/sources/${encodeURIComponent(id)}/run`, 'POST')
+  // One key per click: a retried request replays the first result instead
+  // of queueing a second run.
+  await api<Run>({
+    path: `/sources/${encodeURIComponent(id)}/runs`,
+    method: 'POST',
+    headers: { 'Idempotency-Key': crypto.randomUUID() },
+  })
   notify('同步任务已加入队列')
   await refresh()
 }
-export interface ConfirmRequest {
+export type ConfirmRequest = {
   title: string
   message: string
   confirmLabel: string
@@ -165,7 +233,7 @@ export interface ConfirmRequest {
 // Resolves through the shell's ConfirmDialog; a newer request or logout declines the pending one.
 export function confirmAction(request: ConfirmRequest): Promise<boolean> {
   settleConfirmation(false)
-  state.confirmation = { ...request, id: ++confirmID }
+  mutableState.confirmation = { ...request, id: ++confirmID }
   return new Promise((resolve) => {
     confirmResolve = resolve
   })
@@ -173,7 +241,7 @@ export function confirmAction(request: ConfirmRequest): Promise<boolean> {
 export function settleConfirmation(accepted: boolean) {
   const resolve = confirmResolve
   confirmResolve = undefined
-  state.confirmation = null
+  mutableState.confirmation = null
   resolve?.(accepted)
 }
 const runActionPrompts = {
@@ -201,7 +269,7 @@ export async function runAction(
   action: keyof typeof runActionPrompts,
 ) {
   if (!(await confirmAction(runActionPrompts[action](run.name)))) return
-  await api(`/runs/${run.id}/${action}`, 'POST')
+  await api<undefined>({ path: `/runs/${run.id}/${action}`, method: 'POST' })
   await refresh()
 }
 export async function rerunSource(id: string, name: string) {
@@ -212,6 +280,8 @@ export async function rerunSource(id: string, name: string) {
   })
   if (accepted) await runSource(id)
 }
-export function clone<T>(value: T): T {
-  return JSON.parse(JSON.stringify(value)) as T
+type Mutable<T> = { -readonly [K in keyof T]: Mutable<T[K]> }
+/** Copies the plain API state into a mutable form draft; toRaw removes Vue's proxy. */
+export function clone<T>(value: T): Mutable<T> {
+  return structuredClone(toRaw(value))
 }

@@ -3,8 +3,9 @@ package app
 import (
 	"crypto/tls"
 	"errors"
-	"golang.org/x/sys/unix"
 	"net"
+
+	"golang.org/x/sys/unix"
 )
 
 func transmitted(conn net.Conn) (uint64, error) {

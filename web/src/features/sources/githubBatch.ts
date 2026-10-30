@@ -5,7 +5,7 @@ const idPattern = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$/
 const repoPattern = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/
 const reservedTopLevel = ['admin', 'api', 'favicon.ico']
 
-export interface BatchRow {
+export type BatchRow = {
   repository: string
   id: string
   name: string
@@ -16,7 +16,7 @@ export interface BatchRow {
   generatedDest: string
 }
 
-export interface ParsedRepositories {
+export type ParsedRepositories = {
   repositories: string[]
   invalid: string[]
 }
@@ -79,13 +79,19 @@ function destsOverlap(a: string, b: string) {
 
 // createRow picks the first slug whose id and dest are both free: the repo
 // name, then owner-repo, then owner-repo-2 and so on.
-export function createRow(
-  repository: string,
-  prefix: string,
-  takenIds: Set<string>,
-  takenDests: string[],
-): BatchRow {
-  const [owner, repo] = repository.split('/') as [string, string]
+export function createRow({
+  repository,
+  prefix,
+  takenIds,
+  takenDests,
+}: {
+  repository: string
+  prefix: string
+  takenIds: Set<string>
+  takenDests: string[]
+}): BatchRow {
+  const [owner, repo] = repository.split('/')
+  if (!owner || !repo || !repoPattern.test(repository)) throw new Error('invalid repository')
   const base = slugify(`${owner}-${repo}`) || 'release'
   const candidates = [slugify(repo), base]
   for (let suffix = 2; candidates.length < 100; suffix++) {
@@ -116,7 +122,8 @@ export function staggerCrons(
   count: number,
 ): { crons: string[]; step: number } | null {
   const fields = cron.trim().split(/\s+/)
-  if (fields.length !== 5 || !/^\d{1,2}$/.test(fields[0]!) || Number(fields[0]) > 59) return null
+  const first = fields[0] ?? ''
+  if (fields.length !== 5 || !/^\d{1,2}$/.test(first) || Number(first) > 59) return null
   const minute = Number(fields[0])
   const step = Math.max(1, Math.min(10, Math.floor(60 / Math.max(count, 1))))
   const rest = fields.slice(1).join(' ')
@@ -132,12 +139,12 @@ function destError(dest: string) {
   if (!dest || dest.startsWith('/') || segments.some((segment) => !segment))
     return '须为规范相对目录'
   if (/[\\\0\r\n]/.test(dest)) return '包含非法字符'
-  if (reservedTopLevel.includes(segments[0]!)) return '包含保留路径'
+  if (reservedTopLevel.includes(segments[0] ?? '')) return '包含保留路径'
   if (segments.some((segment) => segment.startsWith('.'))) return '目录段不能以 . 开头'
   return ''
 }
 
-export interface RowErrors {
+export type RowErrors = {
   id?: string
   name?: string
   dest?: string
@@ -145,7 +152,10 @@ export interface RowErrors {
 
 // validateRows checks each row against the configured sources and the
 // other rows, so conflicts show before the backend rejects the save.
-export function validateRows(rows: BatchRow[], existing: Source[]): RowErrors[] {
+export function validateRows(
+  rows: BatchRow[],
+  existing: readonly Pick<Source, 'id' | 'dest'>[],
+): RowErrors[] {
   return rows.map((row, index) => {
     const errors: RowErrors = {}
     const others = rows.filter((_, other) => other !== index)

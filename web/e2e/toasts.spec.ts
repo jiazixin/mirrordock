@@ -1,3 +1,4 @@
+import { defined } from './support'
 import { test, expect } from '@playwright/test'
 import { spawn } from 'node:child_process'
 import { mkdtemp, writeFile, rm } from 'node:fs/promises'
@@ -15,7 +16,9 @@ test('floating feedback shrinks for five seconds, repeats independently and fits
     listener.on('error', reject)
     listener.listen(0, '127.0.0.1', () => {
       const port = (listener.address() as net.AddressInfo).port
-      listener.close(() => resolve(port))
+      listener.close(() => {
+        resolve(port)
+      })
     })
   })
   const base = `http://127.0.0.1:${port}`
@@ -26,7 +29,7 @@ test('floating feedback shrinks for five seconds, repeats independently and fits
   )
   const app = spawn(
     process.env.MIRRORDOCK_TEST_BINARY ?? path.resolve(import.meta.dirname, '../../bin/mirrordock'),
-    ['-f', config],
+    ['-c', config],
     { stdio: 'ignore' },
   )
   const errors: string[] = []
@@ -35,7 +38,7 @@ test('floating feedback shrinks for five seconds, repeats independently and fits
     await expect
       .poll(async () => {
         try {
-          return (await request.get(`${base}/api/auth/status`)).status()
+          return (await request.get(`${base}/healthz`)).status()
         } catch {
           return 0
         }
@@ -65,9 +68,11 @@ test('floating feedback shrinks for five seconds, repeats independently and fits
         .locator('.toast-countdown')
         .evaluate(
           (el) =>
-            el.getBoundingClientRect().width / el.parentElement!.getBoundingClientRect().width,
+            el.getBoundingClientRect().width /
+            (el.parentElement?.getBoundingClientRect().width ?? NaN),
         )
     const start = await fraction()
+    // Measures the countdown bar shrinking over 1.2 s.
     await page.waitForTimeout(1200)
     expect(await fraction()).toBeLessThan(start - 0.15)
     await page.screenshot({ path: testInfo.outputPath('toast-desktop.png') })
@@ -88,9 +93,17 @@ test('floating feedback shrinks for five seconds, repeats independently and fits
     await expect(cards).toHaveCount(1)
     await cards.getByRole('button', { name: '关闭提示' }).click()
     await expect(cards).toHaveCount(0)
-    await page.route('**/api/config/reload', (route) =>
-      route.fulfill({ status: 409, json: { error: '<b>配置冲突</b>，请重试' } }),
-    )
+    // Raw upstream detail is the only server text a toast shows; it must stay text.
+    await page.route('**/api/config/reload', async (route) => {
+      const response = await route.fetch()
+      const json = await response.json()
+      json.warning = {
+        code: 'config_apply_incomplete',
+        message: 'configuration adopted, but a follow-up step failed',
+        details: { detail: '<b>配置冲突</b>，请重试' },
+      }
+      await route.fulfill({ response, json })
+    })
     await page.getByRole('button', { name: '重新载入配置' }).click()
     await expect(cards.getByRole('alert')).toContainText('<b>配置冲突</b>')
     await expect(cards.locator('b')).toHaveCount(0)
@@ -101,10 +114,13 @@ test('floating feedback shrinks for five seconds, repeats independently and fits
       await page.setViewportSize({ width, height: 900 })
       await save.click()
       await expect(cards).toHaveCount(1)
-      await page.waitForTimeout(250)
-      const box = (await cards.boundingBox())!
-      expect(box.x).toBeGreaterThanOrEqual(0)
-      expect(box.x + box.width).toBeLessThanOrEqual(width)
+      // The box settles inside the viewport once the enter transition ends.
+      await expect
+        .poll(async () => {
+          const box = defined(await cards.boundingBox())
+          return box.x >= 0 && box.x + box.width <= width
+        })
+        .toBe(true)
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
         true,
       )

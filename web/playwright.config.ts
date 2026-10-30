@@ -4,7 +4,12 @@ export default defineConfig({
   timeout: 60000,
   workers: 1,
   fullyParallel: false,
-  use: { viewport: { width: 1440, height: 1000 }, trace: 'retain-on-failure' },
+  use: {
+    locale: 'zh-CN',
+    timezoneId: 'Asia/Shanghai',
+    viewport: { width: 1440, height: 1000 },
+    trace: 'retain-on-failure',
+  },
   reporter: [['list'], ['html', { open: 'never' }]],
   outputDir: 'test-results',
 })

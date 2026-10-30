@@ -7,6 +7,7 @@ import (
 )
 
 func TestSourceURLsRejectCredentialsWithoutRestrictingAssetURLs(t *testing.T) {
+	t.Parallel()
 	for _, address := range []string{"https://mirror.example/repo?access_token=SECRET", "https://mirror.example/key?signature=SECRET", "https://user:SECRET@mirror.example/repo", "https://mirror.example/repo#SECRET", "https://mirror.example/repo?"} {
 		if err := SourceURL(address); err == nil || strings.Contains(err.Error(), "SECRET") {
 			t.Fatal("credential URL accepted or leaked", err)
@@ -43,6 +44,7 @@ func TestSourceURLsRejectCredentialsWithoutRestrictingAssetURLs(t *testing.T) {
 }
 
 func TestRsyncModuleAndDirectoryContentsValidation(t *testing.T) {
+	t.Parallel()
 	c := Defaults()
 	c.Auth = Auth{Username: "admin", Password: "fixture"}
 	c.Path = "./state"

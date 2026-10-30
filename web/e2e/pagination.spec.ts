@@ -1,3 +1,4 @@
+import { defined } from './support'
 import { test, expect } from '@playwright/test'
 import { spawn } from 'node:child_process'
 import { mkdtemp, writeFile, rm } from 'node:fs/promises'
@@ -15,7 +16,9 @@ test('management pagination covers complete history, filtering, page sizes, jump
     server.on('error', reject)
     server.listen(0, '127.0.0.1', () => {
       const value = (server.address() as net.AddressInfo).port
-      server.close(() => resolve(value))
+      server.close(() => {
+        resolve(value)
+      })
     })
   })
   const base = `http://127.0.0.1:${port}`
@@ -26,7 +29,7 @@ test('management pagination covers complete history, filtering, page sizes, jump
   )
   const app = spawn(
     process.env.MIRRORDOCK_TEST_BINARY ?? path.resolve(import.meta.dirname, '../../bin/mirrordock'),
-    ['-f', config],
+    ['-c', config],
     { stdio: 'ignore' },
   )
   const errors: string[] = []
@@ -35,7 +38,7 @@ test('management pagination covers complete history, filtering, page sizes, jump
     await expect
       .poll(async () => {
         try {
-          return (await request.get(`${base}/api/auth/status`)).status()
+          return (await request.get(`${base}/healthz`)).status()
         } catch {
           return 0
         }
@@ -47,21 +50,45 @@ test('management pagination covers complete history, filtering, page sizes, jump
       type: 'rsync',
       dest: `fixture-${index + 1}`,
       enabled: false,
+      exclude: [],
       upstreams: { src1: 'rsync://127.0.0.1/fixture/', src2: 'rsync://127.0.0.1/backup/' },
-      schedule: { enabled: false, cron: '0 0 * * *' },
+      // The server always sends every type's settings block; fixtures match that shape.
+      rsync: {
+        preserve_links: null,
+        preserve_times: null,
+        preserve_permissions: null,
+        preserve_hardlinks: null,
+        delete: null,
+        uid: null,
+        gid: null,
+      },
+      reposync: {
+        repo_id: '',
+        releasever: '',
+        basearch: '',
+        architectures: [],
+        download_metadata: null,
+        newest_only: false,
+        delete: null,
+        gpgcheck: null,
+        gpg_keys: [],
+        module_hotfixes: false,
+      },
+      github_release: { repository: '', release_count: 0, asset_patterns: [] },
+      schedule: { enabled: false, cron: '0 0 * * *', overlap: '' },
     }))
     const runs = Array.from({ length: 125 }, (_, index) => ({
       id: 125 - index,
-      source_id: sources[index % 125]!.id,
+      source_id: defined(sources[index % 125]).id,
       name: `任务 ${125 - index}`,
       type: 'rsync',
       state: 'succeeded',
       trigger: index % 2 ? 'manual' : 'schedule',
       created_at: new Date(Date.now() - index * 1000).toISOString(),
-      elapsed_seconds: 1,
+      elapsed_ms: 1000,
       progress: {
         phase: 'finished',
-        bytes: 1048576,
+        transferred_bytes: 1048576,
         received_bytes: index === 0 ? null : 1024,
         received_incomplete: index === 1,
         percent: 100,
@@ -144,10 +171,14 @@ test('management pagination covers complete history, filtering, page sizes, jump
     const locationRow = page.locator('.source-table tbody tr').first()
     const origin = await locationRow.locator('.source-origin').boundingBox()
     const dest = await locationRow.locator('.dest').boundingBox()
-    expect(Math.abs(origin!.y + origin!.height / 2 - dest!.y - dest!.height / 2)).toBeLessThan(2)
+    expect(
+      Math.abs(
+        defined(origin).y + defined(origin).height / 2 - defined(dest).y - defined(dest).height / 2,
+      ),
+    ).toBeLessThan(2)
     // Latest-run and action columns share their header's center line; actions are equal boxes.
     const centerOf = async (locator: ReturnType<typeof page.locator>) => {
-      const box = (await locator.boundingBox())!
+      const box = defined(await locator.boundingBox())
       return box.x + box.width / 2
     }
     const headers = page.locator('.source-table th')
@@ -161,7 +192,8 @@ test('management pagination covers complete history, filtering, page sizes, jump
     const actionBoxes = await locationRow.locator('.row-actions button').evaluateAll((buttons) =>
       buttons.map((button) => {
         const style = getComputedStyle(button)
-        return `${button.offsetWidth}x${button.offsetHeight} ${style.borderTopColor} ${style.backgroundColor} ${button.textContent?.trim()}`
+        const box = button.getBoundingClientRect()
+        return `${Math.round(box.width)}x${Math.round(box.height)} ${style.borderTopColor} ${style.backgroundColor} ${button.textContent.trim()}`
       }),
     )
     expect(actionBoxes).toHaveLength(3)
@@ -289,6 +321,7 @@ test('management pagination covers complete history, filtering, page sizes, jump
     await page.getByRole('option', { name: '测试源 2', exact: true }).click()
     await expect(pager).toContainText('共 1 条记录')
     await expect(page.locator('tbody')).toContainText('任务 124')
+    // Measures that the stale response does not replace the filtered page.
     await page.waitForTimeout(500)
     await expect(page.locator('tbody')).toContainText('任务 124')
     runs.splice(0)
@@ -306,18 +339,20 @@ test('management pagination covers complete history, filtering, page sizes, jump
     )
     for (const status of await page.locator('.check-status').all()) {
       const centered = await status.evaluate((el) => {
-        const style = getComputedStyle(el.parentElement!)
+        const parent = el.parentElement
+        if (!parent) return false
+        const style = getComputedStyle(parent)
         const widths = style.gridTemplateColumns.split(' ').map(parseFloat)
-        const row = el.parentElement!.getBoundingClientRect()
+        const row = parent.getBoundingClientRect()
         const box = el.getBoundingClientRect()
         return (
           Math.abs(
             box.x +
               box.width / 2 -
               row.x -
-              widths[0]! -
+              (widths[0] ?? NaN) -
               parseFloat(style.columnGap) -
-              widths[1]! / 2,
+              (widths[1] ?? NaN) / 2,
           ) < 2
         )
       })

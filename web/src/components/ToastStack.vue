@@ -2,17 +2,15 @@
 import { watch, onBeforeUnmount } from 'vue'
 import { CircleCheck, CircleAlert, Info, X } from '@lucide/vue'
 
-const props = withDefaults(
-  defineProps<{
-    items: readonly { id: number; message: string; tone: 'success' | 'error' | 'info' }[]
-    duration?: number
-  }>(),
-  { duration: 5000 },
-)
+const { items } = defineProps<{
+  items: readonly { id: number; message: string; tone: 'success' | 'error' | 'info' }[]
+}>()
+const duration = 5000
+const toneIcons = { success: CircleCheck, error: CircleAlert, info: Info }
 const emit = defineEmits<{ dismiss: [id: number] }>()
 const timers = new Map<number, ReturnType<typeof setTimeout>>()
 watch(
-  () => props.items.map((item) => item.id),
+  () => items.map((item) => item.id),
   (ids) => {
     for (const [id, timer] of timers) {
       if (!ids.includes(id)) {
@@ -24,7 +22,9 @@ watch(
       if (!timers.has(id))
         timers.set(
           id,
-          setTimeout(() => emit('dismiss', id), props.duration),
+          setTimeout(() => {
+            emit('dismiss', id)
+          }, duration),
         )
     }
   },
@@ -49,13 +49,12 @@ onBeforeUnmount(() => {
         :key="item.id"
         class="toast-card"
         :class="item.tone"
-        :style="{ '--toast-duration': `${duration}ms` }"
       >
         <span
           class="toast-icon"
           aria-hidden="true"
           ><component
-            :is="item.tone === 'error' ? CircleAlert : item.tone === 'info' ? Info : CircleCheck"
+            :is="toneIcons[item.tone]"
             :size="22"
         /></span>
         <p
@@ -93,7 +92,7 @@ onBeforeUnmount(() => {
   width: min(420px, calc(100vw - 32px));
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: var(--space-12px);
   pointer-events: none;
 }
 .toast-card {
@@ -101,8 +100,8 @@ onBeforeUnmount(() => {
   position: relative;
   display: flex;
   align-items: flex-start;
-  gap: 14px;
-  padding: 18px 16px 20px 20px;
+  gap: var(--space-14px);
+  padding: var(--space-18px) var(--space-16px) var(--space-20px) var(--space-20px);
   border: 1px solid var(--line-strong);
   border-radius: var(--radius);
   background: var(--raised);
@@ -128,7 +127,7 @@ onBeforeUnmount(() => {
   min-width: 0;
   margin: 0;
   color: var(--t1);
-  font-size: 15px;
+  font-size: var(--font-15px);
   font-weight: 500;
   line-height: 1.55;
   overflow-wrap: anywhere;
@@ -139,9 +138,9 @@ onBeforeUnmount(() => {
   place-items: center;
   flex: 0 0 30px;
   height: 30px;
-  margin-block: -3px;
+  margin-block: var(--space--3px);
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--radius-8px);
   padding: 0;
   background: transparent;
   color: var(--t3);
@@ -181,8 +180,8 @@ onBeforeUnmount(() => {
 .toast-leave-active,
 .toast-move {
   transition:
-    transform 0.22s ease,
-    opacity 0.22s ease;
+    transform var(--motion-0d22s) ease,
+    opacity var(--motion-0d22s) ease;
 }
 .toast-enter-from,
 .toast-leave-to {

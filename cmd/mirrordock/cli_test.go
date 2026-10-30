@@ -6,6 +6,7 @@ import (
 )
 
 func TestParseArgs(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		args []string
 		want options
@@ -30,6 +31,7 @@ func TestParseArgs(t *testing.T) {
 }
 
 func TestParseArgsErrors(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		args []string
 		want string
@@ -52,7 +54,18 @@ func TestParseArgsErrors(t *testing.T) {
 	}
 }
 
+func TestParseArgsConflictMessage(t *testing.T) {
+	t.Parallel()
+	// The flag package prefixes the value and flag name.
+	_, err := parseArgs([]string{"-c", "a.yaml", "--config=b.yaml"})
+	want := `invalid value "b.yaml" for flag -config: different files given for -c/--config: "a.yaml" and "b.yaml"`
+	if err == nil || err.Error() != want {
+		t.Fatalf("got %v, want %q", err, want)
+	}
+}
+
 func TestConfigPath(t *testing.T) {
+	t.Parallel()
 	env := func(values map[string]string) func(string) (string, bool) {
 		return func(name string) (string, bool) {
 			v, ok := values[name]
@@ -60,23 +73,29 @@ func TestConfigPath(t *testing.T) {
 		}
 	}
 	for _, tc := range []struct {
-		name string
-		flag string
-		env  map[string]string
-		want string
+		name         string
+		flag         string
+		env          map[string]string
+		want         string
+		wantExplicit bool
 	}{
-		{"default", "", nil, "configs/config.local.yaml"},
-		{"environment", "", map[string]string{"CONFIG_FILE": "env.yaml"}, "env.yaml"},
-		{"flag beats environment", "flag.yaml", map[string]string{"CONFIG_FILE": "env.yaml"}, "flag.yaml"},
+		{"default", "", nil, "configs/config.local.yaml", false},
+		{"environment", "", map[string]string{"CONFIG_FILE": "env.yaml"}, "env.yaml", true},
+		{"flag", "flag.yaml", nil, "flag.yaml", true},
+		{"flag beats environment", "flag.yaml", map[string]string{"CONFIG_FILE": "env.yaml"}, "flag.yaml", true},
+		{"flag beats empty environment", "flag.yaml", map[string]string{"CONFIG_FILE": ""}, "flag.yaml", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := options{configFile: tc.flag}.configPath(env(tc.env))
-			if err != nil || got != tc.want {
-				t.Fatalf("got %v, %v; want %q", got, err, tc.want)
+			got, explicit, err := options{configFile: tc.flag}.configPath(env(tc.env))
+			if err != nil || got != tc.want || explicit != tc.wantExplicit {
+				t.Fatalf("got %q, %v, %v; want %q, %v", got, explicit, err, tc.want, tc.wantExplicit)
 			}
 		})
 	}
-	if _, err := (options{}).configPath(env(map[string]string{"CONFIG_FILE": " "})); err == nil {
-		t.Fatal("accepted an empty CONFIG_FILE")
+	for _, value := range []string{"", " ", "\t"} {
+		_, _, err := (options{}).configPath(env(map[string]string{"CONFIG_FILE": value}))
+		if err == nil || err.Error() != "CONFIG_FILE is set but empty" {
+			t.Fatalf("CONFIG_FILE=%q: got %v", value, err)
+		}
 	}
 }

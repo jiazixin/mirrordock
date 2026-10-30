@@ -1,3 +1,4 @@
+import { defined } from './support'
 import { test, expect } from '@playwright/test'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { mkdtemp, writeFile, readFile, rm, mkdir, appendFile } from 'node:fs/promises'
@@ -11,7 +12,9 @@ async function freePort(): Promise<number> {
     server.on('error', reject)
     server.listen(0, '127.0.0.1', () => {
       const port = (server.address() as net.AddressInfo).port
-      server.close(() => resolve(port))
+      server.close(() => {
+        resolve(port)
+      })
     })
   })
 }
@@ -51,7 +54,7 @@ test('real configuration, rsync failover, publication, records and responsive UI
     `use chroot = no\nuid =\ngid =\nmunge symlinks = no\n[repo]\npath = ${upstream}\nread only = yes\n`,
   )
   const daemon = spawn(
-    rsync!,
+    defined(rsync),
     [
       '--daemon',
       '--no-detach',
@@ -74,19 +77,19 @@ test('real configuration, rsync failover, publication, records and responsive UI
       env: {
         ...process.env,
         TZ: 'Asia/Shanghai',
-        PATH: `${path.dirname(rsync!)}${path.delimiter}${process.env.PATH}`,
+        PATH: `${path.dirname(defined(rsync))}${path.delimiter}${process.env.PATH}`,
       },
       stdio: ['ignore', 'ignore', 'pipe'],
     },
   )
-  app.stderr!.on('data', (chunk) => {
+  app.stderr.on('data', (chunk) => {
     output += String(chunk)
   })
   try {
     await expect
       .poll(async () => {
         try {
-          return (await request.get(base + '/api/auth/status')).status()
+          return (await request.get(base + '/healthz')).status()
         } catch {
           return 0
         }
@@ -180,6 +183,7 @@ test('real configuration, rsync failover, publication, records and responsive UI
     await status.press('Enter')
     await expect(page.locator('.run-row')).toHaveCount(1)
     await status.click()
+    // Measures that the open dropdown stays open past the 1 s poll.
     await page.waitForTimeout(1200)
     await expect(page.getByRole('listbox')).toBeVisible()
     await page.screenshot({ path: testInfo.outputPath('custom-dropdown.png'), fullPage: true })
@@ -195,7 +199,7 @@ test('real configuration, rsync failover, publication, records and responsive UI
     expect(await partial.text()).toBe('real')
     await page.screenshot({ path: testInfo.outputPath('batches.png'), fullPage: true })
     await page.getByRole('button', { name: '查看运行详情' }).first().click()
-    await expect(page.getByRole('dialog')).toContainText('UPSTREAM_ERROR')
+    await expect(page.getByRole('dialog')).toContainText('upstream_error')
     await page.locator('summary').filter({ hasText: '原始日志' }).click()
     const attempt = page.getByRole('combobox', { name: '选择日志尝试' })
     await expect(attempt).toHaveText('尝试 #2')
@@ -208,10 +212,10 @@ test('real configuration, rsync failover, publication, records and responsive UI
     await expect(attempt).toHaveText('尝试 #2')
     await expect(page.locator('.log-view')).toContainText('Total transferred file size: 35 bytes')
     let staleRequested = false
-    await page.route('**/api/runs/*/logs?attempt=1&offset=0', async (route) => {
+    await page.route('**/api/runs/*/logs?attempt=1&offset_bytes=0', async (route) => {
       staleRequested = true
       await new Promise((resolve) => setTimeout(resolve, 600))
-      await route.fulfill({ json: { text: '过期尝试响应', next_offset: 10 } })
+      await route.fulfill({ json: { text: '过期尝试响应', next_offset_bytes: 10 } })
     })
     await attempt.click()
     await page.getByRole('option', { name: '尝试 #1', exact: true }).click()
@@ -219,9 +223,10 @@ test('real configuration, rsync failover, publication, records and responsive UI
     await attempt.click()
     await page.getByRole('option', { name: '尝试 #2', exact: true }).click()
     await expect(page.locator('.log-view')).toContainText('Total transferred file size: 35 bytes')
+    // Measures that the stale attempt response is discarded.
     await page.waitForTimeout(700)
     await expect(page.locator('.log-view')).not.toContainText('过期尝试响应')
-    await page.unroute('**/api/runs/*/logs?attempt=1&offset=0')
+    await page.unroute('**/api/runs/*/logs?attempt=1&offset_bytes=0')
     await expect(page.getByRole('button', { name: '读取后续日志', exact: true })).toHaveCount(0)
     await expect(page.getByRole('button', { name: '下载', exact: true })).toBeVisible()
     const successful = await (await page.request.get(base + '/api/runs?state=succeeded')).json()
@@ -235,9 +240,9 @@ test('real configuration, rsync failover, publication, records and responsive UI
     await expect(page.locator('.log-view')).not.toContainText('完整日志起点')
     const beforeDownload = await readFile(logFile, 'utf8')
     expect(
-      (await request.get(base + `/api/runs/${runID}/logs?attempt=2&download=1`)).status(),
+      (await request.get(base + `/api/runs/${runID}/logs?attempt=2&download=true`)).status(),
     ).toBe(401)
-    await page.route('**/api/runs/*/logs?attempt=2&download=1', async (route) => {
+    await page.route('**/api/runs/*/logs?attempt=2&download=true', async (route) => {
       const response = await route.fetch()
       await appendFile(logFile, '下载请求后追加\n')
       await route.fulfill({ response })
@@ -246,14 +251,15 @@ test('real configuration, rsync failover, publication, records and responsive UI
     await page.getByRole('button', { name: '下载', exact: true }).click()
     const logDownload = await downloadEvent
     expect(logDownload.suggestedFilename()).toBe(`run-${runID}-attempt-2.log`)
-    expect(await readFile((await logDownload.path())!, 'utf8')).toBe(beforeDownload)
-    await page.unroute('**/api/runs/*/logs?attempt=2&download=1')
+    expect(await readFile(await logDownload.path(), 'utf8')).toBe(beforeDownload)
+    await page.unroute('**/api/runs/*/logs?attempt=2&download=true')
     let logRequests = 0
     page.on('request', (req) => {
       if (req.url().includes(`/api/runs/${runID}/logs`)) logRequests++
     })
     await page.getByRole('button', { name: '关闭', exact: true }).click()
     const stopped = logRequests
+    // Measures that no log poll runs during one 3 s interval.
     await page.waitForTimeout(3300)
     expect(logRequests).toBe(stopped)
     await page.getByRole('link', { name: '运行记录' }).click()
@@ -384,11 +390,18 @@ test('real configuration, rsync failover, publication, records and responsive UI
     await expect(page.locator('.check-row').filter({ hasText: '镜像盘空间' })).toContainText(
       '安全余量',
     )
-    for (const [status, detail, label] of [
-      ['unsupported', '测试文件系统不支持克隆', '不支持'],
-      ['error', '测试探测目录不可写', '探测失败'],
-      ['supported', '测试克隆成功', '支持'],
-    ]) {
+    // The server sends the English cause of a failed probe; the console shows
+    // its own summary followed by that cause.
+    for (const [status, detail, label, text] of [
+      [
+        'unsupported',
+        'operation not supported',
+        '不支持',
+        '镜像目录克隆未成功：operation not supported',
+      ],
+      ['error', 'permission denied', '探测失败', '镜像目录克隆未成功：permission denied'],
+      ['supported', '', '支持', '镜像目录实测支持写时复制'],
+    ] as const) {
       await page.route('**/api/system/checks', (route) =>
         route.fulfill({
           status: 200,
@@ -398,7 +411,7 @@ test('real configuration, rsync failover, publication, records and responsive UI
       )
       await page.getByRole('button', { name: '刷新', exact: true }).click()
       await expect(reflinkRow.locator('.check-status')).toHaveText(label)
-      await expect(reflinkRow).toContainText(detail)
+      await expect(reflinkRow).toContainText(text)
       await page.unroute('**/api/system/checks')
     }
     await page.route('**/api/system/checks', (route) =>
@@ -418,13 +431,13 @@ test('real configuration, rsync failover, publication, records and responsive UI
       route.fulfill({
         status: 503,
         contentType: 'application/json',
-        body: JSON.stringify({ error: '环境检查测试失败' }),
+        body: JSON.stringify({ error: { code: 'unavailable', message: 'checks test failure' } }),
       }),
     )
     await page.getByRole('button', { name: '刷新', exact: true }).click()
-    await expect(page.getByRole('alert')).toContainText('环境检查测试失败')
-    await expect(page.locator('.environment-checks')).toContainText('检查未完成')
-    await expect(page.locator('.checks-list')).toHaveCount(0)
+    await expect(page.getByRole('alert')).toContainText('服务暂时不可用，请稍后重试')
+    await expect(page.locator('.environment-checks')).toContainText('刷新失败，保留上次结果')
+    await expect(page.locator('.checks-list')).toHaveCount(1)
     await page.unroute('**/api/system/checks')
     await page.getByRole('button', { name: '刷新', exact: true }).click()
     await expect(page.locator('.environment-checks')).toContainText('检查完成')
@@ -434,11 +447,7 @@ test('real configuration, rsync failover, publication, records and responsive UI
     await page.screenshot({ path: testInfo.outputPath('settings-environment.png'), fullPage: true })
     const publicationBefore = (await (await page.request.get(base + '/api/system/info')).json())
       .publications[0].current.id
-    const noChange = await (
-      await page.request.post(base + '/api/sources/isolated/run', {
-        headers: { 'X-MirrorDock-Request': '1' },
-      })
-    ).json()
+    const noChange = await (await page.request.post(base + '/api/sources/isolated/runs', {})).json()
     await expect
       .poll(
         async () =>
@@ -547,9 +556,9 @@ test('real configuration, rsync failover, publication, records and responsive UI
     await page.getByRole('combobox', { name: '批次状态', exact: true }).click()
     const bounds = await page.getByRole('listbox').boundingBox()
     expect(bounds).toBeTruthy()
-    expect(bounds!.x).toBeGreaterThanOrEqual(0)
-    expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(375)
-    expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(1000)
+    expect(defined(bounds).x).toBeGreaterThanOrEqual(0)
+    expect(defined(bounds).x + defined(bounds).width).toBeLessThanOrEqual(375)
+    expect(defined(bounds).y + defined(bounds).height).toBeLessThanOrEqual(1000)
     await page.screenshot({ path: testInfo.outputPath('mobile-dropdown.png'), fullPage: true })
     await page.getByRole('combobox', { name: '批次状态', exact: true }).press('Tab')
     await expect(page.getByRole('listbox')).toHaveCount(0)
@@ -563,11 +572,15 @@ test('real configuration, rsync failover, publication, records and responsive UI
     await filter.press('ArrowDown')
     await filter.press('Enter')
     await expect(page.locator('.source-name')).toHaveCount(1)
-    const fonts = await page.evaluate(() => ({
-      family: getComputedStyle(document.body).fontFamily,
-      heading: getComputedStyle(document.querySelector('h1')!).fontWeight,
-      button: getComputedStyle(document.querySelector('.heading-actions .button')!).fontWeight,
-    }))
+    const fonts = await page.evaluate(() => {
+      const weight = (element: Element | null) =>
+        element ? getComputedStyle(element).fontWeight : ''
+      return {
+        family: getComputedStyle(document.body).fontFamily,
+        heading: weight(document.querySelector('h1')),
+        button: weight(document.querySelector('.heading-actions .button')),
+      }
+    })
     expect(fonts.family).not.toContain('Avenir')
     expect(fonts.heading).toBe('700')
     expect(fonts.button).toBe('600')
@@ -593,12 +606,11 @@ test('real configuration, rsync failover, publication, records and responsive UI
       name: ['AlmaLinux 9', 'NGINX Stable · EL9 · x86_64', 'OpenList Releases'][index],
       type,
       enabled: false,
-      upstreams:
-        type === 'rsync'
-          ? displayConfig.config.sources[0].upstreams
-          : type === 'reposync'
-            ? { src1: 'https://nginx.org/packages/centos/9/x86_64/' }
-            : {},
+      upstreams: {
+        rsync: displayConfig.config.sources[0].upstreams,
+        reposync: { src1: 'https://nginx.org/packages/centos/9/x86_64/' },
+        github_release: {},
+      }[type],
       dest: ['almalinux/9', 'nginx/el9/x86_64', 'github/openlist'][index],
       github_release: { repository: 'OpenListTeam/OpenList', release_count: 5, asset_patterns: [] },
     }))
@@ -620,13 +632,13 @@ test('real configuration, rsync failover, publication, records and responsive UI
       name: displayConfig.config.sources[index % 3].name,
       type: types[index % 3],
       state,
-      elapsed_seconds: 120,
+      elapsed_ms: 120000,
       progress: {
         ...realRuns.items[0].progress,
         phase: state === 'running' ? 'transfer' : 'complete',
         percent: state === 'running' ? 36 : 100,
-        speed: state === 'running' ? 35000 : 0,
-        eta_seconds: state === 'running' ? 240 : null,
+        speed_bytes_per_second: state === 'running' ? 35000 : 0,
+        eta_ms: state === 'running' ? 240000 : null,
         skipped: 2,
       },
     }))
@@ -638,6 +650,11 @@ test('real configuration, rsync failover, publication, records and responsive UI
       route.fulfill({ contentType: 'text/event-stream', body: '' }),
     )
     await page.reload()
+    // Shareable filters survive reload; clear explicitly before comparing all source types.
+    await expect(filter).toHaveText('Rsync')
+    await expect(page.locator('.source-name')).toHaveCount(1)
+    await filter.press('Home')
+    await filter.press('Enter')
     await expect(page.locator('.source-name')).toHaveCount(3)
     await expect(page.locator('.source-table td:nth-child(4) .badge')).toHaveCount(0)
     await expect(page.locator('.source-table td:nth-child(5) .badge')).toHaveCount(3)
@@ -652,8 +669,8 @@ test('real configuration, rsync failover, publication, records and responsive UI
     expect(new Set(typeColors.map((item) => item.background)).size).toBe(3)
     // The status column is centered like the latest-run column next to it.
     for (const cell of await page.locator('.source-table td:nth-child(5)').all()) {
-      const cellBox = (await cell.boundingBox())!
-      const badgeBox = (await cell.locator('.badge').boundingBox())!
+      const cellBox = defined(await cell.boundingBox())
+      const badgeBox = defined(await cell.locator('.badge').boundingBox())
       expect(
         Math.abs(cellBox.x + cellBox.width / 2 - (badgeBox.x + badgeBox.width / 2)),
       ).toBeLessThan(1.5)

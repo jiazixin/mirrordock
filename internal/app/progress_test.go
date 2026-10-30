@@ -6,11 +6,14 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
 func TestProgressFramesShareConcurrentReadAndExpire(t *testing.T) {
-	var frames progressFrames
+	t.Parallel()
+	now := time.Date(2026, 10, 30, 0, 0, 0, 0, time.UTC)
+	frames := progressFrames{now: func() time.Time { return now }}
 	var calls atomic.Int64
 	entered, release := make(chan struct{}), make(chan struct{})
 	read := func(context.Context) ([]byte, error) {
@@ -35,9 +38,7 @@ func TestProgressFramesShareConcurrentReadAndExpire(t *testing.T) {
 	if calls.Load() != 1 {
 		t.Fatal("duplicated concurrent query", calls.Load())
 	}
-	frames.mu.Lock()
-	frames.expires = time.Time{}
-	frames.mu.Unlock()
+	now = now.Add(time.Second)
 	if _, err := frames.get(t.Context(), read); err != nil {
 		t.Fatal(err)
 	}
@@ -47,32 +48,36 @@ func TestProgressFramesShareConcurrentReadAndExpire(t *testing.T) {
 }
 
 func TestProgressFramesWaiterCancellationAndFailureRecovery(t *testing.T) {
-	var frames progressFrames
-	entered, release, done := make(chan struct{}), make(chan struct{}), make(chan struct{})
-	failure := errors.New("read failed")
-	go func() {
-		defer close(done)
-		_, err := frames.get(t.Context(), func(context.Context) ([]byte, error) { close(entered); <-release; return nil, failure })
-		if !errors.Is(err, failure) {
-			t.Errorf("missing failure: %v", err)
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		var frames progressFrames
+		entered, release, done := make(chan struct{}), make(chan struct{}), make(chan struct{})
+		failure := errors.New("read failed")
+		go func() {
+			defer close(done)
+			_, err := frames.get(t.Context(), func(context.Context) ([]byte, error) { close(entered); <-release; return nil, failure })
+			if !errors.Is(err, failure) {
+				t.Errorf("missing failure: %v", err)
+			}
+		}()
+		<-entered
+		ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
+		defer cancel()
+		_, err := frames.get(ctx, func(context.Context) ([]byte, error) { t.Error("waiter started a duplicate read"); return nil, nil })
+		close(release)
+		<-done
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatal(err)
 		}
-	}()
-	<-entered
-	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
-	defer cancel()
-	_, err := frames.get(ctx, func(context.Context) ([]byte, error) { t.Error("waiter started a duplicate read"); return nil, nil })
-	close(release)
-	<-done
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatal(err)
-	}
-	data, err := frames.get(t.Context(), func(context.Context) ([]byte, error) { return []byte("recovered"), nil })
-	if err != nil || string(data) != "recovered" {
-		t.Fatal(string(data), err)
-	}
+		data, err := frames.get(t.Context(), func(context.Context) ([]byte, error) { return []byte("recovered"), nil })
+		if err != nil || string(data) != "recovered" {
+			t.Fatal(string(data), err)
+		}
+	})
 }
 
 func TestProgressFramesInvalidateDiscardsOverlappingRead(t *testing.T) {
+	t.Parallel()
 	var frames progressFrames
 	changed := frames.changes()
 	var calls atomic.Int64

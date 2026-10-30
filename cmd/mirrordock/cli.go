@@ -21,9 +21,13 @@ Options:
 Environment:
   CONFIG_FILE          Configuration file, used when --config is not given
 
-The admin console is served at /admin/; sync and service settings are read
-from the configuration file.
+The configuration file must exist: the built-in defaults have no admin
+account. Relative paths in it are resolved against its directory. The admin
+console is served at /admin/; sync and service settings are read from the
+configuration file and can be edited there.
 `
+
+const defaultConfigFile = "configs/config.local.yaml"
 
 type options struct {
 	configFile string // empty: CONFIG_FILE or the default file
@@ -41,7 +45,7 @@ func parseArgs(args []string) (options, error) {
 			return errors.New("configuration path must not be empty")
 		}
 		if o.configFile != "" && o.configFile != v {
-			return errors.New("-c and --config name different files")
+			return fmt.Errorf("different files given for -c/--config: %q and %q", o.configFile, v)
 		}
 		o.configFile = v
 		return nil
@@ -61,15 +65,16 @@ func parseArgs(args []string) (options, error) {
 }
 
 // configPath returns --config, then CONFIG_FILE, then the default file.
-func (o options) configPath(lookupEnv func(string) (string, bool)) (string, error) {
+// explicit reports whether the user chose the file.
+func (o options) configPath(lookupEnv func(string) (string, bool)) (path string, explicit bool, err error) {
 	if o.configFile != "" {
-		return o.configFile, nil
+		return o.configFile, true, nil
 	}
 	if path, ok := lookupEnv("CONFIG_FILE"); ok {
 		if strings.TrimSpace(path) == "" {
-			return "", errors.New("CONFIG_FILE is set but empty")
+			return "", false, errors.New("CONFIG_FILE is set but empty")
 		}
-		return path, nil
+		return path, true, nil
 	}
-	return "configs/config.local.yaml", nil
+	return defaultConfigFile, false, nil
 }

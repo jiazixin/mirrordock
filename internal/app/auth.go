@@ -2,19 +2,19 @@ package app
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
-	"encoding/base64"
-	"errors"
+	"log/slog"
 	"maps"
-	"mirrordock/internal/config"
 	"net"
 	"net/http"
 	"net/netip"
-	"strings"
 	"sync"
 	"time"
 
 	"golang.org/x/crypto/bcrypt"
+
+	"mirrordock/internal/config"
 )
 
 // Session and login limits.
@@ -37,21 +37,14 @@ type loginWindow struct {
 	start    time.Time
 }
 
+// auth protects session digests and login windows with mu; now is fixed at construction.
 type auth struct {
+	now          func() time.Time
 	mu           sync.Mutex
 	username     string
 	passwordHash []byte
-	sessions     map[string]session
+	sessions     map[[sha256.Size]byte]session
 	attempts     map[string]loginWindow
-}
-
-// randomToken returns 256 bits from crypto/rand, URL-safe encoded.
-func randomToken() string {
-	token := make([]byte, 32)
-	if _, err := rand.Read(token); err != nil {
-		panic(err)
-	}
-	return base64.RawURLEncoding.EncodeToString(token)
 }
 
 // newAuth keeps only a bcrypt hash of the YAML password in memory.
@@ -61,9 +54,10 @@ func newAuth(credentials config.Auth) (*auth, error) {
 		return nil, err
 	}
 	return &auth{
+		now:          time.Now,
 		username:     credentials.Username,
 		passwordHash: hash,
-		sessions:     map[string]session{},
+		sessions:     map[[sha256.Size]byte]session{},
 		attempts:     map[string]loginWindow{},
 	}, nil
 }
@@ -75,11 +69,17 @@ func (a *auth) authorized(r *http.Request) bool {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	current, ok := a.sessions[cookie.Value]
-	if ok && time.Now().Before(current.expires) {
-		return true
+	digest := sha256.Sum256([]byte(cookie.Value))
+	now := a.now()
+	for stored, current := range a.sessions {
+		if !now.Before(current.expires) {
+			delete(a.sessions, stored)
+			continue
+		}
+		if subtle.ConstantTimeCompare(digest[:], stored[:]) == 1 {
+			return true
+		}
 	}
-	delete(a.sessions, cookie.Value)
 	return false
 }
 
@@ -110,7 +110,7 @@ func clientIP(r *http.Request) string {
 func (a *auth) limited(ip string) bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	now := time.Now()
+	now := a.now()
 	maps.DeleteFunc(a.attempts, func(_ string, window loginWindow) bool {
 		return now.Sub(window.start) >= loginWindowLength
 	})
@@ -144,32 +144,32 @@ func (a *auth) resetLimit(ip string) {
 // always compared first, so the response time does not reveal the username.
 func (a *auth) login(username, password string) (string, error) {
 	if len(password) > maxPasswordBytes {
-		return "", errors.New("用户名或密码错误")
+		return "", errBadLogin
 	}
 	passwordMatches := bcrypt.CompareHashAndPassword(a.passwordHash, []byte(password)) == nil
 	usernameMatches := subtle.ConstantTimeCompare([]byte(a.username), []byte(username)) == 1
 	if !passwordMatches || !usernameMatches {
-		return "", errors.New("用户名或密码错误")
+		return "", errBadLogin
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	now := time.Now()
-	maps.DeleteFunc(a.sessions, func(_ string, existing session) bool {
+	now := a.now()
+	maps.DeleteFunc(a.sessions, func(_ [sha256.Size]byte, existing session) bool {
 		return now.After(existing.expires)
 	})
 	if len(a.sessions) >= maxSessions {
-		var oldest string
+		var oldest [sha256.Size]byte
 		var expiry time.Time
 		for token, existing := range a.sessions {
-			if oldest == "" || existing.expires.Before(expiry) {
+			if expiry.IsZero() || existing.expires.Before(expiry) {
 				oldest = token
 				expiry = existing.expires
 			}
 		}
 		delete(a.sessions, oldest)
 	}
-	token := randomToken()
-	a.sessions[token] = session{expires: now.Add(sessionLifetime)}
+	token := rand.Text()
+	a.sessions[sha256.Sum256([]byte(token))] = session{expires: now.Add(sessionLifetime)}
 	return token, nil
 }
 
@@ -177,22 +177,16 @@ func (a *auth) logout(r *http.Request) {
 	cookie, err := r.Cookie(sessionCookie)
 	if err == nil {
 		a.mu.Lock()
-		delete(a.sessions, cookie.Value)
+		delete(a.sessions, sha256.Sum256([]byte(cookie.Value)))
 		a.mu.Unlock()
 	}
 }
 
-func csrf(r *http.Request) bool {
-	if r.Header.Get("X-MirrorDock-Request") != "1" {
-		return false
-	}
-	origin := r.Header.Get("Origin")
-	if origin == "" {
-		return true
-	}
-	scheme := "http"
-	if r.TLS != nil {
-		scheme = "https"
-	}
-	return strings.EqualFold(origin, scheme+"://"+r.Host)
-}
+// String prevents accidental credential disclosure in diagnostics.
+func (a *auth) String() string { return "auth{redacted}" }
+
+// GoString redacts authentication data in Go-syntax diagnostics.
+func (a *auth) GoString() string { return a.String() }
+
+// LogValue redacts authentication data in structured logging.
+func (a *auth) LogValue() slog.Value { return slog.StringValue(a.String()) }

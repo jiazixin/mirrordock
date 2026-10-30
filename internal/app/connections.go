@@ -1,11 +1,12 @@
 package app
 
 import (
-	"mirrordock/internal/mirrors"
 	"net"
 	"net/http"
 	"sync"
 	"time"
+
+	mirrorfs "mirrordock/internal/mirror"
 )
 
 const stalledConnectionTimeout = 5 * time.Minute
@@ -24,7 +25,7 @@ type connections struct {
 }
 
 func connectionLimit() int {
-	_, connections := mirrors.DescriptorLimits()
+	_, connections := mirrorfs.DescriptorLimits()
 	return connections
 }
 

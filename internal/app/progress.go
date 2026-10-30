@@ -12,6 +12,7 @@ import (
 // invalidate drops the frame after a management write; a read that overlapped the
 // write is discarded and repeated, so no client is served state from before it.
 type progressFrames struct {
+	now        func() time.Time
 	mu         sync.Mutex
 	data       []byte
 	expires    time.Time
@@ -26,7 +27,7 @@ func (p *progressFrames) get(ctx context.Context, read func(context.Context) ([]
 			return nil, err
 		}
 		p.mu.Lock()
-		if time.Now().Before(p.expires) {
+		if p.clock().Before(p.expires) {
 			data := p.data
 			p.mu.Unlock()
 			return data, nil
@@ -49,7 +50,7 @@ func (p *progressFrames) get(ctx context.Context, read func(context.Context) ([]
 		stale := p.generation != generation
 		if err == nil && !stale {
 			p.data = data
-			p.expires = time.Now().Add(time.Second)
+			p.expires = p.clock().Add(time.Second)
 		}
 		close(p.pending)
 		p.pending = nil
@@ -59,6 +60,13 @@ func (p *progressFrames) get(ctx context.Context, read func(context.Context) ([]
 		}
 		return data, err
 	}
+}
+
+func (p *progressFrames) clock() time.Time {
+	if p.now != nil {
+		return p.now()
+	}
+	return time.Now()
 }
 
 // invalidate expires the current frame and wakes listeners waiting on changes.

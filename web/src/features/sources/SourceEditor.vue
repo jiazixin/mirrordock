@@ -1,14 +1,17 @@
 <script setup lang="ts">
+import FieldIssue from '../../components/FieldIssue.vue'
+import { onScopeDispose } from 'vue'
+import { clientError, errorText } from '../../app/errors'
 import SelectField from '../../components/SelectField.vue'
 import { computed, ref } from 'vue'
 import { Plus, Trash2, Save } from '@lucide/vue'
-import Modal from '../../components/Modal.vue'
+import ModalDialog from '../../components/ModalDialog.vue'
 import OptionCard from '../../components/OptionCard.vue'
 import type { RsyncProxyMode, Source } from '../../app/types'
 import { clone, state, saveConfiguration } from '../../app/state'
 import GitHubBatch from './GitHubBatch.vue'
 import { splitPatterns, staggerCrons, validateRows, type BatchRow } from './githubBatch'
-const props = defineProps<{ source?: Source }>()
+const { source = null } = defineProps<{ source?: Source | null }>()
 const emit = defineEmits<{ close: [] }>()
 function blank(): Source {
   return {
@@ -25,8 +28,8 @@ function blank(): Source {
       preserve_permissions: true,
       preserve_hardlinks: true,
       delete: true,
-      uid: null,
-      gid: null,
+      uid: undefined,
+      gid: undefined,
     },
     reposync: {
       repo_id: '',
@@ -44,17 +47,17 @@ function blank(): Source {
     schedule: { enabled: false, cron: '0 2 * * *', overlap: 'skip' },
   }
 }
-const draft = ref<Source>(props.source ? clone(props.source) : blank())
+const draft = ref<Source>(source ? clone(source) : blank())
 const upstreams = ref(
-  Object.entries(draft.value.upstreams ?? {})
+  Object.entries(draft.value.upstreams)
     .sort(([a], [b]) => Number(a.slice(3)) - Number(b.slice(3)))
     .map(([key, value]) => ({ key, value })),
 )
 if (!upstreams.value.length) upstreams.value.push({ key: 'src1', value: '' })
-const exclusions = ref((draft.value.exclude ?? []).join('\n'))
-const patterns = ref((draft.value.github_release.asset_patterns ?? []).join('\n'))
-const keys = ref((draft.value.reposync.gpg_keys ?? []).join('\n'))
-const architectures = ref((draft.value.reposync.architectures ?? []).join(', '))
+const exclusions = ref(draft.value.exclude.join('\n'))
+const patterns = ref(draft.value.github_release.asset_patterns.join('\n'))
+const keys = ref(draft.value.reposync.gpg_keys.join('\n'))
+const architectures = ref(draft.value.reposync.architectures.join(', '))
 const proxyMode = ref<RsyncProxyMode>(draft.value.rsync.proxy_mode || 'global')
 const customProxy = ref(draft.value.rsync.proxy ?? '')
 const proxyModes = [
@@ -81,15 +84,18 @@ const proxyHint = computed(() => {
     : '系统设置未配置全局代理，当前直连。'
 })
 const error = ref('')
+const validationError = ref<unknown>()
+const mutationController = new AbortController()
+onScopeDispose(() => {
+  mutationController.abort()
+})
 const busy = ref(false)
 const batchMode = ref(false)
 const batchRows = ref<BatchRow[]>([])
-const batch = computed(
-  () => batchMode.value && !props.source && draft.value.type === 'github_release',
-)
+const batch = computed(() => batchMode.value && !source && draft.value.type === 'github_release')
 const revision = state.config?.revision
 const title = computed(() => {
-  if (props.source) return '编辑同步源'
+  if (source) return '编辑同步源'
   return batch.value ? '批量新增同步源' : '新增同步源'
 })
 const flags = [
@@ -124,15 +130,15 @@ function addUpstream() {
 }
 function number(key: 'uid' | 'gid', event: Event) {
   const raw = (event.target as HTMLInputElement).value
-  draft.value.rsync[key] = raw === '' ? null : Number(raw)
+  draft.value.rsync[key] = raw === '' ? undefined : Number(raw)
 }
 // batchSources expands the shared draft into one source per preview row;
 // the whole batch is written in a single revision-checked save.
 function batchSources(shared: Source, existing: Source[]): Source[] {
   const rows = batchRows.value
-  if (!rows.length) throw new Error('请至少填写一个 GitHub 仓库')
+  if (!rows.length) throw clientError('github_batch_empty')
   if (validateRows(rows, existing).some((errors) => Object.keys(errors).length))
-    throw new Error('请先修正预览表中标红的项')
+    throw clientError('github_batch_invalid')
   const crons = staggerCrons(shared.schedule.cron, rows.length)?.crons
   return rows.map((row, index) => {
     const source = clone(shared)
@@ -150,15 +156,23 @@ async function save() {
   if (!state.config) return
   busy.value = true
   error.value = ''
+  validationError.value = undefined
   try {
     const source = clone(draft.value)
     source.exclude = source.type === 'rsync' ? lines(exclusions.value) : []
-    source.upstreams =
-      source.type === 'github_release'
-        ? {}
-        : source.type === 'reposync'
-          ? { src1: upstreams.value[0]?.value.trim() ?? '' }
-          : Object.fromEntries(upstreams.value.map((item) => [item.key, item.value.trim()]))
+    switch (source.type) {
+      case 'github_release':
+        source.upstreams = {}
+        break
+      case 'reposync':
+        source.upstreams = { src1: upstreams.value[0]?.value.trim() ?? '' }
+        break
+      case 'rsync':
+        source.upstreams = Object.fromEntries(
+          upstreams.value.map((item) => [item.key, item.value.trim()]),
+        )
+        break
+    }
     // Blank follows the global proxy and keeps the YAML free of a default.
     source.rsync.proxy_mode = proxyMode.value === 'global' ? '' : proxyMode.value
     source.rsync.proxy = proxyMode.value === 'custom' ? customProxy.value.trim() : ''
@@ -171,21 +185,32 @@ async function save() {
     const config = clone(state.config.config)
     if (batch.value) config.sources.push(...batchSources(source, config.sources))
     else {
-      const index = config.sources.findIndex((item) => item.id === props.source?.id)
+      const index = config.sources.findIndex((item) => item.id === source.id)
       if (index >= 0) config.sources[index] = source
       else config.sources.push(source)
     }
-    await saveConfiguration(config, undefined, undefined, revision)
+    await saveConfiguration({ config, revision, signal: mutationController.signal })
     emit('close')
   } catch (e) {
-    error.value = e instanceof Error ? e.message : String(e)
+    validationError.value = e
+    error.value = errorText(e)
   } finally {
     busy.value = false
   }
 }
+const sourceTypes = [
+  { value: 'rsync', label: 'Rsync' },
+  { value: 'reposync', label: 'DNF Reposync' },
+  { value: 'github_release', label: 'GitHub Release' },
+] satisfies { value: Source['type']; label: string }[]
+const sourcePlaceholder = computed(() =>
+  draft.value.type === 'rsync'
+    ? 'rsync://mirror.example/repo/'
+    : 'https://nginx.org/packages/centos/9/x86_64/',
+)
 </script>
 <template>
-  <Modal
+  <ModalDialog
     :title="title"
     wide
     @close="emit('close')"
@@ -210,13 +235,7 @@ async function save() {
           >同步方式<SelectField
             v-model="draft.type"
             aria-label="同步方式"
-            :options="
-              [
-                { value: 'rsync', label: 'Rsync' },
-                { value: 'reposync', label: 'DNF Reposync' },
-                { value: 'github_release', label: 'GitHub Release' },
-              ] satisfies { value: Source['type']; label: string }[]
-            " /></label
+            :options="sourceTypes" /></label
         ><label v-if="!batch"
           >目的目录 · dest<input
             v-model="draft.dest"
@@ -256,26 +275,22 @@ async function save() {
         </div>
       </section>
       <section
-        class="form-section"
         v-if="draft.type !== 'github_release'"
+        class="form-section"
       >
         <h3>同步来源<span>按数字顺序尝试，切换不重置任务预算</span></h3>
         <p v-if="draft.type === 'rsync'">地址须包含模块；模块内目录须以 / 结尾。</p>
         <div
-          class="upstream-row"
           v-for="(upstream, index) in upstreams"
-          :key="upstream.key"
           v-show="draft.type === 'rsync' || index === 0"
+          :key="upstream.key"
+          class="upstream-row"
         >
           <span>{{ upstream.key }}</span
           ><input
             v-model="upstream.value"
             :required="draft.type === 'rsync' || index === 0"
-            :placeholder="
-              draft.type === 'rsync'
-                ? 'rsync://mirror.example/repo/'
-                : 'https://nginx.org/packages/centos/9/x86_64/'
-            "
+            :placeholder="sourcePlaceholder"
           /><button
             v-if="index > 0"
             type="button"
@@ -286,6 +301,10 @@ async function save() {
             <Trash2 :size="16" />
           </button>
         </div>
+        <FieldIssue
+          :error="validationError"
+          field="upstreams"
+        />
         <button
           v-if="draft.type === 'rsync'"
           type="button"
@@ -304,10 +323,12 @@ async function save() {
           >排除规则 · exclude<textarea
             v-model="exclusions"
             rows="3"
-            placeholder="一行一条，例如 isos/**"
-          />
+            placeholder="一行一条，例如 isos/**" />
           <small>排除规则只停止同步，不会删除此前已同步的文件。</small>
-        </label>
+          <FieldIssue
+            :error="validationError"
+            field="name"
+        /></label>
         <div class="source-option-grid">
           <OptionCard
             v-for="flag in flags"
@@ -323,15 +344,17 @@ async function save() {
               type="number"
               min="0"
               :value="draft.rsync.uid ?? ''"
-              @input="number('uid', $event)"
-              placeholder="留空使用程序身份；0 表示 root" /></label
+              placeholder="留空使用程序身份；0 表示 root"
+              @input="number('uid', $event)" /></label
           ><label
             >GID · 可选<input
               type="number"
               min="0"
               :value="draft.rsync.gid ?? ''"
-              @input="number('gid', $event)"
               placeholder="留空不做映射"
+              @input="number('gid', $event)" /><FieldIssue
+              :error="validationError"
+              field="rsync.uid"
           /></label>
         </div>
         <small>指定 UID 通常需要接收端具有 root 权限；程序不会自动提权。</small>
@@ -348,7 +371,9 @@ async function save() {
               required
               autocomplete="off"
               spellcheck="false"
-              placeholder="socks5://127.0.0.1:1080"
+              placeholder="socks5://127.0.0.1:1080" /><FieldIssue
+              :error="validationError"
+              field="rsync.proxy_mode"
           /></label>
         </div>
         <small>{{ proxyHint }}</small>
@@ -409,16 +434,20 @@ async function save() {
           ><label
             >架构范围<input
               v-model="architectures"
-              placeholder="x86_64, noarch"
+              placeholder="x86_64, noarch" /><FieldIssue
+              :error="validationError"
+              field="github_release.repository"
           /></label>
         </div>
         <label
           >GPG 公钥地址<textarea
             v-model="keys"
             rows="2"
-            placeholder="一行一个 HTTPS 地址"
-          />
-        </label>
+            placeholder="一行一个 HTTPS 地址" />
+          <FieldIssue
+            :error="validationError"
+            field="reposync.gpg_keys"
+        /></label>
         <div class="source-option-grid">
           <OptionCard
             v-for="flag in repoFlags"
@@ -450,22 +479,85 @@ async function save() {
           <Save :size="16" />{{ busy ? '正在保存…' : '保存并写回 YAML' }}
         </button>
       </footer>
-    </form></Modal
+    </form></ModalDialog
   >
 </template>
 
 <style scoped>
 .batch-switch {
-  margin-top: 18px;
+  margin-top: var(--space-18px);
 }
 .source-option-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px 24px;
+  gap: var(--space-12px) var(--space-24px);
 }
 @media (max-width: 480px) {
   .source-option-grid {
     grid-template-columns: minmax(0, 1fr);
+  }
+}
+.source-form {
+  padding: var(--space-24px) var(--space-28px) var(--space-28px);
+}
+.form-section {
+  border-top: 1px solid var(--line);
+  padding-top: var(--space-24px);
+  margin-top: var(--space-24px);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-16px);
+}
+.form-section :deep(h3) {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-12px);
+  font-size: var(--font-15px);
+  font-weight: 500;
+}
+.form-section :deep(h3 span) {
+  font-size: var(--font-12px);
+  color: var(--t3);
+  font-weight: 400;
+}
+.form-section > :deep(p) {
+  font-size: var(--font-12px);
+  color: var(--t3);
+}
+.upstream-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-10px);
+}
+.upstream-row > :deep(span) {
+  font-size: var(--font-12px);
+  color: var(--t3);
+  min-width: 36px;
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+}
+.upstream-row :deep(input) {
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  font-size: var(--font-12px);
+}
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-8px);
+  border-top: 1px solid var(--line);
+  padding-top: var(--space-20px);
+  margin-top: var(--space-28px);
+}
+@media (max-width: 600px) {
+  .source-form {
+    padding: var(--space-20px);
+  }
+}
+@media (max-width: 600px) {
+  .form-section :deep(h3) {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: var(--space-4px);
   }
 }
 </style>

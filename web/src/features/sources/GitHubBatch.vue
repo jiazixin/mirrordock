@@ -10,7 +10,7 @@ import {
   validateRows,
   type BatchRow,
 } from './githubBatch'
-const props = defineProps<{ cron: string; sharedPatterns: string[] }>()
+const { cron, sharedPatterns } = defineProps<{ cron: string; sharedPatterns: string[] }>()
 const rows = defineModel<BatchRow[]>('rows', { required: true })
 // The textarea starts empty on every mount, so stale rows must not survive.
 rows.value = []
@@ -19,7 +19,7 @@ const prefix = ref('github')
 const parsed = computed(() => parseRepositories(text.value))
 const existing = computed(() => state.config?.config.sources ?? [])
 const errors = computed(() => validateRows(rows.value, existing.value))
-const schedule = computed(() => staggerCrons(props.cron, rows.value.length))
+const schedule = computed(() => staggerCrons(cron, rows.value.length))
 const configured = computed(
   () =>
     new Set(
@@ -41,7 +41,7 @@ watch(
     rows.value = repositories.map((repository) => {
       const row = current.get(repository.toLowerCase())
       if (row) return row
-      const created = createRow(repository, prefix.value, takenIds, takenDests)
+      const created = createRow({ repository, prefix: prefix.value, takenIds, takenDests })
       takenIds.add(created.id)
       takenDests.push(created.dest)
       return created
@@ -59,13 +59,20 @@ watch(prefix, (value) => {
 })
 
 function remove(index: number) {
-  const repository = rows.value[index]!.repository.toLowerCase()
+  const row = rows.value[index]
+  if (!row) return
+  const repository = row.repository.toLowerCase()
   // Unrecognized entries stay in the textarea so the user can still fix them.
   text.value = [
     ...parsed.value.repositories.filter((item) => item.toLowerCase() !== repository),
     ...parsed.value.invalid,
   ].join('\n')
 }
+const scheduleHint = computed(() =>
+  schedule.value
+    ? `Cron 分钟按 ${schedule.value.step} 分钟间隔错开`
+    : 'Cron 分钟字段不是单个数字，所有源使用同一 Cron',
+)
 </script>
 
 <template>
@@ -97,11 +104,7 @@ function remove(index: number) {
       class="batch-preview"
     >
       <h4>
-        预览 {{ rows.length }} 个同步源<span>{{
-          schedule
-            ? `Cron 分钟按 ${schedule.step} 分钟间隔错开`
-            : 'Cron 分钟字段不是单个数字，所有源使用同一 Cron'
-        }}</span>
+        预览 {{ rows.length }} 个同步源<span>{{ scheduleHint }}</span>
       </h4>
       <div class="table-scroll">
         <table>
@@ -205,7 +208,7 @@ function remove(index: number) {
 .batch {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: var(--space-16px);
 }
 .batch-prefix {
   max-width: 50%;
@@ -213,30 +216,30 @@ function remove(index: number) {
 .batch-preview {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: var(--space-10px);
 }
 .batch-preview h4 {
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
   justify-content: space-between;
-  gap: 12px;
-  font-size: 14px;
+  gap: var(--space-12px);
+  font-size: var(--font-14px);
   font-weight: 500;
 }
 .batch-preview h4 span {
-  font-size: 12px;
+  font-size: var(--font-12px);
   color: var(--t3);
   font-weight: 400;
 }
 .table-scroll {
   border: 1px solid var(--line);
-  border-radius: 10px;
+  border-radius: var(--radius-10px);
 }
 table {
   table-layout: fixed;
   min-width: 680px;
-  font-size: 13px;
+  font-size: var(--font-13px);
 }
 .col-repo {
   width: 24%;
@@ -245,23 +248,23 @@ table {
   width: 52px;
 }
 th {
-  padding: 10px 8px;
-  font-size: 12.5px;
+  padding: var(--space-10px) var(--space-8px);
+  font-size: var(--font-12d5px);
 }
 th:first-child,
 td:first-child {
-  padding-left: 14px;
+  padding-left: var(--space-14px);
 }
 td {
-  padding: 10px 8px;
+  padding: var(--space-10px) var(--space-8px);
   vertical-align: top;
 }
 tbody tr:hover td {
   background: transparent;
 }
 td input {
-  padding: 6px 9px;
-  font-size: 13px;
+  padding: var(--space-6px) var(--space-9px);
+  font-size: var(--font-13px);
 }
 td input[aria-invalid='true'] {
   border-color: var(--red);
@@ -270,11 +273,11 @@ td input[aria-invalid='true'] {
 .repo,
 .cron {
   font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
-  font-size: 12px;
+  font-size: var(--font-12px);
 }
 .repo {
   display: block;
-  padding-top: 7px;
+  padding-top: var(--space-7px);
   overflow-wrap: anywhere;
 }
 .cron {

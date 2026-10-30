@@ -1,3 +1,4 @@
+import { defined } from './support'
 import { test, expect } from '@playwright/test'
 import { spawn } from 'node:child_process'
 import { mkdtemp, writeFile, rm } from 'node:fs/promises'
@@ -12,7 +13,9 @@ test('desktop sidebar stays put and only the content column scrolls', async ({ p
     listener.on('error', reject)
     listener.listen(0, '127.0.0.1', () => {
       const port = (listener.address() as net.AddressInfo).port
-      listener.close(() => resolve(port))
+      listener.close(() => {
+        resolve(port)
+      })
     })
   })
   const base = `http://127.0.0.1:${port}`
@@ -23,7 +26,7 @@ test('desktop sidebar stays put and only the content column scrolls', async ({ p
   )
   const app = spawn(
     process.env.MIRRORDOCK_TEST_BINARY ?? path.resolve(import.meta.dirname, '../../bin/mirrordock'),
-    ['-f', config],
+    ['-c', config],
     { stdio: 'ignore' },
   )
   const errors: string[] = []
@@ -32,7 +35,7 @@ test('desktop sidebar stays put and only the content column scrolls', async ({ p
     await expect
       .poll(async () => {
         try {
-          return (await request.get(`${base}/api/auth/status`)).status()
+          return (await request.get(`${base}/healthz`)).status()
         } catch {
           return 0
         }
@@ -51,17 +54,18 @@ test('desktop sidebar stays put and only the content column scrolls', async ({ p
     const main = page.locator('.main-shell')
     const positions = () =>
       page.evaluate(() => ({
-        main: document.querySelector('.main-shell')!.scrollTop,
+        main: document.querySelector('.main-shell')?.scrollTop ?? NaN,
         window: scrollY,
-        sidebar: document.querySelector('.sidebar')!.getBoundingClientRect().top,
+        sidebar: document.querySelector('.sidebar')?.getBoundingClientRect().top ?? NaN,
       }))
     // Analytics content swaps in after a short fade, so wait for it to make the column scrollable.
     await expect.poll(() => main.evaluate((el) => el.scrollHeight > el.clientHeight)).toBe(true)
 
     // Wheel input over the sidebar must not reach the content column or the document.
-    const sidebar = (await page.locator('.sidebar').boundingBox())!
+    const sidebar = defined(await page.locator('.sidebar').boundingBox())
     await page.mouse.move(sidebar.x + sidebar.width / 2, sidebar.y + sidebar.height / 2)
     await page.mouse.wheel(0, 800)
+    // Measures that wheel input over the sidebar scrolls nothing once it settles.
     await page.waitForTimeout(300)
     expect(await positions()).toEqual({ main: 0, window: 0, sidebar: 0 })
 

@@ -48,7 +48,7 @@ MirrorDock is a single Go binary with an embedded Vue 3 admin console for runnin
 | Filesystem | Reflink support on the mirror root; work and published trees on the same filesystem |
 | rsync | 3.1 or later with your distribution's security patches (the macOS system rsync is too old) |
 | Reposync (optional) | DNF 4 and `dnf-plugins-core`, plus `rpmkeys` when GPG checks are on; DNF5 is not supported |
-| Building from source | Go 1.27.3, Node.js ≥ 22.12, npm |
+| Building from source | Go 1.27.3, Node.js ≥ 26.12.1, npm |
 
 ## Quick start
 
@@ -109,7 +109,8 @@ The web build is platform-independent, so cross-compiling only changes the `go b
 
 Every field is documented in [configs/config.example.yaml](configs/config.example.yaml); behavioural details are in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) (Chinese). The essentials:
 
-- `-c <file>` and `--config <file>` are equivalent; naming different files with both is an error. The file is chosen as `--config` > the `CONFIG_FILE` environment variable > `configs/config.local.yaml` under the working directory; if it does not exist the program exits instead of creating one.
+- `-c <file>` and `--config <file>` are equivalent; naming different files with both is an error. The file is chosen as `--config` > the `CONFIG_FILE` environment variable > `configs/config.local.yaml` under the working directory; a `CONFIG_FILE` that is set but empty or blank is an error. If the file does not exist the program exits instead of creating one; this includes the default file, because the built-in defaults lack the required `auth.username` and `auth.password`. A relative `CONFIG_FILE` or `-c` path is resolved against the process working directory.
+- Configuration and validation errors are in English and start with the field path, e.g. `port: must be between 1 and 65535` or `sources.0.dest: must be a clean relative directory` (sources are addressed by list index). Admin API error responses are `{"error": {"code", "message", "details"}}`: field errors use `invalid_argument` with `details.fields` listing each `path` and `reason` code; `precondition_failed` means the file changed since it was loaded (412, the `If-Match` revision is stale); `config_malformed` means the YAML is invalid. See [API conventions](docs/API.md). The admin console shows Chinese text by code (`web/src/app/config-errors.ts`) and uses a generic Chinese message for unregistered reason codes.
 - Relative paths are resolved against the config file's directory. The database is `<path>/data.sqlite`, and task logs are `<path>/logs/<run-id>/<attempt>.log`.
 - Apart from `CONFIG_FILE` selecting the file, environment variables do not override config fields. Scheduling, the admin console and the public index use the time zone the process starts with; set e.g. `TZ=Asia/Shanghai` in the service environment.
 - Changes to `listen`, `port`, `path`, `mirror_root`, `tls`, `auth` and `log` need a restart. Sources, schedules and notifications can be edited in the console and take effect on save.
@@ -164,7 +165,8 @@ E2E and real-rsync tests need a modern rsync and a test binary; see [docs/IMPLEM
 
 - Versions come from Git tags of the form `vMAJOR.MINOR.PATCH` (pre-releases such as `v1.2.0-rc.1`). Go stamps the module version at build time; untagged commits get a pseudo-version, and uncommitted changes add `+dirty`.
 - Check the version with `mirrordock --version`, which prints e.g. `mirrordock v1.2.0 (revision=0123456789ab)` (a pseudo-version already contains the commit, so no revision is appended; `modified` is added for uncommitted changes). `--version` and `--help` (in English) print to stdout and neither reads a config nor starts the service.
-- Exit codes: 0 success, 2 usage error, 1 configuration, startup or runtime failure. Errors before logging is set up (arguments, config, log setup) are written to stderr as plain text `mirrordock: <error>`, and usage errors add `Run 'mirrordock --help' for usage.`; later startup and runtime errors still go to the program log.
+- Exit codes: 0 success or a clean shutdown after SIGINT / SIGTERM, 2 usage error, 1 configuration, startup, runtime or shutdown failure. Usage errors are written to stderr as `mirrordock: <error>` followed by a `Run 'mirrordock --help' for usage.` line; configuration and log setup failures are one line, `mirrordock: config: <error>` or `mirrordock: log: <error>`. Once logging is ready, failures go only to the program log, not to stderr.
+- The program log records `service_starting` (with `version`), `service_listening` (with `listen`) once the port is bound, `service_stopping` when shutdown begins and `service_stopped` before a clean exit; failures are `service_failed` / `service_shutdown_failed`. The first signal starts a graceful shutdown (HTTP draining is limited to 30 seconds; on timeout connections are closed and the shutdown counts as failed); a second signal terminates the process immediately.
 - For source archives without `.git`, inject the matching version explicitly: `go build -trimpath -ldflags='-X main.version=v1.0.0' -o bin/mirrordock ./cmd/mirrordock`.
 - Pushing a standard tag triggers the [release workflow](.github/workflows/release.yml). It checks `--version` first, then GoReleaser builds every target and uploads the tar.gz archives and `checksums.txt`.
 
@@ -179,6 +181,7 @@ The project docs are written in Chinese.
 | [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | Deployment and operations reference: config protocol, sync executors, logging/TLS, notifications, backups, downloads and publishing |
 | [docs/DESIGN.md](docs/DESIGN.md) | Current architecture and design decisions (including ADR-010 on download performance) |
 | [docs/IMPLEMENTATION.md](docs/IMPLEMENTATION.md) | API, source map, build, release, testing and CI |
+| [docs/API.md](docs/API.md) | Contract for error responses, run error and event codes, and notification record codes |
 | [docs/ACCEPTANCE.md](docs/ACCEPTANCE.md) | Acceptance records, review results and unverified items |
 | [configs/config.example.yaml](configs/config.example.yaml) | Fully annotated example configuration |
 
@@ -197,7 +200,7 @@ bin/ data/ .cache/        Ignored local binaries (incl. bin/release/), state and
 test-results/             Ignored Go/OCR/build reports
 ```
 
-The directory baseline is maintained only in [目录规范.md](目录规范.md), and contributor rules are in [AGENTS.md](AGENTS.md). The directory exceptions recorded for this project are listed in the [Chinese README](README.md#项目结构).
+The directory baseline is maintained only in [目录规范.md](目录规范.md), and contributor rules are in [AGENTS.md](AGENTS.md). The directory exceptions recorded for this project are listed in the [Chinese README](README.md#项目结构), and the code exceptions (deliberate deviations from the code conventions, such as the hot-reloadable `*config.Manager`) in its [代码例外](README.md#代码例外) section.
 
 ## Contributing
 
@@ -209,4 +212,4 @@ Issues and pull requests are welcome. Before submitting:
 
 ## License
 
-MirrorDock is licensed under the [Apache License 2.0](LICENSE). The Phosphor icons embedded in the public directory page keep their own MIT license (see `internal/mirrors/listing-icons.html`).
+MirrorDock is licensed under the [Apache License 2.0](LICENSE). The Phosphor icons embedded in the public directory page keep their own MIT license (see `internal/mirror/listing-icons.html`).

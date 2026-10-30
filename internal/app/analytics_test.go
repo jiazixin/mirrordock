@@ -1,27 +1,30 @@
 package app
 
 import (
-	"context"
 	"encoding/json/v2"
-	"mirrordock/internal/runs"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"mirrordock/internal/database"
+	runengine "mirrordock/internal/run"
+	"mirrordock/internal/timefmt"
 )
 
 func TestAnalyticsAuthenticationValidationAndEmptyResponse(t *testing.T) {
+	t.Parallel()
 	file := filepath.Join(t.TempDir(), "config.yaml")
-	if err := os.WriteFile(file, []byte("listen: 127.0.0.1\npath: ./data\nmirror_root: ./mirror\nauth:\n  username: admin\n  password: fixture-password\nsources: []\n"), 0600); err != nil {
+	if err := os.WriteFile(file, []byte("listen: 127.0.0.1\npath: ./data\nmirror_root: ./mirror\nauth:\n  username: admin\n  password: fixture-password\nsources: []\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	a, err := openFile(file)
+	a, err := openFile(t.Context(), file)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer a.Close(context.Background())
+	defer closeTestApp(t, a)
 	token, err := a.auth.login("admin", "fixture-password")
 	if err != nil {
 		t.Fatal(err)
@@ -39,7 +42,7 @@ func TestAnalyticsAuthenticationValidationAndEmptyResponse(t *testing.T) {
 	if w := request("/api/analytics?type=rsync", false); w.Code != 401 {
 		t.Fatal(w.Code)
 	}
-	for _, path := range []string{"/api/runs?range=invalid", "/api/analytics", "/api/analytics?type=unknown", "/api/analytics?type=rsync&days=0", "/api/analytics?type=rsync&days=abc", "/api/analytics?type=github_release&days=8"} {
+	for _, path := range []string{"/api/runs?range=invalid", "/api/runs?limit=abc", "/api/runs?offset=-1", "/api/runs?latest=1", "/api/runs/abc", "/api/analytics", "/api/analytics?type=unknown", "/api/analytics?type=rsync&days=0", "/api/analytics?type=rsync&days=abc", "/api/analytics?type=github_release&days=8"} {
 		if w := request(path, true); w.Code != 400 {
 			t.Fatal(path, w.Code)
 		}
@@ -59,8 +62,8 @@ func TestAnalyticsAuthenticationValidationAndEmptyResponse(t *testing.T) {
 	}
 	now := time.Now().UTC()
 	for _, kind := range []string{"rsync", "reposync", "github_release"} {
-		r := runs.Run{SourceID: "fixture", Name: "fixture", Type: kind, State: "succeeded", CreatedAt: now, StartedAt: now, ElapsedSeconds: 5, RetryCount: 2}
-		if _, err := a.Store.CreateRun(r.SourceID, r.State, now.Format(time.RFC3339Nano), &r); err != nil {
+		r := runengine.Run{SourceID: "fixture", Name: "fixture", Type: kind, State: "succeeded", CreatedAt: timefmt.From(now), StartedAt: timefmt.From(now), ElapsedMillis: 5000, RetryCount: 2}
+		if _, err := a.Store.CreateRun(t.Context(), database.CreateRunOptions{Source: r.SourceID, State: r.State, Created: now, Value: &r}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -82,8 +85,8 @@ func TestAnalyticsAuthenticationValidationAndEmptyResponse(t *testing.T) {
 		}
 	}
 	w = request("/api/analytics?type=reposync&days=7&source=fixture", true)
-	var repo runs.Analytics
-	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &repo) != nil || repo.Type != "reposync" || len(repo.Days) != 7 || repo.Summary.Runs != 1 || repo.Summary.RetriedRuns != 1 || repo.Summary.ElapsedSeconds != 5 {
+	var repo database.Analytics
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &repo) != nil || repo.Type != "reposync" || len(repo.Days) != 7 || repo.Summary.Runs != 1 || repo.Summary.RetriedRuns != 1 || repo.Summary.ElapsedMillis != 5000 {
 		t.Fatal(w.Code, w.Body.String())
 	}
 }

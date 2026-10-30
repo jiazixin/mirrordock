@@ -1,10 +1,11 @@
 <script setup lang="ts">
+import { errorText } from './errors'
 import { ref, onMounted, onBeforeUnmount } from 'vue'
 import { ArrowRight, ShieldCheck } from '@lucide/vue'
-import Shell from '../layouts/Shell.vue'
+import AppShell from '../layouts/AppShell.vue'
 import logo from '../assets/logo.svg'
 import { api } from './api'
-import { connectEvents, disconnectEvents, refresh, resetState, state, notify } from './state'
+import { connectEvents, disconnectEvents, refresh, resetState, setUsername, notify } from './state'
 
 const loading = ref(true)
 const authenticated = ref(false)
@@ -16,8 +17,13 @@ let authRevision = 0
 
 async function syncNotificationTimezone(revision: number) {
   try {
-    await api('/notifications/timezone', 'POST', {
-      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    await api<undefined>({
+      scope: 'session',
+      path: '/notifications/timezone',
+      method: 'PUT',
+      body: {
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      },
     })
   } catch {
     if (revision === authRevision) notify('通知时区同步失败，继续使用服务端已保存的时区。', 'error')
@@ -26,10 +32,13 @@ async function syncNotificationTimezone(revision: number) {
 async function check() {
   const revision = ++authRevision
   try {
-    const status = await api<{ authenticated: boolean; username?: string }>('/auth/status')
+    const status = await api<{ authenticated: boolean; username?: string }>({
+      scope: 'session',
+      path: '/auth/session',
+    })
     if (revision !== authRevision) return
     authenticated.value = status.authenticated
-    state.username = status.username ?? ''
+    setUsername(status.username ?? '')
     if (status.authenticated) {
       await syncNotificationTimezone(revision)
       if (revision !== authRevision) return
@@ -37,7 +46,7 @@ async function check() {
       if (revision === authRevision && authenticated.value) connectEvents()
     }
   } catch (e) {
-    error.value = e instanceof Error ? e.message : String(e)
+    error.value = errorText(e)
   } finally {
     loading.value = false
   }
@@ -47,30 +56,36 @@ async function submit() {
   busy.value = true
   error.value = ''
   try {
-    const session = await api<{ username: string }>('/auth/login', 'POST', {
-      username: username.value,
-      password: password.value,
+    const session = await api<{ authenticated: boolean; username?: string }>({
+      scope: 'session',
+      path: '/auth/login',
+      method: 'POST',
+      body: {
+        username: username.value,
+        password: password.value,
+      },
     })
     if (revision !== authRevision) return
     password.value = ''
-    state.username = session.username
+    setUsername(session.username ?? '')
     authenticated.value = true
     await syncNotificationTimezone(revision)
     if (revision !== authRevision) return
     await refresh()
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- the compared state can change while awaiting
     if (revision === authRevision && authenticated.value) connectEvents()
   } catch (e) {
-    error.value = e instanceof Error ? e.message : String(e)
+    error.value = errorText(e)
   } finally {
     busy.value = false
   }
 }
 async function logout() {
   try {
-    await api('/auth/logout', 'POST')
+    await api<undefined>({ scope: 'session', path: '/auth/logout', method: 'POST' })
     expired()
   } catch (e) {
-    notify(e instanceof Error ? e.message : String(e), 'error')
+    notify(errorText(e), 'error')
   }
 }
 function expired() {
@@ -79,7 +94,7 @@ function expired() {
   authenticated.value = false
 }
 onMounted(() => {
-  check()
+  void check()
   window.addEventListener('session-expired', expired)
 })
 onBeforeUnmount(() => {
@@ -99,7 +114,7 @@ onBeforeUnmount(() => {
     />
     <p>正在连接…</p>
   </div>
-  <Shell
+  <AppShell
     v-else-if="authenticated"
     @logout="logout"
   />
@@ -164,3 +179,130 @@ onBeforeUnmount(() => {
     </section>
   </main>
 </template>
+
+<style scoped>
+.login-screen {
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
+  background: var(--bg);
+}
+.login-art {
+  padding: 12vh 10% 8vh;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--tint-line);
+  background: var(--tint);
+}
+.login-art :deep(.brand) {
+  margin-bottom: auto;
+}
+.login-art :deep(h1) {
+  font-size: var(--font-44px);
+  font-weight: 700;
+  line-height: 1.25;
+  letter-spacing: -0.03em;
+  margin-top: var(--space-64px);
+  max-width: 560px;
+}
+.login-art :deep(p) {
+  font-size: var(--font-15px);
+  line-height: 1.8;
+  color: var(--t2);
+  margin-top: var(--space-20px);
+  max-width: 440px;
+}
+.login-grid {
+  display: grid;
+  grid-template-columns: repeat(4, auto);
+  justify-content: start;
+  margin-top: var(--space-40px);
+  gap: var(--space-8px);
+}
+.login-grid :deep(span) {
+  font-size: var(--font-13px);
+  font-weight: 500;
+  color: var(--brand);
+  background: var(--brand-soft);
+  border-radius: var(--radius-7px);
+  padding: var(--space-3px) var(--space-10px);
+}
+.login-art > :deep(small) {
+  margin-top: auto;
+  padding-top: var(--space-48px);
+}
+.login-form {
+  width: 360px;
+  max-width: 100%;
+  margin: auto;
+  padding: var(--space-48px) var(--space-8px);
+}
+.login-form :deep(.brand) {
+  display: none;
+  margin-bottom: var(--space-48px);
+}
+.login-form :deep(h2) {
+  font-size: var(--font-28px);
+  font-weight: 700;
+  margin-bottom: var(--space-8px);
+}
+.login-form > :deep(p) {
+  color: var(--t2);
+  font-size: var(--font-13px);
+}
+.login-form :deep(form) {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-20px);
+  margin-top: var(--space-32px);
+}
+.login-form :deep(form input) {
+  height: 44px;
+}
+.login-form :deep(form .button) {
+  height: 46px;
+  justify-content: space-between;
+  margin-top: var(--space-4px);
+  font-size: var(--font-15px);
+}
+.login-form :deep(form .button.primary) {
+  background: var(--brand);
+  border-color: var(--brand);
+  color: var(--brand-ink);
+}
+.login-form > :deep(small) {
+  display: flex;
+  gap: var(--space-7px);
+  align-items: center;
+  margin-top: var(--space-28px);
+}
+.loading-screen {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-16px);
+  font-size: var(--font-13px);
+  color: var(--t3);
+}
+.loading-screen :deep(img) {
+  width: 28px;
+}
+@media (max-width: 900px) {
+  .login-screen {
+    display: flex;
+    padding: var(--space-20px);
+  }
+}
+@media (max-width: 900px) {
+  .login-art {
+    display: none;
+  }
+}
+@media (max-width: 900px) {
+  .login-form :deep(.brand) {
+    display: flex;
+  }
+}
+</style>

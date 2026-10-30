@@ -1,3 +1,4 @@
+import { defined } from './support'
 import { test, expect } from '@playwright/test'
 import { spawn } from 'node:child_process'
 import { mkdtemp, writeFile, rm } from 'node:fs/promises'
@@ -13,8 +14,8 @@ const stats = (): AnalyticsStats => ({
   cancelled: 0,
   active: 0,
   duration_samples: 0,
-  elapsed_seconds: 0,
-  bytes: 0,
+  elapsed_ms: 0,
+  transferred_bytes: 0,
   files: 0,
   completed: 0,
   reused: 0,
@@ -35,8 +36,8 @@ function fixture(kind: Analytics['type'], count: number, source: string): Analyt
       succeeded,
       failed,
       duration_samples: succeeded + failed,
-      elapsed_seconds: (succeeded + failed) * (30 + i * 2),
-      bytes: succeeded * 345678901,
+      elapsed_ms: (succeeded + failed) * (30 + i * 2) * 1000,
+      transferred_bytes: succeeded * 345678901,
       completed: succeeded * 5,
       reused: succeeded * 3,
       files: succeeded * 5,
@@ -53,18 +54,18 @@ function fixture(kind: Analytics['type'], count: number, source: string): Analyt
     rsync: {
       id: 'fixture',
       name: source === 'slow' ? '较慢的上游' : '镜像测试源',
-      error: 'SOURCE_EXHAUSTED',
+      error: 'source_exhausted',
     },
     reposync: {
       id: 'repo-fixture',
       name: source === 'repo-slow' ? '较慢的 RPM 源' : 'RPM 测试源',
-      error: 'UPSTREAM_ERROR',
+      error: 'upstream_error',
     },
-    github_release: { id: 'fixture', name: '镜像测试源', error: 'GITHUB_RATE_LIMIT' },
+    github_release: { id: 'fixture', name: '镜像测试源', error: 'github_rate_limit' },
   }[kind]
   return {
     type: kind,
-    from: `${days[0]!.date}T00:00:00+08:00`,
+    from: `${defined(days[0]).date}T00:00:00+08:00`,
     until: '2026-10-01T12:00:00+08:00',
     timezone: 'Asia/Shanghai',
     summary,
@@ -84,7 +85,9 @@ test('analytics charts, filtering, request races, empty/error and mobile states'
     server.on('error', reject)
     server.listen(0, '127.0.0.1', () => {
       const n = (server.address() as net.AddressInfo).port
-      server.close(() => resolve(n))
+      server.close(() => {
+        resolve(n)
+      })
     })
   })
   const base = `http://127.0.0.1:${port}`,
@@ -95,7 +98,7 @@ test('analytics charts, filtering, request races, empty/error and mobile states'
   )
   const app = spawn(
     process.env.MIRRORDOCK_TEST_BINARY ?? path.resolve(import.meta.dirname, '../../bin/mirrordock'),
-    ['-f', config],
+    ['-c', config],
     { stdio: 'ignore' },
   )
   const errors: string[] = []
@@ -104,7 +107,7 @@ test('analytics charts, filtering, request races, empty/error and mobile states'
     await expect
       .poll(async () => {
         try {
-          return (await request.get(`${base}/api/auth/status`)).status()
+          return (await request.get(`${base}/healthz`)).status()
         } catch {
           return 0
         }
@@ -150,7 +153,7 @@ test('analytics charts, filtering, request races, empty/error and mobile states'
       await route.fulfill({
         status: fail ? 503 : 200,
         json: fail
-          ? { error: '分析暂时不可用，请稍后重试' }
+          ? { error: { code: 'unavailable', message: 'analytics temporarily unavailable' } }
           : fixture(
               q.get('type') as Analytics['type'],
               Number(q.get('days')),
@@ -164,7 +167,7 @@ test('analytics charts, filtering, request races, empty/error and mobile states'
       String(fixture('rsync', 30, '').summary.runs),
     )
     await expect(page.locator('.insight-panel')).toContainText('备用源成功任务')
-    await expect(page.locator('.error-bars')).toContainText('SOURCE_EXHAUSTED')
+    await expect(page.locator('.error-bars')).toContainText('source_exhausted')
     await expect(page.locator('.chart-hit')).toHaveCount(30)
     await page.locator('.chart-hit').last().focus()
     await expect(page.locator('.trend-readout')).toContainText('2026-10-01')
@@ -195,16 +198,17 @@ test('analytics charts, filtering, request races, empty/error and mobile states'
     await source.click()
     await page.getByRole('option', { name: '镜像测试源', exact: true }).click()
     await expect(page.locator('.source-ranking tbody')).toContainText('镜像测试源')
+    // Measures that the stale filtered response does not replace the newer one.
     await page.waitForTimeout(450)
     await expect(page.locator('.source-ranking tbody')).not.toContainText('较慢的上游')
     await page.getByRole('link', { name: 'Release 分析', exact: true }).click()
-    await expect(page).toHaveURL(`${base}/admin/analytics/github`)
+    await expect(page).toHaveURL(`${base}/admin/analytics/github?days=90`)
     await expect(page.getByRole('heading', { name: '数据分析' })).toBeVisible()
     await expect(source).toContainText('全部同步源')
     const gh = fixture('github_release', 90, '').summary
     await expect(page.locator('.asset-labels')).toContainText(String(gh.reused))
     await expect(page.locator('.insight-total strong')).toHaveText(gh.completed.toLocaleString())
-    await expect(page.locator('.error-bars')).toContainText('GITHUB_RATE_LIMIT')
+    await expect(page.locator('.error-bars')).toContainText('github_rate_limit')
     await page.screenshot({
       path: testInfo.outputPath('github-desktop.png'),
       fullPage: true,
@@ -226,7 +230,7 @@ test('analytics charts, filtering, request races, empty/error and mobile states'
     await page.getByRole('link', { name: 'Rsync 分析', exact: true }).click()
     await page.getByRole('button', { name: '处理量', exact: true }).click()
     await page.getByRole('link', { name: 'Reposync 分析', exact: true }).click()
-    await expect(page).toHaveURL(`${base}/admin/analytics/reposync`)
+    await expect(page).toHaveURL(`${base}/admin/analytics/reposync?days=90`)
     await expect(page.getByRole('button', { name: '次数', exact: true })).toHaveAttribute(
       'aria-pressed',
       'true',
@@ -255,10 +259,11 @@ test('analytics charts, filtering, request races, empty/error and mobile states'
     await page.getByRole('option', { name: '较慢的 RPM 源', exact: true }).click()
     await source.click()
     await page.getByRole('option', { name: 'RPM 测试源', exact: true }).click()
+    // Measures that the stale filtered response does not replace the newer one.
     await page.waitForTimeout(450)
     await expect(page.locator('.source-ranking tbody')).toContainText('RPM 测试源')
     await expect(page.locator('.source-ranking tbody')).not.toContainText('较慢的 RPM 源')
-    await expect(page.locator('.error-bars')).toContainText('UPSTREAM_ERROR')
+    await expect(page.locator('.error-bars')).toContainText('upstream_error')
     await page.getByRole('button', { name: '耗时', exact: true }).click()
     await expect(page.locator('.trend-panel path')).toHaveCount(2)
     await page.screenshot({
@@ -280,7 +285,7 @@ test('analytics charts, filtering, request races, empty/error and mobile states'
     }
     fail = true
     await page.getByRole('button', { name: '刷新', exact: true }).click()
-    await expect(page.getByRole('alert')).toContainText('分析暂时不可用')
+    await expect(page.getByRole('alert')).toContainText('服务暂时不可用，请稍后重试')
     fail = false
     await page.getByRole('button', { name: '重试', exact: true }).click()
     await expect(page.locator('.insight-panel')).toBeVisible()

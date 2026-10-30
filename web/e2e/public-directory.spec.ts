@@ -1,3 +1,4 @@
+import { defined } from './support'
 import { test, expect, type Page } from '@playwright/test'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { mkdtemp, writeFile, rm, mkdir } from 'node:fs/promises'
@@ -11,7 +12,9 @@ async function freePort(): Promise<number> {
     server.on('error', reject)
     server.listen(0, '127.0.0.1', () => {
       const port = (server.address() as net.AddressInfo).port
-      server.close(() => resolve(port))
+      server.close(() => {
+        resolve(port)
+      })
     })
   })
 }
@@ -41,22 +44,25 @@ async function expectHeaderLayout(page: Page) {
   const title = await page.locator('#files-heading').boundingBox()
   const search = await page.locator('.search').boundingBox()
   expect(heading && toolbar && panel && title && search).toBeTruthy()
-  for (const box of [heading!, toolbar!]) {
-    expect(Math.abs(box.x - panel!.x)).toBeLessThan(1)
-    expect(Math.abs(box.width - panel!.width)).toBeLessThan(1)
+  for (const box of [defined(heading), defined(toolbar)]) {
+    expect(Math.abs(box.x - defined(panel).x)).toBeLessThan(1)
+    expect(Math.abs(box.width - defined(panel).width)).toBeLessThan(1)
   }
-  expect(panel!.y - (toolbar!.y + toolbar!.height)).toBe(14)
+  expect(defined(panel).y - (defined(toolbar).y + defined(toolbar).height)).toBe(14)
   // The heading, optional mirror summary and toolbar keep fixed rhythm.
-  const narrow = page.viewportSize()!.width <= 800
-  if (summary) expect(Math.round(summary.y - (heading!.y + heading!.height))).toBe(28)
-  const above = summary ?? heading!
-  expect(Math.round(toolbar!.y - (above.y + above.height))).toBe(narrow ? 28 : 36)
-  expect(search!.x + search!.width).toBeLessThanOrEqual(panel!.x + panel!.width + 1)
+  const narrow = defined(page.viewportSize()).width <= 800
+  if (summary)
+    expect(Math.round(summary.y - (defined(heading).y + defined(heading).height))).toBe(28)
+  const above = summary ?? defined(heading)
+  expect(Math.round(defined(toolbar).y - (above.y + above.height))).toBe(narrow ? 28 : 36)
+  expect(defined(search).x + defined(search).width).toBeLessThanOrEqual(
+    defined(panel).x + defined(panel).width + 1,
+  )
   if (narrow) {
-    expect(search!.y).toBeGreaterThanOrEqual(title!.y + title!.height)
-    expect(search!.width).toBeCloseTo(panel!.width, 0)
+    expect(defined(search).y).toBeGreaterThanOrEqual(defined(title).y + defined(title).height)
+    expect(defined(search).width).toBeCloseTo(defined(panel).width, 0)
   } else {
-    expect(search!.x).toBeGreaterThan(title!.x + title!.width)
+    expect(defined(search).x).toBeGreaterThan(defined(title).x + defined(title).width)
   }
 }
 
@@ -104,7 +110,7 @@ test('public directory layout, icons, search, sorting, unpaginated and safe file
     `use chroot = no\nuid =\ngid =\nmunge symlinks = no\n[repo]\npath = ${upstream}\nread only = yes\n`,
   )
   const daemon = spawn(
-    rsync!,
+    defined(rsync),
     [
       '--daemon',
       '--no-detach',
@@ -126,7 +132,7 @@ test('public directory layout, icons, search, sorting, unpaginated and safe file
       env: {
         ...process.env,
         TZ: 'Asia/Shanghai',
-        PATH: `${path.dirname(rsync!)}${path.delimiter}${process.env.PATH}`,
+        PATH: `${path.dirname(defined(rsync))}${path.delimiter}${process.env.PATH}`,
       },
       stdio: 'ignore',
     },
@@ -137,7 +143,7 @@ test('public directory layout, icons, search, sorting, unpaginated and safe file
     await expect
       .poll(async () => {
         try {
-          return (await request.get(base + '/api/auth/status')).status()
+          return (await request.get(base + '/healthz')).status()
         } catch {
           return 0
         }
@@ -360,7 +366,7 @@ sources:
     await expect
       .poll(async () => {
         try {
-          return (await request.get(base + '/api/auth/status')).status()
+          return (await request.get(base + '/healthz')).status()
         } catch {
           return 0
         }
@@ -430,7 +436,7 @@ sources:
     await page.goto(base + deepPath)
     const navigation = page.getByRole('navigation', { name: '目录路径' })
     const current = navigation.locator('[aria-current="page"]')
-    await expect(current).toHaveText(segments.at(-1)!)
+    await expect(current).toHaveText(defined(segments.at(-1)))
     await expect(navigation.getByRole('link')).toHaveCount(segments.length)
     for (const [i, segment] of segments.slice(0, -1).entries()) {
       const link = navigation.getByRole('link', { name: segment, exact: true })
@@ -475,7 +481,7 @@ sources:
       const fallback = await noJS.newPage()
       await fallback.goto(base + deepPath)
       await expect(fallback.getByRole('navigation').locator('[aria-current="page"]')).toHaveText(
-        segments.at(-1)!,
+        defined(segments.at(-1)),
       )
       expect(
         await fallback.evaluate(() => document.documentElement.scrollWidth <= innerWidth),

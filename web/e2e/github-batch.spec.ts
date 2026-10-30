@@ -15,7 +15,9 @@ test('batch adds GitHub Release sources with preview, conflict checks and stagge
     listener.on('error', reject)
     listener.listen(0, '127.0.0.1', () => {
       const port = (listener.address() as net.AddressInfo).port
-      listener.close(() => resolve(port))
+      listener.close(() => {
+        resolve(port)
+      })
     })
   })
   const base = `http://127.0.0.1:${port}`
@@ -45,7 +47,7 @@ sources:
   )
   const app = spawn(
     process.env.MIRRORDOCK_TEST_BINARY ?? path.resolve(import.meta.dirname, '../../bin/mirrordock'),
-    ['-f', config],
+    ['-c', config],
     { stdio: 'ignore' },
   )
   const errors: string[] = []
@@ -54,7 +56,7 @@ sources:
     await expect
       .poll(async () => {
         try {
-          return (await request.get(`${base}/api/auth/status`)).status()
+          return (await request.get(`${base}/healthz`)).status()
         } catch {
           return 0
         }

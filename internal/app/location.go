@@ -1,11 +1,12 @@
 package app
 
 import (
-	"fmt"
 	"path/filepath"
 	"strings"
 	"time"
 	_ "time/tzdata"
+
+	"mirrordock/internal/config"
 )
 
 func startupLocation() *time.Location {
@@ -44,5 +45,5 @@ func runTimeRange(key string, now time.Time, location *time.Location) (time.Time
 	if duration, ok := durations[key]; ok {
 		return now.Add(-duration), time.Time{}, nil
 	}
-	return time.Time{}, time.Time{}, fmt.Errorf("无效的时间范围: %s", key)
+	return time.Time{}, time.Time{}, &config.FieldError{Path: "range", Code: "invalid_value", Reason: "unknown time range " + key}
 }

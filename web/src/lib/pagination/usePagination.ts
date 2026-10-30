@@ -1,6 +1,8 @@
 import { computed, ref, watch, type Ref } from 'vue'
 
-export function usePagination<T>(items: Ref<T[]>, filters: Ref<unknown>[] = []) {
+/** Paginates a collection and resets the page when a filter changes. */
+/** Derives a bounded page and resets it when the caller changes filters. */
+export function usePagination<T>(items: Ref<readonly T[]>, filters: Ref<unknown>[] = []) {
   const page = ref(1)
   const pageSize = ref(50)
   watch(

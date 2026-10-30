@@ -1,3 +1,4 @@
+import { defined } from './support'
 import { test, expect } from '@playwright/test'
 import { spawn } from 'node:child_process'
 import { mkdtemp, writeFile, rm } from 'node:fs/promises'
@@ -15,7 +16,9 @@ test('log refresh releases its state and follow defaults on, toggles and survive
     server.on('error', reject)
     server.listen(0, '127.0.0.1', () => {
       const value = (server.address() as net.AddressInfo).port
-      server.close(() => resolve(value))
+      server.close(() => {
+        resolve(value)
+      })
     })
   })
   const base = `http://127.0.0.1:${port}`
@@ -26,7 +29,7 @@ test('log refresh releases its state and follow defaults on, toggles and survive
   )
   const app = spawn(
     process.env.MIRRORDOCK_TEST_BINARY ?? path.resolve(import.meta.dirname, '../../bin/mirrordock'),
-    ['-f', config],
+    ['-c', config],
     { stdio: 'ignore' },
   )
   const errors: string[] = []
@@ -36,7 +39,7 @@ test('log refresh releases its state and follow defaults on, toggles and survive
     await expect
       .poll(async () => {
         try {
-          return (await request.get(`${base}/api/auth/status`)).status()
+          return (await request.get(`${base}/healthz`)).status()
         } catch {
           return 0
         }
@@ -50,9 +53,9 @@ test('log refresh releases its state and follow defaults on, toggles and survive
       state: 'succeeded',
       trigger: 'manual',
       created_at: new Date().toISOString(),
-      elapsed_seconds: 1,
-      budget_seconds: 30,
-      progress: { phase: 'finished', bytes: 0, success: 1, failed: 0, skipped: 0 },
+      elapsed_ms: 1000,
+      budget_ms: 30000,
+      progress: { phase: 'finished', transferred_bytes: 0, success: 1, failed: 0, skipped: 0 },
       attempts: [1, 2].map((number) => ({
         number,
         candidate: `src${number}`,
@@ -75,11 +78,15 @@ test('log refresh releases its state and follow defaults on, toggles and survive
         pending = resolve
       })
       pending = undefined
-      if (failure) await route.fulfill({ status: 500, json: { error: '日志读取测试失败' } })
+      if (failure)
+        await route.fulfill({
+          status: 500,
+          json: { error: { code: 'internal', message: 'log read test failure' } },
+        })
       else {
-        const offset = Number(new URL(route.request().url()).searchParams.get('offset'))
+        const offset = Number(new URL(route.request().url()).searchParams.get('offset_bytes'))
         const text = offset === 0 ? '初始行\n'.repeat(120) + suffix : `\n${suffix}`
-        await route.fulfill({ json: { text, next_offset: offset + Buffer.byteLength(text) } })
+        await route.fulfill({ json: { text, next_offset_bytes: offset + Buffer.byteLength(text) } })
       }
     })
     await page.goto(`${base}/admin/sources`)
@@ -101,7 +108,7 @@ test('log refresh releases its state and follow defaults on, toggles and survive
     const log = page.locator('.log-view')
     const release = async () => {
       await expect.poll(() => !!pending).toBe(true)
-      pending!()
+      defined(pending)()
     }
     const atBottom = () =>
       log.evaluate((el) => Math.abs(el.scrollHeight - el.clientHeight - el.scrollTop) < 2)
@@ -138,7 +145,7 @@ test('log refresh releases its state and follow defaults on, toggles and survive
     await expect.poll(atBottom).toBe(true)
     failure = true
     await refreshLog('失败')
-    await expect(page.getByRole('alert')).toContainText('日志读取测试失败')
+    await expect(page.getByRole('alert')).toContainText('服务端内部错误，请稍后重试')
     failure = false
     await refreshLog('恢复成功')
     await expect(page.getByRole('alert')).toHaveCount(0)
@@ -151,7 +158,11 @@ test('log refresh releases its state and follow defaults on, toggles and survive
     const download = page.getByRole('button', { name: '下载', exact: true })
     const [downloadBox, logBox] = [await download.boundingBox(), await log.boundingBox()]
     expect(
-      Math.abs(downloadBox!.x + downloadBox!.width - (logBox!.x + logBox!.width)),
+      Math.abs(
+        defined(downloadBox).x +
+          defined(downloadBox).width -
+          (defined(logBox).x + defined(logBox).width),
+      ),
     ).toBeLessThan(2)
     await page.screenshot({ path: testInfo.outputPath('log-follow-desktop.png'), fullPage: true })
     for (const width of [375, 320]) {
@@ -165,7 +176,7 @@ test('log refresh releases its state and follow defaults on, toggles and survive
         .evaluateAll((els) => els.map((el) => el.getBoundingClientRect()))
       const logRight = await log.evaluate((el) => el.getBoundingClientRect().right)
       expect(new Set(actions.map((box) => Math.round(box.top + box.height / 2))).size).toBe(1)
-      expect(Math.abs(actions.at(-1)!.right - logRight)).toBeLessThan(2)
+      expect(Math.abs(defined(actions.at(-1)).right - logRight)).toBeLessThan(2)
       await page.screenshot({
         path: testInfo.outputPath(`log-follow-${width}.png`),
         fullPage: true,

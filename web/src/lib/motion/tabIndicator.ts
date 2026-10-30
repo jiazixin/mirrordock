@@ -4,7 +4,7 @@ import type { Directive } from 'vue'
 // The active tab is the router's exact-active link or a child carrying the `active` class.
 const activeTab = ':scope > .router-link-exact-active, :scope > .active'
 
-interface Tracker {
+type Tracker = {
   mutations: MutationObserver
   resizes: ResizeObserver
   frame: number
@@ -24,9 +24,12 @@ function observeTabs(list: HTMLElement, resizes: ResizeObserver) {
   for (const tab of list.children) resizes.observe(tab)
 }
 
+/** Tracks the active tab underline and releases every observer on unmount. */
 export const vTabIndicator: Directive<HTMLElement> = {
   mounted(list) {
-    const resizes = new ResizeObserver(() => place(list))
+    const resizes = new ResizeObserver(() => {
+      place(list)
+    })
     const mutations = new MutationObserver((records) => {
       if (records.some((record) => record.type === 'childList')) observeTabs(list, resizes)
       place(list)
@@ -36,7 +39,9 @@ export const vTabIndicator: Directive<HTMLElement> = {
     list.classList.add('tab-indicator')
     place(list)
     // Enable the slide only after the first position is painted, so the bar never sweeps in from 0.
-    const frame = requestAnimationFrame(() => list.classList.add('tab-indicator-ready'))
+    const frame = requestAnimationFrame(() => {
+      list.classList.add('tab-indicator-ready')
+    })
     trackers.set(list, { mutations, resizes, frame })
   },
   unmounted(list) {

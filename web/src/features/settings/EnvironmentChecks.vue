@@ -2,25 +2,27 @@
 import { computed, onMounted, onBeforeUnmount, ref } from 'vue'
 import { ShieldCheck } from '@lucide/vue'
 import RefreshButton from '../../components/RefreshButton.vue'
+import { errorText } from '../../app/errors'
 import { api } from '../../app/api'
+import { issueText, reflinkText } from '../../app/error-text'
 import { perform, state } from '../../app/state'
 import type { SystemChecks } from '../../app/types'
+import { formatDiskSize } from '../../lib/format/bytes'
 
 const checks = ref<SystemChecks>()
 const checking = ref(false)
+const loadError = ref('')
 const controller = new AbortController()
 function storageDetail(storage: SystemChecks['storage'] | undefined) {
-  const capacity = `可用 ${diskSize(storage?.available)} / 总量 ${diskSize(storage?.total)}`
-  const margins = `安全余量 ${diskSize(storage?.reserve)}，任务启动需余量 ${diskSize(storage?.required)}`
+  const capacity = `可用 ${diskSize(storage?.available_bytes)} / 总量 ${diskSize(storage?.total_bytes)}`
+  const margins = `安全余量 ${diskSize(storage?.reserve_bytes)}，任务启动需余量 ${diskSize(storage?.required_bytes)}`
   const counts = `旧代 ${storage?.previous ?? 0}，任务目录 ${storage?.work_directories ?? 0}`
   return `${capacity}；${margins}；${counts}。共享数据块不按目录重复计量。`
 }
 
 function diskSize(bytes: number | undefined) {
   if (bytes === undefined) return '未知'
-  return bytes >= 1024 ** 4
-    ? `${(bytes / 1024 ** 4).toFixed(2)} TiB`
-    : `${(bytes / 1024 ** 3).toFixed(2)} GiB`
+  return formatDiskSize(bytes)
 }
 function toolVersion(tool: SystemChecks['rsync'] | undefined, name: 'rsync' | 'dnf' | 'rpmkeys') {
   if (!tool?.available) {
@@ -37,8 +39,8 @@ function toolVersion(tool: SystemChecks['rsync'] | undefined, name: 'rsync' | 'd
 }
 function rsyncProxyDetail() {
   const sources = (state.config?.config.sources ?? []).filter((source) => source.type === 'rsync')
-  const direct = sources.filter((source) => source.rsync?.proxy_mode === 'direct').length
-  const custom = sources.filter((source) => source.rsync?.proxy_mode === 'custom').length
+  const direct = sources.filter((source) => source.rsync.proxy_mode === 'direct').length
+  const custom = sources.filter((source) => source.rsync.proxy_mode === 'custom').length
   const overrides = direct || custom ? `；${custom} 个源自定义代理，${direct} 个源直连` : ''
   return `全局设置，取自配置${overrides}。仅检查配置状态，未测试网络连通性`
 }
@@ -47,6 +49,15 @@ function publicationStatus(result: SystemChecks | undefined) {
   const count = result.publication_issues?.length ?? 0
   return count ? `${count} 个源异常` : '正常'
 }
+function storageStatus(storage: SystemChecks['storage'] | undefined) {
+  if (!storage || storage.error) return '读取失败'
+  return storage.available_bytes < storage.required_bytes ? '余量不足' : '正常'
+}
+const checkSummary = computed(() => {
+  if (checking.value) return '正在检查…'
+  if (loadError.value) return checks.value ? '刷新失败，保留上次结果' : '检查未完成'
+  return checks.value ? '检查完成' : '尚未取得检查结果'
+})
 const checkRows = computed(() => {
   const result = checks.value
   return [
@@ -64,8 +75,8 @@ const checkRows = computed(() => {
     },
     {
       label: 'RPM 公钥工具',
-      status: result?.rpmkeys?.available ? '可用' : '不可用',
-      ok: result?.rpmkeys?.available,
+      status: result?.rpmkeys.available ? '可用' : '不可用',
+      ok: result?.rpmkeys.available,
       detail: toolVersion(result?.rpmkeys, 'rpmkeys'),
     },
     {
@@ -82,36 +93,31 @@ const checkRows = computed(() => {
     },
     {
       label: 'Reflink',
-      status:
-        result?.reflink?.status === 'supported'
-          ? '支持'
-          : result?.reflink?.status === 'unsupported'
-            ? '不支持'
-            : '探测失败',
-      ok: result?.reflink?.status === 'supported',
-      detail: result?.reflink?.detail ?? '尚未取得镜像目录的实测结果',
+      status: { supported: '支持', unsupported: '不支持', error: '探测失败' }[
+        result?.reflink.status ?? 'error'
+      ],
+      ok: result?.reflink.status === 'supported',
+      detail: reflinkText(result?.reflink),
     },
     {
       label: '镜像盘空间',
-      status:
-        !result?.storage || result.storage.error
-          ? '读取失败'
-          : result.storage.available < result.storage.required
-            ? '余量不足'
-            : '正常',
+      status: storageStatus(result?.storage),
       ok:
         !!result?.storage &&
         !result.storage.error &&
-        result.storage.available >= result.storage.required,
-      detail: result?.storage?.error ?? storageDetail(result?.storage),
+        result.storage.available_bytes >= result.storage.required_bytes,
+      detail: result?.storage.error
+        ? `镜像盘容量读取失败：${result.storage.error}`
+        : storageDetail(result?.storage),
     },
     {
       label: '发布目录接入',
       status: publicationStatus(result),
       ok: !!result && !result.publication_issues?.length,
       detail: result?.publication_issues?.length
-        ? result.publication_issues.map((item) => `${item.source_id}：${item.error}`).join('；') +
-          '。修复后重新载入配置；其他源不受影响'
+        ? result.publication_issues
+            .map((item) => `${item.source_id}：${issueText(item)}`)
+            .join('；') + '。修复后重新载入配置；其他源不受影响'
         : '启动和配置变更时恢复发布路由、导入已有 dest 目录',
     },
     {
@@ -128,7 +134,7 @@ const checkRows = computed(() => {
     },
     {
       label: 'Rsync 代理',
-      status: state.config?.config.settings.rsync?.proxy ? '已配置' : '直连',
+      status: state.config?.config.settings.rsync.proxy ? '已配置' : '直连',
       ok: true,
       detail: rsyncProxyDetail(),
     },
@@ -137,9 +143,11 @@ const checkRows = computed(() => {
 async function check() {
   if (checking.value) return
   checking.value = true
-  checks.value = undefined
+  loadError.value = ''
   try {
-    checks.value = await api<SystemChecks>('/system/checks', 'GET', undefined, controller.signal)
+    checks.value = await api<SystemChecks>({ path: '/system/checks', signal: controller.signal })
+  } catch (error: unknown) {
+    if (!controller.signal.aborted) loadError.value = errorText(error)
   } finally {
     checking.value = false
   }
@@ -147,7 +155,9 @@ async function check() {
 onMounted(() => {
   void perform(check)
 })
-onBeforeUnmount(() => controller.abort())
+onBeforeUnmount(() => {
+  controller.abort()
+})
 </script>
 
 <template>
@@ -158,7 +168,7 @@ onBeforeUnmount(() => controller.abort())
     <div class="system-panel-heading">
       <ShieldCheck :size="19" />
       <h2>环境检查</h2>
-      <small>{{ checking ? '正在检查…' : checks ? '检查完成' : '尚未取得检查结果' }}</small
+      <small>{{ checkSummary }}</small
       ><RefreshButton
         class="button compact"
         :disabled="checking"
@@ -166,6 +176,19 @@ onBeforeUnmount(() => controller.abort())
         :action="() => perform(check)"
         >{{ checking ? '刷新中…' : '刷新' }}</RefreshButton
       >
+    </div>
+    <div
+      v-if="loadError"
+      class="alert error"
+      role="alert"
+    >
+      {{ loadError
+      }}<button
+        class="button compact"
+        @click="check"
+      >
+        重试
+      </button>
     </div>
     <div
       v-if="checks"
@@ -199,22 +222,22 @@ onBeforeUnmount(() => controller.abort())
 
 <style scoped>
 .system-panel {
-  padding: 24px 0 0;
-  margin-top: 8px;
+  padding: var(--space-24px) 0 0;
+  margin-top: var(--space-8px);
   border: 0;
   border-top: 1px solid var(--line-strong);
   border-radius: 0;
   background: transparent;
 }
 .system-panel h2 {
-  font-size: 15px;
+  font-size: var(--font-15px);
 }
 .system-panel-heading {
   display: flex;
-  gap: 10px;
+  gap: var(--space-10px);
   align-items: center;
   flex-wrap: wrap;
-  margin-bottom: 12px;
+  margin-bottom: var(--space-12px);
 }
 .system-panel-heading > svg {
   color: var(--t3);
@@ -225,17 +248,17 @@ onBeforeUnmount(() => controller.abort())
 }
 .check-empty {
   color: var(--t3);
-  font-size: 13px;
+  font-size: var(--font-13px);
   line-height: 1.8;
 }
 .check-row {
   display: grid;
   grid-template-columns: 130px 80px minmax(0, 1fr);
   align-items: center;
-  gap: 24px;
+  gap: var(--space-24px);
   border-top: 1px solid var(--line);
-  padding: 15px 0;
-  font-size: 13px;
+  padding: var(--space-15px) 0;
+  font-size: var(--font-13px);
 }
 .check-row strong {
   font-weight: 400;
@@ -248,9 +271,9 @@ onBeforeUnmount(() => controller.abort())
   justify-self: center;
   display: inline-flex;
   align-items: center;
-  gap: 7px;
+  gap: var(--space-7px);
   width: fit-content;
-  font-size: 13px;
+  font-size: var(--font-13px);
   white-space: nowrap;
 }
 .check-status::before {
@@ -272,7 +295,7 @@ onBeforeUnmount(() => controller.abort())
 @media (max-width: 600px) {
   .check-row {
     grid-template-columns: minmax(0, 1fr) auto;
-    gap: 10px;
+    gap: var(--space-10px);
   }
   .check-row p {
     grid-column: 1 / -1;

@@ -4,34 +4,35 @@
 
 ## 数据与接口
 
-数据库由 `internal/database` 启动建表/索引并写入结构版本 `PRAGMA user_version = 1`，版本更高的数据库拒绝打开；表结构变化须提升 `schemaVersion` 并编写迁移。运行数据以单条 JSON 聚合 attempts/events/脱敏快照；发布指针独立存储。历史保留，日志清理不删除事实。WAL/FULL 单写连接，分析走有界只读快照。`runs(source_id,id DESC)` 支持每源最新状态，不能用全局最近 50/100 条代替。
+数据库由 `internal/database` 启动建表/索引并写入结构版本 `PRAGMA user_version = 2`；未上线阶段不提供迁移或旧字段读取，非 0 且不等于当前版本的数据库拒绝打开。结构或持久化契约变化须提升 `schemaVersion`。运行数据以单条 JSON 聚合 attempts/events/脱敏快照；发布指针独立存储。历史保留，日志清理不删除事实。WAL/FULL 单写连接，分析走有界只读快照。`runs(source_id,id DESC)` 支持每源最新状态，不能用全局最近 50/100 条代替。
 
 | 接口 | 用途 |
 | --- | --- |
-| GET /api/auth/status；POST /api/auth/login、logout | YAML 账号会话 |
-| GET/PUT /api/config；POST /api/config/reload | 脱敏配置读取、revision 保存、重载 |
-| GET /api/runs；GET /api/runs?latest=1 | 完整历史分页/筛选；每源最新状态 |
-| GET /api/runs/{id}、/api/runs/{id}/logs | 详情；有界 offset 读取或完整日志下载 |
-| POST /api/sources/{id}/run；POST /api/runs/{id}/{action} | 手动执行；pause/resume/cancel |
+| GET /healthz；GET /api/info | 无需登录的健康检查；版本与能力列表 |
+| GET /api/auth/session；POST /api/auth/login、logout | YAML 账号会话 |
+| GET/PUT /api/config；POST /api/config/reload | 脱敏配置读取（`ETag` 为 revision）、`If-Match` 保存、重载 |
+| GET /api/runs；GET /api/runs?latest=true | 完整历史分页/筛选；每源最新状态 |
+| GET /api/runs/{id}、/api/runs/{id}/logs | 详情；有界 `offset_bytes` 读取或完整日志下载 |
+| POST /api/sources/{id}/runs；POST /api/runs/{id}/{action} | 手动执行（支持 `Idempotency-Key`）；pause/resume/cancel |
 | POST /api/logs/clear | 仅清理终态日志 |
 | GET /api/events、/api/system/info、/api/system/checks | 实时状态、运行环境、工具/权限、reflink 实测与镜像盘余量 |
 | GET /api/analytics | 类型、7/30/90 天与源筛选聚合 |
-| GET /api/notifications；PUT /api/notifications/{channel} | 密文存在标记；单渠道配置 |
-| POST /api/notifications/{channel}/test、/api/notifications/timezone | 保存后的测试；浏览器时区 |
+| GET /api/notifications；PATCH /api/notifications/{channel} | 密文存在标记；单渠道 JSON Merge Patch |
+| POST /api/notifications/{channel}/test；PUT /api/notifications/timezone | 保存后的测试；浏览器时区 |
 | GET /api/notifications/records | 通知发送历史分页 |
 
-除 auth status/login 外管理 API 均鉴权；写操作同源校验。完整代理 URL 回填是已确认协议例外，Token/密码/通知凭据不返回。运行快照不保存代理/Token/通知密文。
+除 auth status/login 外管理 API 均鉴权；写操作由 Go 的 `http.CrossOriginProtection` 校验 `Sec-Fetch-Site` / `Origin`。完整代理 URL 回填是已确认协议例外，Token/密码/通知凭据不返回。运行快照不保存代理/Token/通知密文。
 
-来源 URL 与 GPG 公钥 URL 禁止用户信息、查询参数及片段。`internal/runs/snapshot.go` 负责运行快照的防御性脱敏。run_results 的自增 sequence 表示结果插入顺序，用于通知有界扫描，id 唯一约束继续保留首个不可恢复终态事实（中断不写结果队列）。
+来源 URL 与 GPG 公钥 URL 禁止用户信息、查询参数及片段。`internal/run/snapshot.go` 负责运行快照的防御性脱敏。run_results 的自增 sequence 表示结果插入顺序，用于通知有界扫描，id 唯一约束继续保留首个不可恢复终态事实（中断不写结果队列）。
 
 ## 源码定位
 
 - 配置及路径：`internal/config/config.go`；所有 dest 同时检查逻辑路径和解析后目录重叠。
-- 任务与重试：`internal/runs/runs.go`；时间范围：`internal/app/location.go`；分析：`internal/runs/analytics.go`。
-- Rsync/DNF 命令：`internal/sync/runner.go`；子进程和进度：`process.go`；GitHub：`github.go`。
-- 文件与发布：`internal/mirrors/{mirrors,http,validate,summary}.go`；克隆/容量/无变化复用：`clone_{linux,darwin}.go`、`space_{linux,darwin}.go`、`storage.go`、`fingerprint.go`；公开目录：`listing.go` 与 listing HTML/CSS/JS/icons（模板按元素分行，行内内容保持单行以免引入可见空白）。
-- 文件句柄：`internal/mirrors/descriptors.go` 与 `internal/app/connections.go` 分配同一进程预算；代根按需打开，不按历史代常驻。文件流与请求引用保持至请求结束。
-- 凭据/发送队列：`internal/notifications`；独立程序日志：`internal/observability`；认证/服务生命周期：`internal/app`。
+- 任务与重试：`internal/run/run.go`；时间范围：`internal/app/location.go`；分析：`internal/database/analytics.go`。
+- Rsync/DNF 命令：`internal/syncer/runner.go`；子进程和进度：`process.go`；GitHub：`github.go`。
+- 文件与发布：`internal/mirror/{mirror,http,validate,summary}.go`；克隆/容量/无变化复用：`clone_{linux,darwin}.go`、`space_{linux,darwin}.go`、`storage.go`、`fingerprint.go`；公开目录：`listing.go` 与 listing HTML/CSS/JS/icons（模板按元素分行，行内内容保持单行以免引入可见空白）。
+- 文件句柄：`internal/mirror/descriptors.go` 与 `internal/app/connections.go` 分配同一进程预算；代根按需打开，不按历史代常驻。文件流与请求引用保持至请求结束。
+- 凭据/发送队列：`internal/notification`；独立程序日志：`internal/observability`；认证/服务生命周期：`internal/app`。
 - Vue 请求与会话：`web/src/app`；业务页面：`features`；共享控件：`components`；所有页面共享格式化规则。
 
 ## 实施边界
@@ -40,13 +41,15 @@ GitHub 原始日志有资产结果，当前没有每资产独立数据库检索�
 
 程序不自动轮转日志、不删除历史、不过滤任意管理员 Webhook 为公共互联网地址、不自动提权；这些是当前运维协议。镜像发布代需保持不可变，数据与镜像根只能由受信任服务身份维护。Linux 性能、真实 EL/DNF、外部通知可达性、容器及断电恢复验收均以当次 ACCEPTANCE 证据为准。
 
-`/api/system/checks` 的 `reflink.status` 为 supported/unsupported/error，`detail` 记录实测结果；`storage` 给出 work 文件系统 total/available/reserve/required（下一任务准入）、workers、当前路由 previous 数与数字 work 目录数，读取失败通过 error 返回。目录数不表示物理空间或所有已删除配置源的留存文件。生产同步要求可用 reflink；容量保护为提前停止策略，首次全量及增量峰值仍需实际容量规划。
+错误响应、任务错误代码、事件代码与通知记录代码的契约见 [API.md](API.md)：服务端只返回英文说明和代码，管理台文案集中在 `web/src/app/error-text.ts` 与 `config-errors.ts`。
+
+`/api/system/checks` 的 `reflink.status` 为 supported/unsupported/error，失败时 `detail` 记录英文原因；`storage` 给出 work 文件系统 total_bytes/available_bytes/reserve_bytes/required_bytes（下一任务准入）、workers、当前路由 previous 数与数字 work 目录数，读取失败通过 error 返回。目录数不表示物理空间或所有已删除配置源的留存文件。生产同步要求可用 reflink；容量保护为提前停止策略，首次全量及增量峰值仍需实际容量规划。
 
 审查与回归记录集中在 ACCEPTANCE，只描述当前代码的验证结果；更早的会话记录保留在 Git 历史中。
 
 ## 构建与版本
 
-需要 Go 1.27.3、Node.js >=22.12、npm。部署 rsync 应为包含发行版安全补丁的 **3.1+** 版本；macOS 自带旧版本不支持所需参数。Reposync 使用 DNF 4、`dnf-plugins-core` 和开启 GPG 检查时所需的 `rpmkeys`；受控仓库已验证 Rocky 9 和 AlmaLinux 10.2，具体架构与范围见验收记录，不承诺兼容 DNF5。GitHub 下载不需要 gh。
+需要 Go 1.27.3、Node.js >=26.12.1、npm。部署 rsync 应为包含发行版安全补丁的 **3.1+** 版本；macOS 自带旧版本不支持所需参数。Reposync 使用 DNF 4、`dnf-plugins-core` 和开启 GPG 检查时所需的 `rpmkeys`；受控仓库已验证 Rocky 9 和 AlmaLinux 10.2，具体架构与范围见验收记录，不承诺兼容 DNF5。GitHub 下载不需要 gh。
 
 从仓库根执行，必须先生成 Web，再编译 Go：
 
@@ -59,7 +62,7 @@ go build -trimpath -o bin/mirrordock ./cmd/mirrordock
 
 发布 tag 采用 `v主版本.次版本.修订版本`，例如 `v1.1.0`、`v1.2.0`，预发布为 `v1.2.0-rc.1`；不使用 `1.1`、`v1.2` 等非规范 tag。普通构建不需要注入版本：Go 1.24 起会在可识别的 Git 仓库中将模块版本写入二进制，本项目通过 `debug.ReadBuildInfo().Main.Version` 读取。精确标准 tag 显示对应版本并附 12 位提交 ID（如 `mirrordock v1.2.0 (revision=0123456789ab)`）；非标签提交显示 Go 生成的伪版本，其中已含提交号，不再重复；未提交修改保留 `+dirty` 并附 `modified`。应以包路径构建，并保留 `.git` 与对应 tag，不使用 `-buildvcs=false` 关闭此能力。Go 模块的 tag 必须匹配模块路径的主版本及子目录规则，见 [Go 官方版本说明](https://go.dev/ref/mod#versions)。
 
-版本优先级为显式链接注入（非空且非 `dev`）→ Go 主模块版本（非空且非 `(devel)`）→ 12 位提交 ID → `dev`。显式覆盖仍保留可取得的 modified 状态；运行时不调用 Git。管理台“系统配置”和 `/api/system/info` 显示与 CLI 相同的实际构建版本。`--version` 和 `--help`（英文）输出到 stdout、退出码 0，不读取配置或启动服务；参数错误退出码 2，配置、启动或运行失败为 1。交叉编译时 Web 产物不变，只给 Go 编译指定目标平台：
+版本优先级为显式链接注入（非空且非 `dev`）→ Go 主模块版本（非空且非 `(devel)`）→ 12 位提交 ID → `dev`。显式覆盖仍保留可取得的 modified 状态；运行时不调用 Git。管理台“系统配置”和 `/api/system/info` 显示与 CLI 相同的实际构建版本。`--version` 和 `--help`（英文）输出到 stdout、退出码 0，不读取配置或启动服务；参数错误退出码 2，配置、启动、运行或关闭失败为 1，收到 SIGINT / SIGTERM 后正常关闭为 0。日志就绪前的失败为一行 `mirrordock: config: <错误>` / `mirrordock: log: <错误>`（英文，配置错误以字段路径开头），之后的失败只写程序日志（`service_failed`、`service_shutdown_failed`）。`CONFIG_FILE` 只在 `cmd/mirrordock/cli.go` 的 `configPath` 中读取，`internal/config` 通过 `config.LoadSource` 接收所选路径、是否显式指定和工作目录。交叉编译时 Web 产物不变，只给 Go 编译指定目标平台：
 
 ```sh
 npm --prefix web run build
@@ -91,16 +94,23 @@ goreleaser release --snapshot --clean
 
 `web/dist/` 是唯一 Web 输出，由 `web/embed.go` 嵌入二进制，不提交 Git。干净检出直接执行 Go 构建或全量测试会因缺少嵌入文件失败。容器构建也先构建 Web。Docker 上下文不包含 Git，需传入 VERSION；未传时显示 dev，容器构建不附带 Git dirty 元数据。管理页面按路由加载，资源随二进制发布，无 CDN 或远程字体。
 
-Logo 唯一源为 `web/src/assets/logo.svg`；`web/public/favicon.ico`（16–256 px 多尺寸 ICO）由它导出并提交，修改 logo 后用任意图像工具重新导出该文件再构建，构建本身不依赖图像工具。公开目录的 Phosphor Regular 图标以 SVG 路径形式收录在 `internal/mirrors/listing-icons.html`，文件头记录上游固定提交与 MIT 授权；新增或替换图标时从同一上游的 `assets/regular/` 手工复制，只保留路径元素且颜色仅用 `currentColor`。
+Logo 唯一源为 `web/src/assets/logo.svg`；`web/public/favicon.ico`（16–256 px 多尺寸 ICO）由它导出并提交，修改 logo 后用任意图像工具重新导出该文件再构建，构建本身不依赖图像工具。公开目录的 Phosphor Regular 图标以 SVG 路径形式收录在 `internal/mirror/listing-icons.html`，文件头记录上游固定提交与 MIT 授权；新增或替换图标时从同一上游的 `assets/regular/` 手工复制，只保留路径元素且颜色仅用 `currentColor`。
 
 ## 开发验证
 
+管理台浏览器基线为 Chrome / Edge 124+、Firefox 125+、Safari 17.4+，与 `web/vite.config.ts` 的显式 `build.target` 一致。请求取消使用 `AbortSignal.any()` / `timeout()`，没有旧浏览器 polyfill；版本依据 [MDN 兼容数据](https://github.com/mdn/browser-compat-data/blob/main/api/AbortSignal.json)。本机 E2E 使用 Chromium；其他浏览器的实际验收范围见 ACCEPTANCE。
+
+管理台断点集合为 360、480、600、700、900、1180、1250 CSS px；另处理 `pointer: coarse`、`forced-colors` 与 `prefers-reduced-motion`。颜色、间距、字号、圆角、阴影和动效变量集中在 `web/src/styles/`，组件私有样式在各组件的 scoped style 中。
+
 ```sh
 npm --prefix web run format:check
+npm --prefix web run lint
+npm --prefix web run typecheck
+npm --prefix web run test
 npm --prefix web run build
 go vet ./...
 go test -race -count=1 ./...
-go test ./internal/mirrors -run '^$' -bench BenchmarkPublicHTTP -benchmem
+go test ./internal/mirror -run '^$' -bench BenchmarkPublicHTTP -benchmem
 GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o bin/mirrordock-linux-amd64 ./cmd/mirrordock
 ```
 
@@ -120,8 +130,8 @@ PATH=/path/to/modern-rsync:$PATH MIRRORDOCK_TEST_RSYNC=/path/to/modern-rsync/rsy
 
 GitHub Actions 配置只维护在 [.github/workflows/ci.yml](../.github/workflows/ci.yml)，推送 main 与 Pull Request 时运行，Action 均按提交 SHA 固定：
 
-- Web：`npm ci --ignore-scripts`、`format:check`、构建。
-- Go（ubuntu-24.04）：先构建 Web，再 `go mod verify`、gofmt、`go vet`（含 `GOOS=darwin` 交叉检查）、`go test -race -count=1 ./...`。不设 macOS 运行器，macOS 只做交叉 vet 与交叉编译。
+- Web：`npm ci --ignore-scripts` 后依次运行 `format:check`、`lint`、`typecheck`、`test`、`build`；另执行生产依赖 `npm audit --audit-level=high --omit=dev`。
+- Go（ubuntu-24.04）：先构建 Web，再 `go mod verify` / `tidy -diff`、gofmt / goimports、默认与 integration,scale 标签 vet、staticcheck、race、govulncheck；交叉 vet 覆盖全部 8 个发布目标。macOS 没有 CI 运行器，CI 只交叉检查和编译。
 - E2E（ubuntu-24.04）：构建测试二进制后运行全部 Playwright 用例。
 - GoReleaser：`goreleaser check` 与 `release --snapshot --clean`，确认全部发布目标可交叉编译和打包。
 
@@ -135,11 +145,21 @@ Go 与 E2E 作业先执行组合 Action [.github/actions/test-env](../.github/ac
 # 用全新模块缓存直接从各模块源仓库拉取，并对照官方校验数据库 sum.golang.org
 GOMODCACHE=$(mktemp -d) GOPROXY=direct GOSUMDB=sum.golang.org go mod download all
 go mod verify
-go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
 # npm：锁文件 integrity 来自 registry.npmjs.org，并校验注册表签名与来源证明
 npm --prefix web ci --ignore-scripts
 npm --prefix web audit signatures
 npm --prefix web audit
 ```
 
-`go mod download all` 在全新缓存下可能向 `go.sum` 追加未参与构建的模块校验行，核验后用 `git checkout go.sum` 还原。Dockerfile 的三个基础镜像按 digest 固定，更新时先用 `docker buildx imagetools inspect <镜像:tag>` 取得官方摘要并评审变更。
+`go mod download all` 在全新缓存下可能向 `go.sum` 追加未参与构建的模块校验行，核验后核对差异，仅移除本次核验额外引入且不参与构建的校验行。Dockerfile 的三个基础镜像按 digest 固定，更新时先用 `docker buildx imagetools inspect <镜像:tag>` 取得官方摘要并评审变更。
+
+### 生命周期与接口实现
+
+构造函数只初始化资源；`App.Serve(ctx)` 绑定监听后再调用运行引擎和通知服务的 `Start(ctx)`。关闭先停止接收请求，再取消并等待 worker；若等待超时，不关闭 worker 仍可能访问的共享数据库和镜像根，可再次调用 Close 完成清理。后台 goroutine 由所属组件的 WaitGroup 管理。
+
+数据库连接仅在 database 包内使用：单写连接、最多四条只读连接，所有操作接收 ctx 并有 5 秒上限，写入统一经 Store.Write 事务。创建任务和 24 小时幂等首个成功结果在同一事务提交；响应丢失与进程重启不会重复创建任务。结构版本不匹配直接拒绝。运行耗时、预算和 ETA 的接口/JSON 存储字段为整数 `elapsed_ms`、`budget_ms`、`eta_ms`。
+
+前端请求仅经 `api<T>({ path, ...options })` / 带 ETag 的 taggedApi；默认页面请求在离开路径时取消，应用级会话与刷新使用 session scope，在退出登录时统一取消。分页/筛选/选中项存于 URL query。应用状态仅导出 readonly 视图及修改函数。加载失败保留上一份数据、展示 role=alert 与重试入口；字段校验错误在对应字段旁展示。
+
+附加本地检查：`go test -tags integration ./cmd/mirrordock` 验证真实构建的版本协议；Fuzz 语料在各包 `testdata/fuzz/`，例如 `go test ./internal/timefmt -run '^$' -fuzz '^FuzzTimeRoundTrip$' -fuzztime=3s`。工具版本固定为 goimports v0.50.0、staticcheck v0.8.2、govulncheck v1.9.0。

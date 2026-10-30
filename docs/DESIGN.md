@@ -44,11 +44,11 @@ flowchart LR
 
 账号来自 YAML，启动时内存 bcrypt，Cookie 会话 12h，HttpOnly/SameSite Strict，TLS 下 Secure。最多 32 会话，登录按连接 IP（IPv6 按 /64）每分钟最多 10 次，成功重置，最多 4096 桶且一分钟过期，满额淘汰最早窗口；不信任转发头，反代部署边界见 README。修改请求需要自定义头和匹配 Origin；管理 API no-store。SSE 最多 8 条、每秒推送，逐次校验会话，过期/退出终止流。各连接共用最多一秒的不可变序列化快照，查询与编码在缓存锁外进行；并发未命中合并为一次读取，等待读取可取消，失败不缓存，无客户端不主动查询。已登录的非 GET 请求结束后使快照失效并唤醒各连接立即推送；与写操作重叠的读取结果丢弃重读，客户端不会在写后收到写前快照。匿名登录不触发失效。前端连接 SSE 期间各源最新运行只取自事件流，刷新接口结果仅在未连接时使用。每客户端仍独立发送并验证会话。
 
-源状态 API `/api/runs?latest=1` 将配置源作为参数传入 `json_each`，在一次 SQL 中按 `(source_id,id DESC)` 索引查找各源最新任务，不扫描无关历史、不逐源往返。管理运行列表、最新状态与持久详情使用只读池和请求上下文，数据库查询最多 5 秒；普通分页的计数与页内容属于同一只读事务。最多四条只读连接与单写连接隔离；外键、FULL 同步、busy_timeout 和只读限制通过 DSN 在每条新连接上启用。普通运行分页和统计保持完整历史查询。前端刷新取消旧请求，退出统一中止会话内全部 API 请求，防止旧 401 使新登录失效；页面/详情卸载取消请求与轮询，避免旧响应恢复已退出状态。
+源状态 API `/api/runs?latest=true` 将配置源作为参数传入 `json_each`，在一次 SQL 中按 `(source_id,id DESC)` 索引查找各源最新任务，不扫描无关历史、不逐源往返。管理运行列表、最新状态与持久详情使用只读池和请求上下文，数据库查询最多 5 秒；普通分页的计数与页内容属于同一只读事务。最多四条只读连接与单写连接隔离；外键、FULL 同步、busy_timeout 和只读限制通过 DSN 在每条新连接上启用。普通运行分页和统计保持完整历史查询。前端刷新取消旧请求，退出统一中止会话内全部 API 请求，防止旧 401 使新登录失效；页面/详情卸载取消请求与轮询，避免旧响应恢复已退出状态。
 
 ## 同步与运行状态
 
-状态包括 queued、running、pausing、paused、interrupted 和 succeeded/failed/timed_out/cancelled。SERVICE_INTERRUPTED 在配置中仍启用且 ID/类型/dest 匹配时自动重新排队，预算耗尽转 timed_out；暂停和其他故障中断须手动处理。中断可继续并保留预算；同源暂停/中断任务继续占用源，必须先取消才能新建或改 dest。正常关闭保存实际耗时；异常断电最多丢失一个 5 秒进度检查点。关键状态立即落库。启动按 ID 每页 100 条恢复未终态，不设总条数截断。恢复、worker 出队和继续操作都核对当前 YAML：源删除或类型/dest 变化的任务自动 cancelled（SOURCE_REMOVED/SOURCE_CHANGED），禁用源的排队任务转 interrupted（SOURCE_DISABLED），源占用期间配置保存拒绝删除源或改类型/dest。Rsync 一轮内任一来源可重试即重试整轮。
+状态包括 queued、running、pausing、paused、interrupted 和 succeeded/failed/timed_out/cancelled。service_interrupted 在配置中仍启用且 ID/类型/dest 匹配时自动重新排队，预算耗尽转 timed_out；暂停和其他故障中断须手动处理。中断可继续并保留预算；同源暂停/中断任务继续占用源，必须先取消才能新建或改 dest。正常关闭保存实际耗时；异常断电最多丢失一个 5 秒进度检查点。关键状态立即落库。启动按 ID 每页 100 条恢复未终态，不设总条数截断。恢复、worker 出队和继续操作都核对当前 YAML：源删除或类型/dest 变化的任务自动 cancelled（source_removed/source_changed），禁用源的排队任务转 interrupted（source_disabled），源占用期间配置保存拒绝删除源或改类型/dest。Rsync 一轮内任一来源可重试即重试整轮。
 
 恢复必须等待 working 执行器退出，保存 queued 成功后才入队；worker 出队再次检查 working，避免停止窗口或重复队列导致同一 ID 并发执行。运行中操作保存失败保留与执行器一致的 pausing/running 状态和源预占，执行器退出后再持久化结果；无执行器时保存失败保留 interrupted。
 
@@ -60,11 +60,11 @@ interrupted 是可恢复状态，不进入最终通知结果流、失败统计�
 
 Rsync 使用系统 PATH 中现代 rsync，数字 srcN 顺序失败切换，包括永久性来源错误；本地磁盘/权限错误停止，校验不一致可重试，rsync 23/24 仍不视为成功。模块内子目录 URL 必须带尾斜杠。不通过 shell 执行用户命令。默认递归并保留链接/时间/权限/硬链接；partial-dir 与默认单文件临时替换用于任务工作目录，不使用 delay-updates 或 inplace，整体发布由镜像模块保证。固定排除 `.mirrordock*`，避免上游和 --delete 改写内部准备标记。UID/GID 独立可选，0 有效，明确范围及权限，不自动 sudo。
 
-Rsync 代理在每次尝试时从当前 YAML 解析：源 `rsync.proxy_mode` 为 direct 时直连，custom 时用源的 `rsync.proxy`，否则用 `settings.rsync.proxy`；快照只保留模式，清除两处地址。设置代理时为 rsync 注入 `RSYNC_CONNECT_PROG='<可执行文件>' rsync-connect`（rsync 先展开 `%H`/`%%`，故路径中的 `%` 写为 `%%`，再由 `/bin/sh -c` 执行；字符串只含单引号转义的可执行文件路径，配置值不经 shell）。代理 URL、`host:port` 目标与连接超时经 `MIRRORDOCK_RSYNC_*` 环境变量传入，进程参数不含凭据。内部命令在连接超时内完成 HTTP CONNECT（https 代理先 TLS，系统根证书校验）或 SOCKS5（RFC 1928/1929，socks5 与 socks5h 均交由代理解析主机名，与 GitHub transport 一致），之后不设截止时间，stdin/stdout 与隧道双向转发，rsync 结束发送后半关闭写端；`--timeout` 仍约束 I/O 空闲，`--contimeout` 不作用于该路径。内部命令与 rsync 同属任务进程组，随取消/终止一起结束。失败时在 stderr 输出带 `mirrordock rsync-connect:` 前缀与分类的诊断，执行器据此映射 `RSYNC_PROXY`：代理不可达可重试且 `ProxyFailure`，本轮不再切换备用来源；认证、协议或配置错误不可重试；代理拒绝目标（HTTP 403、SOCKS 规则拒绝）为不可重试的来源失败，其他目标连接失败为可重试的来源失败。rsync 环境始终移除继承的 `RSYNC_PROXY`、`RSYNC_CONNECT_PROG` 与 `MIRRORDOCK_RSYNC_*`，“直连”不受启动环境影响。
+Rsync 代理在每次尝试时从当前 YAML 解析：源 `rsync.proxy_mode` 为 direct 时直连，custom 时用源的 `rsync.proxy`，否则用 `settings.rsync.proxy`；快照只保留模式，清除两处地址。设置代理时为 rsync 注入 `RSYNC_CONNECT_PROG='<可执行文件>' rsync-connect`（rsync 先展开 `%H`/`%%`，故路径中的 `%` 写为 `%%`，再由 `/bin/sh -c` 执行；字符串只含单引号转义的可执行文件路径，配置值不经 shell）。代理 URL、`host:port` 目标与连接超时经 `MIRRORDOCK_RSYNC_*` 环境变量传入，进程参数不含凭据。内部命令在连接超时内完成 HTTP CONNECT（https 代理先 TLS，系统根证书校验）或 SOCKS5（RFC 1928/1929，socks5 与 socks5h 均交由代理解析主机名，与 GitHub transport 一致），之后不设截止时间，stdin/stdout 与隧道双向转发，rsync 结束发送后半关闭写端；`--timeout` 仍约束 I/O 空闲，`--contimeout` 不作用于该路径。内部命令与 rsync 同属任务进程组，随取消/终止一起结束。失败时在 stderr 输出带 `mirrordock rsync-connect:` 前缀与分类的诊断，执行器据此映射 `rsync_proxy`：代理不可达可重试且 `ProxyFailure`，本轮不再切换备用来源；认证、协议或配置错误不可重试；代理拒绝目标（HTTP 403、SOCKS 规则拒绝）为不可重试的来源失败，其他目标连接失败为可重试的来源失败。rsync 环境始终移除继承的 `RSYNC_PROXY`、`RSYNC_CONNECT_PROG` 与 `MIRRORDOCK_RSYNC_*`，“直连”不受启动环境影响。
 
 Reposync 针对 DNF4，使用任务私有配置/缓存/RPM 密钥库，仅启用选定 repo；不修改宿主配置。开启 GPG 时先下载配置的公钥（每个最多 1 MiB、30 秒并受任务预算约束，拒绝 HTTPS 降级到 HTTP），用 rpmkeys 导入私有 installroot，再执行 reposync 包签名校验；不依赖插件自动导入。仅一个 src1，完整元数据与 newest_only 组合被拒绝；关闭元数据下载时按文件发布并移除旧 repodata，不承诺可安装仓库。私有 DNF 数据在任务 work 的隐藏子目录，执行结束清除，异常退出由重试/终态清理。GPG 仅声明包签名校验，不宣称元数据签名已验证。
 
-配置来源/GPG 地址禁止 userinfo/query/fragment，不支持 URL 鉴权；通用 HTTPURL 保留 GitHub 临时签名资产地址支持。运行快照防御性脱敏。数据库结构版本写入 `PRAGMA user_version`（1.0 为 1），版本更高的数据库拒绝打开；改变表结构必须提升版本并提供显式迁移。
+配置来源/GPG 地址禁止 userinfo/query/fragment，不支持 URL 鉴权；通用 HTTPURL 保留 GitHub 临时签名资产地址支持。运行快照防御性脱敏。数据库结构版本写入 `PRAGMA user_version`（当前为 2）；未上线阶段不提供旧 schema 或 JSON 字段兼容，版本不匹配直接拒绝打开。更改结构或持久化契约须提升版本。
 
 GitHub 使用 go-github v88，按发布时间选 Release，仅 assets。tag 与附件名拒绝内部保留前缀/暂存名称，避免覆盖身份侧车或发布无法下载的文件。API 鉴权客户端禁止跨 origin 重定向，下载客户端不向第三方资产主机附带 API Token。下载身份侧车包含 ID/大小/更新时间/digest；验证完整文件后复用，Range 206 和身份均匹配才续传，否则重新开始。凭据/签名 URL 不进入错误正文。HTTP/HTTPS/SOCKS 代理使用每轮连接池，空值直连，不读取系统代理变量，故障不绕过代理。正文单次读取空闲五分钟取消并保留续传数据；API 配额按服务端重置期限重试，预算不重置。prune 开关同时清理保留 tag 中已取消选择的附件，且只在本轮下载全成功后进行。
 
@@ -78,7 +78,7 @@ GitHub 使用 go-github v88，按发布时间选 Release，仅 assets。tag 与�
 
 克隆按 dev/inode 保留工作树内部硬链接组，组内首个文件原生 reflink，其他路径链接到该 work 文件，绝不链接到 published。GitHub 更新私有同步时间后恢复父目录 mtime；正文不变时仅持久化更新发布摘要，不改变当前代 ID 或公开文件，摘要保存失败保留旧事实和 work。
 
-Linux statfs 使用 Frsize（缺失时回退 Bsize），Darwin 使用 Bsize。普通 statfs 故障仅记录错误、让新任务保持 queued/waiting_space；只有明确低容量才取消活动任务，且不取消已进入 publish 阶段的任务，Publish 本身不再检查余量。容量读取实际 work 文件系统的总量与可用量，不累加 reflink 目录逻辑大小。所有类型的任务共用准入锁：可用量需达到 max(1 GiB, 总量 1%) 加每个活动任务（含新任务）512 MiB。准入不足保持 queued/waiting_space，不消耗累计预算；运行中独立每 5 秒检查，低于安全余量取消执行器，持久化 DISK_SPACE 失败并保留旧发布。该机制不能保证上游增长或外部写入不触发 ENOSPC。
+Linux statfs 使用 Frsize（缺失时回退 Bsize），Darwin 使用 Bsize。普通 statfs 故障仅记录错误、让新任务保持 queued/waiting_space；只有明确低容量才取消活动任务，且不取消已进入 publish 阶段的任务，Publish 本身不再检查余量。容量读取实际 work 文件系统的总量与可用量，不累加 reflink 目录逻辑大小。所有类型的任务共用准入锁：可用量需达到 max(1 GiB, 总量 1%) 加每个活动任务（含新任务）512 MiB。准入不足保持 queued/waiting_space，不消耗累计预算；运行中独立每 5 秒检查，低于安全余量取消执行器，持久化 disk_space 失败并保留旧发布。该机制不能保证上游增长或外部写入不触发 ENOSPC。
 
 启动、终态与每 5 分钟由独立清理循环回收，单次上下文上限 30 秒。work 清理查询持久化 state，仅移除 succeeded/failed/timed_out/cancelled；可恢复状态和未知目录不删，终态保存失败保留源预占。删除按 128 项批次检查取消并协作让出；过期且无引用的旧代先改名为 `.gc-<id>`，中断后继续回收，避免删除导致 mtime 更新而再延后 24 小时。
 
@@ -118,7 +118,7 @@ HTTPS/HTTP2 采用标准库有界 TLS/流控，不宣称 sendfile，不向 TLS �
 
 通知配置在 YAML，AES-256-GCM 密钥在 state；已有密文时缺失密钥阻止启动。激活边界、终态快照与 `(channel,run_id)` 去重在 SQLite。启用时在同一个 SQLite 快照内固定任务 ID 边界和结果插入序号；按单调递增的结果序号每次读取最多 100 条，只在入队全部成功后推进持久游标，晚完成任务不会漏发，失败可依靠唯一键重放，不反复扫描整段历史。发送记录分页在五秒可取消的只读事务内读取计数和页面，不占用写池。最多 3 次发送、30/60 秒退避，不影响同步结果；外部已收但确认丢失可重复投递。只发送脱敏摘要，不发送业务文件或原始错误。
 
-通知处理耗时使用累计 ElapsedSeconds，任务未开始或未记录耗时时分别显示未开始/未记录。GitHub 复用计数为成功的子集；Rsync 单列条目总数（含目录）与传输普通文件数，不推算未完成；Reposync 不推算包数。通知直连及 Webhook 无签名的当前功能边界见 README。
+通知处理耗时使用累计 ElapsedMillis，任务未开始或未记录耗时时分别显示未开始/未记录。GitHub 复用计数为成功的子集；Rsync 单列条目总数（含目录）与传输普通文件数，不推算未完成；Reposync 不推算包数。通知直连及 Webhook 无签名的当前功能边界见 README。
 
 Vue 以 app、features、components、layouts 分层，七类页面（含概览）按需加载，颜色由 CSS 变量令牌提供，只有浅色主题，公共 OptionCard/分页/时间范围统一复用。动效统一为短线性过渡：换页与分析类型切换为旧内容 0.12s 淡出、新内容 0.2s 淡入上移；页签由 `v-tab-indicator` 驱动一条 0.25s 滑动的下划线；弹窗经 `ModalTransition`（Teleport 到 body）0.2s 淡入并轻微上浮、0.12s 淡出，关闭过程中不拦截点击；刷新统一用 `RefreshButton`，图标在点击的操作或外部加载期间旋转，至少一圈并停在整圈处；运行详情与通知发送记录的定时轮询不触发旋转，日志刷新按钮沿用读取期间旋转。系统“减少动态效果”设置下全部关闭。批次列表始终显示一条连续进度条和整体百分比：rsync 增量递归期间沿用 rsync 基于已知文件列表的近似百分比（标“≈”，封顶 99%，列表增长时可能回落）；没有百分比时，准备/扫描/等待阶段为空条，校验与发布阶段为满条，右侧显示阶段名。Rsync 剩余时间不直接采用 rsync 约 5 秒窗口的瞬时估算，而是用 rsync 报告的剩余字节除以最近 2 分钟的平均处理速率（增量递归期间也采样，不足 30 秒或文件列表未完整时不显示）；rsync 只累计实际接收文件的字节而总量含未变化文件，增量同步时该估算偏长。运行详情以同步阶段、实际接收/处理量/耗时/尝试统计、来源尝试及日志/快照折叠区组织，窄屏统计改为两列。概览“进行中”卡片的四项统计与上方四个阶段同列对齐，卡片内容宽度不足 420px 时改为两列；侧栏底部只保留新标签打开的公开镜像目录链接，不显示实时连接状态。日志默认收起，展开读取，收起/隐藏/卸载取消请求；历史选择、滚动跟随和已读偏移保留。状态在活动、暂停或中断时轮询，四种不可恢复终态停止；可手动刷新。终态发生在日志请求中途时额外补读，超过单轮 2 MiB 的积压分轮读到 EOF，避免提前停止漏掉尾部。返回前台重新校对状态和展开的日志；弹窗焦点范围包含原生 summary 控件。公开目录由 mirrors 自有嵌入模板生成，不经 Vue；页头右侧为指向 `/admin/` 的“管理后台”链接（当前页打开，未登录时由管理台显示登录页；样式与管理台侧栏“镜像目录”链接一致，绿色加粗、悬停下划线），目录行只显示名称、不带图标或尾部“/”，悬停时名称下方出现下划线，文件行保留 Phosphor 类型图标。HTML 转义文件名，脚本只读 DOM data 属性，CSP 使用固定脚本 SHA-256；无脚本可浏览已列出链接。超过 1000 个可见项明确提示，搜索排序仅针对所列子集，完整文件路径仍可下载。公开项目状态最多两次批量 SQL 并缓存一秒，绑定请求取消；文件正文路径继续不访问 SQLite。设置草稿保留并在实际设置冲突时显式要求用户处理；系统页显示 CLI 注入的真实构建版本。
 

@@ -1,7 +1,7 @@
 package app
 
 import (
-	"context"
+	"crypto/sha256"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -10,19 +10,49 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"mirrordock/internal/config"
 )
 
-func TestConfiguredAccountRequiresRestart(t *testing.T) {
-	file := filepath.Join(t.TempDir(), "config.yaml")
-	text := "listen: 127.0.0.1\npath: ./data\nmirror_root: ./mirror\nauth:\n  username: operator\n  password: first-password\nsources: []\n"
-	if err := os.WriteFile(file, []byte(text), 0600); err != nil {
-		t.Fatal(err)
-	}
-	a, err := openFile(file)
+func TestSessionStoresOnlyDigestAndExpires(t *testing.T) {
+	t.Parallel()
+	a, err := newAuth(config.Auth{Username: "operator", Password: "fixture-password"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { a.Close(context.Background()) })
+	now := time.Date(2026, 10, 30, 0, 0, 0, 0, time.UTC)
+	a.now = func() time.Time { return now }
+	token, err := a.login("operator", "fixture-password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256([]byte(token))
+	if _, ok := a.sessions[digest]; !ok {
+		t.Fatal("session must be indexed by its digest")
+	}
+	r := httptest.NewRequest(http.MethodGet, "/api/config", nil)
+	r.AddCookie(&http.Cookie{Name: sessionCookie, Value: token})
+	if !a.authorized(r) {
+		t.Fatal("got unauthorized for a fresh session")
+	}
+	now = now.Add(sessionLifetime)
+	if a.authorized(r) {
+		t.Fatal("got authorized for an expired session")
+	}
+}
+
+func TestConfiguredAccountRequiresRestart(t *testing.T) {
+	t.Parallel()
+	file := filepath.Join(t.TempDir(), "config.yaml")
+	text := "listen: 127.0.0.1\npath: ./data\nmirror_root: ./mirror\nauth:\n  username: operator\n  password: first-password\nsources: []\n"
+	if err := os.WriteFile(file, []byte(text), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	a, err := openFile(t.Context(), file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { closeTestApp(t, a) })
 	token, err := a.auth.login("operator", "first-password")
 	if err != nil {
 		t.Fatal(err)
@@ -33,7 +63,7 @@ func TestConfiguredAccountRequiresRestart(t *testing.T) {
 		t.Fatal("new session rejected")
 	}
 	text = strings.ReplaceAll(strings.ReplaceAll(text, "operator", "new-operator"), "first-password", "second-password")
-	if err := os.WriteFile(file, []byte(text), 0600); err != nil {
+	if err := os.WriteFile(file, []byte(text), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := reloadConfig(a.Config); err != nil {
@@ -48,27 +78,28 @@ func TestConfiguredAccountRequiresRestart(t *testing.T) {
 	if _, err := a.auth.login("operator", "first-password"); err != nil {
 		t.Fatal("startup account changed during reload")
 	}
-	if err := a.Close(context.Background()); err != nil {
+	if err := closeTestApp(t, a); err != nil {
 		t.Fatal(err)
 	}
-	b, err := openFile(file)
+	b, err := openFile(t.Context(), file)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { b.Close(context.Background()) })
+	t.Cleanup(func() { closeTestApp(t, b) })
 	if _, err := b.auth.login("new-operator", "second-password"); err != nil {
 		t.Fatal("new configured account rejected after restart")
 	}
 	if _, err := b.auth.login("operator", "first-password"); err == nil || b.auth.authorized(request) {
 		t.Fatal("old account or old session survived restart")
 	}
-	if value, err := b.Store.State("admin_password"); err != nil || value != "" {
+	if value, err := b.Store.State(t.Context(), "admin_password"); err != nil || value != "" {
 		t.Fatal("new password was persisted to SQLite", err)
 	}
 }
 
 func TestLoginLimitsSeparateClientsAndReset(t *testing.T) {
-	a := &auth{attempts: map[string]loginWindow{}}
+	t.Parallel()
+	a := &auth{now: time.Now, attempts: map[string]loginWindow{}}
 	for range 10 {
 		if a.limited("192.0.2.1") {
 			t.Fatal("early limit")
@@ -90,6 +121,7 @@ func TestLoginLimitsSeparateClientsAndReset(t *testing.T) {
 }
 
 func TestLoginLimitBucketsIPv6PrefixAndEvictsOldest(t *testing.T) {
+	t.Parallel()
 	ip := func(address string) string {
 		req := httptest.NewRequest("POST", "/api/auth/login", nil)
 		req.RemoteAddr = address
@@ -101,7 +133,7 @@ func TestLoginLimitBucketsIPv6PrefixAndEvictsOldest(t *testing.T) {
 	if ip("[::ffff:192.0.2.9]:1") != "192.0.2.9" {
 		t.Fatal("IPv4-mapped peer was not normalized")
 	}
-	a := &auth{attempts: map[string]loginWindow{}}
+	a := &auth{now: time.Now, attempts: map[string]loginWindow{}}
 	a.attempts["oldest"] = loginWindow{attempts: 11, start: time.Now().Add(-30 * time.Second)}
 	for i := range 4095 {
 		a.attempts[fmt.Sprint("client-", i)] = loginWindow{attempts: 1, start: time.Now()}

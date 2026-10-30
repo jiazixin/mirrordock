@@ -1,6 +1,10 @@
 <script setup lang="ts">
-defineProps<{ label: string; description: string; disabled?: boolean }>()
-const enabled = defineModel<boolean | null>({ required: true })
+const { label, description, disabled } = defineProps<{
+  label: string
+  description: string
+  disabled?: boolean
+}>()
+const enabled = defineModel<boolean | undefined>({ required: true })
 </script>
 
 <template>
@@ -27,12 +31,12 @@ const enabled = defineModel<boolean | null>({ required: true })
   display: flex;
   flex-direction: row;
   align-items: flex-start;
-  gap: 12px;
+  gap: var(--space-12px);
   /* Borderless: keep the click target to the visible switch and text. */
   width: fit-content;
   max-width: 100%;
   min-width: 0;
-  padding: 4px 0;
+  padding: var(--space-4px) 0;
   color: var(--t1);
   cursor: pointer;
 }
@@ -43,18 +47,18 @@ const enabled = defineModel<boolean | null>({ required: true })
 .option-copy {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--space-2px);
   min-width: 0;
   overflow-wrap: anywhere;
 }
 .option-copy strong {
-  font-size: 14px;
+  font-size: var(--font-14px);
   font-weight: 600;
   color: var(--t1);
   line-height: 1.5;
 }
 .option-copy small {
-  font-size: 12px;
+  font-size: var(--font-12px);
   line-height: 1.6;
   color: var(--t3);
 }
@@ -64,15 +68,15 @@ const enabled = defineModel<boolean | null>({ required: true })
   flex-shrink: 0;
   width: 36px;
   height: 20px;
-  margin: 1px 0 0;
+  margin: var(--space-1px) 0 0;
   padding: 0;
   border: 1px solid var(--line-strong);
-  border-radius: 999px;
+  border-radius: var(--radius-999px);
   background: var(--gray-bg);
   cursor: pointer;
   transition:
-    background 0.15s,
-    border-color 0.15s;
+    background var(--motion-0d15s),
+    border-color var(--motion-0d15s);
 }
 .option-row input:before {
   content: '';
@@ -83,10 +87,10 @@ const enabled = defineModel<boolean | null>({ required: true })
   height: 14px;
   border-radius: 50%;
   background: var(--panel);
-  box-shadow: 0 1px 2px rgba(18, 26, 21, 0.25);
+  box-shadow: 0 1px 2px var(--palette-rgba-18-26-21-0_25);
   transition:
-    transform 0.15s,
-    background 0.15s;
+    transform var(--motion-0d15s),
+    background var(--motion-0d15s);
 }
 .option-row:not(.disabled):hover input:not(:checked) {
   border-color: var(--t3);

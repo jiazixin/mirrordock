@@ -3,23 +3,25 @@ package observability
 import (
 	"encoding/json/v2"
 	"log/slog"
-	"mirrordock/internal/config"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"golang.org/x/sys/unix"
+
+	"mirrordock/internal/config"
 )
 
 func TestFileLoggingFormatLevelAndAppend(t *testing.T) {
+	t.Parallel()
 	for _, format := range []string{"json", "text"} {
 		t.Run(format, func(t *testing.T) {
 			dir := t.TempDir()
 			file := filepath.Join(dir, "config.yaml")
 			c := config.Log{Level: "warn", Path: "logs/server.log", Format: format}
 			for range 2 {
-				logger, closeLog, err := Open(c, file)
+				logger, closeLog, err := Open(c, file, os.Stdout)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -53,9 +55,10 @@ func TestFileLoggingFormatLevelAndAppend(t *testing.T) {
 }
 
 func TestLevelsAndOpenErrors(t *testing.T) {
+	t.Parallel()
 	file := filepath.Join(t.TempDir(), "config.yaml")
 	for _, level := range []string{"debug", "info", "warn", "error"} {
-		logger, closeLog, err := Open(config.Log{Level: level, Format: "json"}, file)
+		logger, closeLog, err := Open(config.Log{Level: level, Format: "json"}, file, os.Stdout)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -67,15 +70,15 @@ func TestLevelsAndOpenErrors(t *testing.T) {
 		}
 	}
 	for _, c := range []config.Log{{Level: "invalid", Format: "json"}, {Level: "info", Format: "xml"}, {Level: "info", Format: "json", Path: filepath.Dir(file)}} {
-		if _, _, err := Open(c, file); err == nil {
+		if _, _, err := Open(c, file, os.Stdout); err == nil {
 			t.Fatal("invalid logger accepted")
 		}
 	}
 	fifo := filepath.Join(filepath.Dir(file), "fifo")
-	if err := unix.Mkfifo(fifo, 0600); err != nil {
+	if err := unix.Mkfifo(fifo, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := Open(config.Log{Level: "info", Format: "json", Path: fifo}, file); err == nil {
+	if _, _, err := Open(config.Log{Level: "info", Format: "json", Path: fifo}, file, os.Stdout); err == nil {
 		t.Fatal("FIFO accepted as log file")
 	}
 }

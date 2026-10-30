@@ -1,8 +1,13 @@
 <script setup lang="ts">
 import { computed, onMounted, onBeforeUnmount, ref } from 'vue'
 import type { AnalyticsDay } from '../../app/types'
-import { bytes, duration } from '../../app/format'
-const props = defineProps<{ days: AnalyticsDay[]; metric: 'runs' | 'bytes' | 'duration' }>()
+import { formatSize } from '../../lib/format/bytes'
+import { formatDuration, formatDurationTick } from '../../lib/format/duration'
+import { formatNumber } from '../../lib/format/number'
+const { days, metric } = defineProps<{
+  days: AnalyticsDay[]
+  metric: 'runs' | 'bytes' | 'duration'
+}>()
 const hovered = ref<number | null>(null)
 const container = ref<HTMLElement>()
 const width = ref(800),
@@ -21,14 +26,11 @@ onMounted(() => {
   if (container.value) observer.observe(container.value)
 })
 onBeforeUnmount(() => observer?.disconnect())
-const value = (day: AnalyticsDay) =>
-  props.metric === 'runs'
-    ? day.runs
-    : props.metric === 'bytes'
-      ? day.bytes
-      : day.duration_samples
-        ? day.elapsed_seconds / day.duration_samples
-        : 0
+function value(day: AnalyticsDay) {
+  if (metric === 'runs') return day.runs
+  if (metric === 'bytes') return day.transferred_bytes
+  return day.duration_samples ? day.elapsed_ms / 1000 / day.duration_samples : 0
+}
 // Tick steps are whole units (bytes in 1024 powers, durations in s/m/h) so
 // every axis label is a readable value instead of a fraction of a byte.
 const byteSteps = [0, 1, 2, 3, 4].flatMap((power) =>
@@ -38,58 +40,46 @@ const durationSteps = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800].concat
   [1, 2, 3, 6, 12, 24, 48, 120, 240].map((hours) => hours * 3600),
 )
 const maximum = computed(() => {
-  const max = Math.max(0, ...props.days.map(value))
-  if (props.metric === 'runs') return Math.max(4, Math.ceil(max / 4) * 4)
-  const steps = props.metric === 'bytes' ? byteSteps : durationSteps
+  const max = Math.max(0, ...days.map(value))
+  if (metric === 'runs') return Math.max(4, Math.ceil(max / 4) * 4)
+  const steps = metric === 'bytes' ? byteSteps : durationSteps
   const step = steps.find((candidate) => candidate * 4 >= max) ?? Math.ceil(max / 4)
   return step * 4
 })
-const columnX = (index: number) => left + ((index + 0.5) * plotWidth.value) / props.days.length
+const columnX = (index: number) => left + ((index + 0.5) * plotWidth.value) / days.length
 const valueY = (amount: number) => top + plotHeight * (1 - amount / maximum.value)
-const format = (n: number) =>
-  props.metric === 'bytes'
-    ? bytes(n)
-    : props.metric === 'duration'
-      ? duration(n)
-      : n.toLocaleString('zh-CN', { maximumFractionDigits: 1 })
+function format(n: number) {
+  if (metric === 'bytes') return formatSize(n)
+  if (metric === 'duration') return formatDuration(n)
+  return formatNumber(n)
+}
 const ticks = computed(() => Array.from({ length: 5 }, (_, i) => (maximum.value * i) / 4))
-const tickLabel = (n: number) =>
-  props.metric === 'bytes'
-    ? bytes(n).replace('.0 ', ' ')
-    : props.metric === 'duration' && n >= 60
-      ? n % 3600 === 0
-        ? `${n / 3600}h`
-        : n < 3600 && n % 60 === 0
-          ? `${n / 60}m`
-          : duration(n)
-      : format(n)
+function tickLabel(n: number) {
+  if (metric === 'bytes') return formatSize(n).replace('.0 ', ' ')
+  if (metric === 'duration') return formatDurationTick(n)
+  return format(n)
+}
 const path = computed(() =>
-  props.days
-    .map((day, index) => `${index ? 'L' : 'M'}${columnX(index)},${valueY(value(day))}`)
-    .join(' '),
+  days.map((day, index) => `${index ? 'L' : 'M'}${columnX(index)},${valueY(value(day))}`).join(' '),
 )
 const labelIndices = computed(() => [
   ...new Set([
     0,
-    Math.floor((props.days.length - 1) / 3),
-    Math.floor(((props.days.length - 1) * 2) / 3),
-    props.days.length - 1,
+    Math.floor((days.length - 1) / 3),
+    Math.floor(((days.length - 1) * 2) / 3),
+    days.length - 1,
   ]),
 ])
-const active = computed(() => (hovered.value === null ? null : props.days[hovered.value]))
+const active = computed(() => (hovered.value === null ? null : days[hovered.value]))
 function describe(day: AnalyticsDay) {
-  if (props.metric === 'runs') {
+  if (metric === 'runs') {
     return `${day.date}：成功 ${day.succeeded}，失败 ${day.failed}，取消 ${day.cancelled}，未结束 ${day.active}`
   }
-  if (props.metric === 'duration' && !day.duration_samples) return `${day.date}：无耗时样本`
+  if (metric === 'duration' && !day.duration_samples) return `${day.date}：无耗时样本`
   return `${day.date}：${format(value(day))}`
 }
-const metricLabel = computed(() =>
-  props.metric === 'runs'
-    ? '运行次数'
-    : props.metric === 'bytes'
-      ? '成功任务处理量'
-      : '平均累计执行耗时',
+const metricLabel = computed(
+  () => ({ runs: '运行次数', bytes: '成功任务处理量', duration: '平均累计执行耗时' })[metric],
 )
 </script>
 <template>
@@ -233,11 +223,11 @@ const metricLabel = computed(() =>
 }
 .trend-readout {
   display: flex;
-  gap: 12px;
+  gap: var(--space-12px);
   align-items: center;
   min-height: 32px;
   color: var(--t3);
-  font-size: 12px;
+  font-size: var(--font-12px);
 }
 .trend-readout strong {
   font-weight: 400;
@@ -248,7 +238,7 @@ const metricLabel = computed(() =>
   stroke-width: 1;
 }
 .chart-text {
-  font-size: 11px;
+  font-size: var(--font-11px);
   fill: var(--t3);
   font-family: inherit;
 }
@@ -292,7 +282,10 @@ const metricLabel = computed(() =>
   }
   .trend-readout {
     flex-wrap: wrap;
-    gap: 4px 10px;
+    gap: var(--space-4px) var(--space-10px);
   }
+}
+.right {
+  text-align: right;
 }
 </style>

@@ -1,6 +1,6 @@
 export type SourceType = 'rsync' | 'reposync' | 'github_release'
 export type RsyncProxyMode = 'global' | 'direct' | 'custom'
-export interface Source {
+export type Source = {
   id: string
   name: string
   type: SourceType
@@ -9,13 +9,13 @@ export interface Source {
   exclude: string[]
   upstreams: Record<string, string>
   rsync: {
-    preserve_links: boolean | null
-    preserve_times: boolean | null
-    preserve_permissions: boolean | null
-    preserve_hardlinks: boolean | null
-    delete: boolean | null
-    uid: number | null
-    gid: number | null
+    preserve_links?: boolean
+    preserve_times?: boolean
+    preserve_permissions?: boolean
+    preserve_hardlinks?: boolean
+    delete?: boolean
+    uid?: number
+    gid?: number
     proxy_mode?: '' | RsyncProxyMode
     proxy?: string
   }
@@ -24,17 +24,17 @@ export interface Source {
     releasever: string
     basearch: string
     architectures: string[]
-    download_metadata: boolean | null
+    download_metadata?: boolean
     newest_only: boolean
-    delete: boolean | null
-    gpgcheck: boolean | null
+    delete?: boolean
+    gpgcheck?: boolean
     gpg_keys: string[]
     module_hotfixes: boolean
   }
   github_release: { repository: string; release_count: number; asset_patterns: string[] }
   schedule: { enabled: boolean; cron: string; overlap: string }
 }
-export interface Configuration {
+export type Configuration = {
   listen: string
   port: number
   path: string
@@ -57,27 +57,28 @@ export interface Configuration {
   }
   sources: Source[]
 }
-export interface ConfigView {
+export type ConfigView = {
   config: Configuration
-  revision: string
+  revision: string // from the ETag; not part of the response body
   token_configured: boolean
   proxy_configured: boolean
   restart_required: boolean
   file: string
-  warning?: string
+  warning?: { code: string; message: string; details?: Record<string, unknown> }
 }
-export interface Attempt {
+export type Attempt = {
   number: number
   candidate: string
   started_at: string
   ended_at?: string
   error_code: string
   error: string
+  error_details?: Record<string, unknown>
   exit_code: number
   log_cleared: boolean
-  received_bytes?: number | null
+  received_bytes?: number
 }
-export interface Run {
+export type Run = {
   id: number
   source_id: string
   name: string
@@ -88,36 +89,37 @@ export interface Run {
   created_at: string
   started_at?: string
   ended_at?: string
-  elapsed_seconds: number
-  budget_seconds: number
+  elapsed_ms: number
+  budget_ms: number
   candidate_index: number
   error_code: string
   error: string
+  error_details?: Record<string, unknown>
   progress: {
     phase: string
-    received_bytes?: number | null
+    received_bytes?: number
     received_incomplete?: boolean
-    bytes: number
-    total: number
-    percent: number | null
-    speed: number
-    eta_seconds: number | null
+    transferred_bytes: number
+    total_bytes: number
+    percent?: number
+    speed_bytes_per_second: number
+    eta_ms?: number
     files: number
     success: number
     failed: number
     skipped: number
   }
   attempts: Attempt[]
-  events: { at: string; message: string }[]
+  events: { at: string; code: string; message: string; details?: Record<string, unknown> }[]
   snapshot: { source: Source; settings: Configuration['settings'] }
 }
-export interface Publication {
+export type Publication = {
   source_id: string
   dest: string
   current: { id: string; directory: string; published_at: string }
   previous: unknown[]
 }
-export interface SystemInfo {
+export type SystemInfo = {
   timezone: string
   utc_offset_seconds: number
   version: string
@@ -135,16 +137,23 @@ export interface SystemInfo {
     tls: Configuration['tls']
   }
   publications: Publication[]
-  downloads: { active: number; requests: number; bytes: number; capacity: number }
+  downloads: {
+    active: number
+    requests: number
+    sent_bytes: number
+    capacity: number
+    large_capacity: number
+    metadata_capacity: number
+  }
   schedules: Record<string, string>
 }
-export interface SystemChecks {
+export type SystemChecks = {
   reflink: { status: 'supported' | 'unsupported' | 'error'; detail: string }
   storage: {
-    total: number
-    available: number
-    reserve: number
-    required: number
+    total_bytes: number
+    available_bytes: number
+    reserve_bytes: number
+    required_bytes: number
     workers: number
     previous: number
     work_directories: number
@@ -157,17 +166,17 @@ export interface SystemChecks {
   mirror_writable: boolean
   github_token_configured: boolean
   github_proxy_configured: boolean
-  publication_issues?: { source_id: string; error: string }[]
+  publication_issues?: { source_id: string; code: string; error: string }[]
 }
-export interface AnalyticsStats {
+export type AnalyticsStats = {
   runs: number
   succeeded: number
   failed: number
   cancelled: number
   active: number
   duration_samples: number
-  elapsed_seconds: number
-  bytes: number
+  elapsed_ms: number
+  transferred_bytes: number
   files: number
   completed: number
   reused: number
@@ -176,14 +185,14 @@ export interface AnalyticsStats {
   retried_runs: number
   fallback_succeeded: number
 }
-export interface AnalyticsDay extends AnalyticsStats {
+export type AnalyticsDay = {
   date: string
-}
-export interface AnalyticsSource extends AnalyticsStats {
+} & AnalyticsStats
+export type AnalyticsSource = {
   id: string
   name: string
-}
-export interface Analytics {
+} & AnalyticsStats
+export type Analytics = {
   type: SourceType
   from: string
   until: string

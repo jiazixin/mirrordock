@@ -1,45 +1,47 @@
 package observability
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
-	"mirrordock/internal/config"
 	"os"
 	"path/filepath"
 
 	"golang.org/x/sys/unix"
+
+	"mirrordock/internal/config"
 )
 
-// Open returns a logger and a close function; stdout remains owned by the process.
-func Open(c config.Log, file string) (*slog.Logger, func() error, error) {
+// Open returns a logger and a close function. The logger writes to stdout
+// unless c.Path names a log file, resolved against the configuration file;
+// stdout remains owned by the caller and is never closed.
+func Open(c config.Log, file string, stdout io.Writer) (*slog.Logger, func() error, error) {
 	var level slog.Level
 	if err := level.UnmarshalText([]byte(c.Level)); err != nil {
 		return nil, nil, fmt.Errorf("log.level: %w", err)
 	}
 	if c.Format != "json" && c.Format != "text" {
-		return nil, nil, fmt.Errorf("log.format 只支持 json、text")
+		return nil, nil, errors.New("log.format: must be json or text")
 	}
-	var output io.Writer = os.Stdout
+	output := stdout
 	closeLog := func() error { return nil }
 	if c.Path != "" {
 		p := config.Resolve(file, c.Path)
-		if err := os.MkdirAll(filepath.Dir(p), 0700); err != nil {
-			return nil, nil, fmt.Errorf("创建日志目录: %w", err)
+		if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+			return nil, nil, fmt.Errorf("create log directory: %w", err)
 		}
 		// A FIFO must fail without waiting for a reader during startup.
-		f, err := os.OpenFile(p, os.O_CREATE|os.O_WRONLY|os.O_APPEND|unix.O_NONBLOCK, 0600)
+		f, err := os.OpenFile(p, os.O_CREATE|os.O_WRONLY|os.O_APPEND|unix.O_NONBLOCK, 0o600)
 		if err != nil {
-			return nil, nil, fmt.Errorf("打开日志文件: %w", err)
+			return nil, nil, fmt.Errorf("open log file: %w", err)
 		}
 		info, err := f.Stat()
 		if err != nil || !info.Mode().IsRegular() {
-			_ = f.Close()
-			return nil, nil, fmt.Errorf("log.path 必须是普通文件")
+			return nil, nil, errors.Join(errors.New("log.path: must be a regular file"), err, f.Close())
 		}
-		if err := f.Chmod(0600); err != nil {
-			_ = f.Close()
-			return nil, nil, fmt.Errorf("设置日志文件权限: %w", err)
+		if err := f.Chmod(0o600); err != nil {
+			return nil, nil, errors.Join(fmt.Errorf("set log file permissions: %w", err), f.Close())
 		}
 		output, closeLog = f, f.Close
 	}

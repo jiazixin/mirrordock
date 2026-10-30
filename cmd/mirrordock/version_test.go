@@ -6,6 +6,7 @@ import (
 )
 
 func TestReadBuild(t *testing.T) {
+	t.Parallel()
 	const revision = "0123456789abcdef0123456789abcdef01234567"
 	vcs := func(modified string) []debug.BuildSetting {
 		return []debug.BuildSetting{
@@ -30,6 +31,7 @@ func TestReadBuild(t *testing.T) {
 		{"blank release", " ", &debug.BuildInfo{Main: debug.Module{Version: "(devel)"}}, "dev"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			if got := readBuild(tc.release, tc.info).String(); got != tc.want {
 				t.Fatalf("got %q, want %q", got, tc.want)
 			}
@@ -38,8 +40,10 @@ func TestReadBuild(t *testing.T) {
 }
 
 func TestReadBuildKeepsCommitTime(t *testing.T) {
-	b := readBuild("dev", &debug.BuildInfo{Settings: []debug.BuildSetting{{Key: "vcs.time", Value: "2026-10-01T12:00:00Z"}}})
-	if b.Time != "2026-10-01T12:00:00Z" || b.Revision != "" || b.Version != "dev" {
-		t.Fatalf("got %+v", b)
+	t.Parallel()
+	got := readBuild("dev", &debug.BuildInfo{Settings: []debug.BuildSetting{{Key: "vcs.time", Value: "2026-10-01T12:00:00Z"}}})
+	want := buildInfo{Version: "dev", Time: "2026-10-01T12:00:00Z"}
+	if got != want {
+		t.Fatalf("got %+v, want %+v", got, want)
 	}
 }

@@ -1,4 +1,5 @@
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { errorText } from '../../app/errors'
+import { computed, onScopeDispose, ref, watch } from 'vue'
 import { api } from '../../app/api'
 import type { Run } from '../../app/types'
 
@@ -52,7 +53,7 @@ export function useRunDetail(id: () => number) {
     detailController = controller
     loading.value = true
     try {
-      const result = await api<Run>(`/runs/${id()}`, 'GET', undefined, controller.signal)
+      const result = await api<Run>({ path: `/runs/${id()}`, signal: controller.signal })
       if (controller.signal.aborted) return
       const previous = run.value?.attempts.at(-1)?.number
       if (previous === undefined || attempt.value === previous)
@@ -60,10 +61,11 @@ export function useRunDetail(id: () => number) {
       run.value = result
       detailError.value = ''
     } catch (e) {
-      if (!controller.signal.aborted) detailError.value = e instanceof Error ? e.message : String(e)
+      if (!controller.signal.aborted) detailError.value = errorText(e)
     } finally {
       if (detailController === controller) {
         loading.value = false
+        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- the compared state can change while awaiting
         if (alive && !finished.value && document.visibilityState === 'visible')
           detailTimer = setTimeout(() => void refreshDetail(), 3000)
       }
@@ -87,27 +89,30 @@ export function useRunDetail(id: () => number) {
       // Bound each turn to 2 MiB. A terminal task with a longer backlog continues
       // on later turns until EOF; only the last 2 MiB of text is retained.
       for (let page = 0; page < 16; page++) {
-        const payload = await api<{ text: string; next_offset: number }>(
-          `/runs/${id()}/logs?attempt=${attempt.value}&offset=${offset}`,
-          'GET',
-          undefined,
-          controller.signal,
-        )
+        const payload = await api<{ text: string; next_offset_bytes: number; cleared?: boolean }>({
+          path: `/runs/${id()}/logs?attempt=${attempt.value}&offset_bytes=${offset}`,
+          signal: controller.signal,
+        })
         if (controller.signal.aborted) return
-        const consumed = payload.next_offset - offset
+        if (payload.cleared) {
+          text.value = '日志已清理；状态和错误摘要仍保留。'
+          break
+        }
+        const consumed = payload.next_offset_bytes - offset
         if (consumed === 0 && payload.text) text.value = payload.text
         else text.value = (text.value + payload.text).slice(-(2 << 20))
-        offset = payload.next_offset
+        offset = payload.next_offset_bytes
         backlog = consumed >= 128 << 10
         if (!backlog) break
       }
       error.value = ''
     } catch (e) {
       failed = true
-      if (!controller.signal.aborted) error.value = e instanceof Error ? e.message : String(e)
+      if (!controller.signal.aborted) error.value = errorText(e)
     } finally {
       if (logController === controller) {
         logLoading.value = false
+        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- the compared state can change while awaiting
         if (canReadLog() && (finalReadPending || (!failed && backlog) || !finished.value))
           logTimer = setTimeout(() => void refreshLog(), 3000)
       }
@@ -162,7 +167,7 @@ export function useRunDetail(id: () => number) {
     }
   }
   document.addEventListener('visibilitychange', visibilityChanged)
-  onBeforeUnmount(() => {
+  onScopeDispose(() => {
     alive = false
     stopDetail()
     stopLog()

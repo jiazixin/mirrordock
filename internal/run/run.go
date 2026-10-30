@@ -1,0 +1,1822 @@
+// Package run schedules and executes mirror sync runs with retries, and keeps
+// their records, logs and analytics.
+// Call Start after binding the HTTP listener, then Shutdown before closing storage.
+package run
+
+import (
+	"cmp"
+	"context"
+	"encoding/json/v2"
+	"errors"
+	"fmt"
+	"io"
+	"log/slog"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+	"sync"
+	"time"
+	"unicode/utf8"
+
+	"github.com/robfig/cron/v3"
+
+	"mirrordock/internal/config"
+	"mirrordock/internal/database"
+	mirrorfs "mirrordock/internal/mirror"
+	"mirrordock/internal/syncer"
+	"mirrordock/internal/timefmt"
+)
+
+// Snapshot is the source and settings a run started with.
+type Snapshot struct {
+	Source   config.Source   `json:"source"`
+	Settings config.Settings `json:"settings"`
+}
+
+// Attempt is one execution attempt of a run.
+type Attempt struct {
+	ReceivedBytes *int64         `json:"received_bytes,omitzero"`
+	Number        int            `json:"number"`
+	Candidate     string         `json:"candidate"`
+	StartedAt     timefmt.Time   `json:"started_at"`
+	EndedAt       timefmt.Time   `json:"ended_at,omitzero"`
+	ErrorCode     string         `json:"error_code"`
+	Error         string         `json:"error"`
+	ErrorDetails  map[string]any `json:"error_details,omitzero"`
+	ExitCode      int            `json:"exit_code"`
+	LogCleared    bool           `json:"log_cleared"`
+}
+
+// Event is a timestamped entry in the history of a run. Code selects the
+// client's text; Message contains English diagnostics.
+type Event struct {
+	At      timefmt.Time   `json:"at"`
+	Code    string         `json:"code,omitzero"`
+	Message string         `json:"message"`
+	Details map[string]any `json:"details,omitzero"`
+}
+
+// Run is the persistent record of one mirror sync run.
+type Run struct {
+	ID             int64           `json:"id"`
+	SourceID       string          `json:"source_id"`
+	Name           string          `json:"name"`
+	Type           string          `json:"type"`
+	Dest           string          `json:"dest"`
+	State          string          `json:"state"`
+	Trigger        string          `json:"trigger"`
+	CreatedAt      timefmt.Time    `json:"created_at"`
+	StartedAt      timefmt.Time    `json:"started_at,omitzero"`
+	EndedAt        timefmt.Time    `json:"ended_at,omitzero"`
+	ElapsedMillis  int64           `json:"elapsed_ms"`
+	BudgetMillis   int64           `json:"budget_ms"`
+	RetryCount     int             `json:"retry_count"`
+	RetryAt        timefmt.Time    `json:"retry_at,omitzero"`
+	CandidateIndex int             `json:"candidate_index"`
+	Progress       syncer.Progress `json:"progress"`
+	Attempts       []Attempt       `json:"attempts"`
+	Events         []Event         `json:"events"`
+	ErrorCode      string          `json:"error_code"`
+	// Error contains English diagnostics; clients display the code mapping.
+	Error        string         `json:"error"`
+	ErrorDetails map[string]any `json:"error_details,omitzero"`
+	Snapshot     Snapshot       `json:"snapshot"`
+}
+
+// setError records a run failure: English text for diagnostics, and the code
+// and details clients turn into their own message.
+func (r *Run) setError(code, message string, details map[string]any) {
+	r.ErrorCode, r.Error, r.ErrorDetails = code, message, details
+}
+
+// SetID sets the database ID of the run.
+func (r *Run) SetID(id int64) { r.ID = id }
+
+var terminalStates = []string{"succeeded", "failed", "timed_out", "cancelled"}
+
+// Terminal reports whether state is a final run state.
+func Terminal(state string) bool { return slices.Contains(terminalStates, state) }
+
+// reserved states keep the source's work directory and block new runs.
+func reserved(state string) bool { return !Terminal(state) }
+
+// active describes a run whose executor is currently running.
+type active struct {
+	cancel context.CancelCauseFunc
+	start  time.Time
+	// base is the elapsed budget consumed before this execution started.
+	base int64
+	// intent is the state requested by pause, cancel or shutdown.
+	intent string
+}
+
+func (a *active) elapsed(now time.Time) int64 {
+	return a.base + max(0, now.Sub(a.start).Milliseconds())
+}
+
+// Engine timing defaults.
+const (
+	checkpointInterval = 5 * time.Second
+	cleanupInterval    = 5 * time.Minute
+	cleanupTimeout     = 30 * time.Second
+	defaultRetryDelay  = 5 * time.Second
+	queryTimeout       = 5 * time.Second
+	busyPollInterval   = time.Second
+	idlePollInterval   = 500 * time.Millisecond
+	maxRetryDoublings  = 4
+	logReadLimit       = 128 << 10
+)
+
+// Engine queues, schedules and executes mirror sync runs. lifecycleMu guards
+// start/stop; mu guards run state, configMu serializes configuration writes,
+// and logMu/clearMu serialize log access and cleanup. now is fixed before Start.
+type Engine struct {
+	now    func() time.Time
+	logger *slog.Logger
+	cfg    *config.Manager
+	store  *database.Store
+	mirror *mirrorfs.Manager
+	runner syncer.Runner
+	// dataDir is the state directory; attempt logs live under its logs/.
+	dataDir     string
+	cancel      context.CancelFunc
+	wg          sync.WaitGroup
+	lifecycleMu sync.Mutex
+	started     bool
+	stopped     chan struct{}
+	done        chan struct{}
+	stopOnce    sync.Once
+	scheduled   chan string
+
+	// mu guards current, pending, working and clearing. configMu orders
+	// configuration changes with enqueueing and logMu orders log reads with
+	// log removal; both are taken before mu.
+	mu       sync.Mutex
+	configMu sync.Mutex
+	// current holds every reserved run by ID, pending the queued ones in
+	// dispatch order, and working the runs whose executor is running.
+	current map[int64]*Run
+	pending []*Run
+	working map[int64]*active
+
+	logMu   sync.RWMutex
+	clearMu sync.Mutex
+	// clearing marks runs whose logs are being removed; the channel closes
+	// when that removal ends.
+	clearing  map[int64]chan struct{}
+	removeLog func(string) error
+
+	wake        chan struct{}
+	cleanupWake chan struct{}
+	// Replaced in tests; production uses the mirror manager's admission and
+	// capacity checks and the default intervals.
+	admitSync          func(int64) error
+	storageCheck       func() error
+	checkpointInterval time.Duration
+	retryDelay         time.Duration
+
+	cron        *cron.Cron
+	location    *time.Location
+	scheduleIDs map[string]cron.EntryID
+
+	ConfigValidator func(config.Config) error
+	ConfigApplied   func(context.Context) error
+}
+
+// New creates a run engine and recovers unfinished runs from the store.
+func New(ctx context.Context, params NewOptions) (*Engine, error) {
+	cfg := params.Config
+	store := params.Store
+	mirror := params.Mirror
+	runner := params.Runner
+	location := params.Location
+	logger := params.Logger
+
+	e := &Engine{
+		now:                time.Now,
+		cfg:                cfg,
+		store:              store,
+		mirror:             mirror,
+		runner:             runner,
+		dataDir:            config.Resolve(cfg.File(), cfg.Startup().Path),
+		stopped:            make(chan struct{}),
+		done:               make(chan struct{}),
+		scheduled:          make(chan string, 1024),
+		current:            map[int64]*Run{},
+		working:            map[int64]*active{},
+		clearing:           map[int64]chan struct{}{},
+		wake:               make(chan struct{}, 1),
+		cleanupWake:        make(chan struct{}, 1),
+		location:           location,
+		logger:             logger,
+		retryDelay:         defaultRetryDelay,
+		checkpointInterval: checkpointInterval,
+		scheduleIDs:        map[string]cron.EntryID{},
+		admitSync:          mirror.BeginSync,
+		storageCheck:       mirror.CheckSpace,
+		removeLog:          os.Remove,
+	}
+	if err := e.recover(ctx); err != nil {
+		return nil, err
+	}
+	e.cron = cron.New(cron.WithLocation(location), cron.WithChain(cron.Recover(cron.DefaultLogger)))
+	if err := e.Schedules(ctx); err != nil {
+		return nil, err
+	}
+	return e, nil
+}
+
+// recover loads every unfinished run in ID pages and decides how it resumes
+// after a restart.
+func (e *Engine) recover(ctx context.Context) error {
+	sources := e.cfg.Current().Sources
+	var after int64
+	for {
+		records, err := e.store.RecoverableRuns(ctx, after)
+		if err != nil {
+			return err
+		}
+		for _, document := range records {
+			r := &Run{}
+			if err := json.Unmarshal(document, r); err != nil {
+				return err
+			}
+			after = r.ID
+			previousState := r.State
+			e.recoverRun(r, sources)
+			if r.State != previousState {
+				if err := e.save(ctx, r); err != nil {
+					return err
+				}
+			}
+			if reserved(r.State) {
+				e.current[r.ID] = r
+			}
+			if r.State == "queued" {
+				e.pending = append(e.pending, r)
+			}
+		}
+		if len(records) < database.PageSize {
+			break
+		}
+	}
+	slices.SortFunc(e.pending, func(a, b *Run) int { return cmp.Compare(a.ID, b.ID) })
+	return nil
+}
+
+// recoverRun applies the restart rules to one unfinished run: an execution
+// stopped by the restart continues with its remaining budget, unless the
+// source changed in YAML meanwhile or the budget is spent.
+func (e *Engine) recoverRun(r *Run, sources []config.Source) {
+	if r.State == "running" || r.State == "pausing" {
+		if r.State == "pausing" {
+			r.State = "paused"
+		} else {
+			r.State = "interrupted"
+		}
+		r.setError(codeServiceInterrupted, "service interrupted; the remaining budget is kept", nil)
+		e.errorEvent(r)
+		if len(r.Attempts) > 0 {
+			last := &r.Attempts[len(r.Attempts)-1]
+			last.EndedAt = timefmt.From(e.now())
+			last.ErrorCode = r.ErrorCode
+		}
+	}
+	conflict := sourceConflict(r, sources)
+	if conflict != "" {
+		// YAML may change while stopped. Never run a snapshot against a
+		// removed, retyped, moved or disabled source after restart.
+		e.stopForSource(r, conflict)
+	}
+	if r.State != "interrupted" || r.ErrorCode != codeServiceInterrupted {
+		return
+	}
+	switch {
+	case r.ElapsedMillis >= r.BudgetMillis:
+		r.State = "timed_out"
+		r.setError(codeTaskTimeout, "total execution time reached the run budget", nil)
+		r.EndedAt = timefmt.From(e.now())
+	case conflict == "":
+		r.State = "queued"
+		r.EndedAt = timefmt.Time{}
+		r.setError("", "", nil)
+		e.event(eventOptions{r: r, code: eventRequeued, message: "service recovered; queued again with the remaining budget and retries", details: nil})
+	}
+}
+
+// Start starts dispatch and scheduling after the application has bound its listener.
+// Shutdown must finish before the database or mirror manager is closed.
+func (e *Engine) Start(ctx context.Context) error {
+	e.lifecycleMu.Lock()
+	defer e.lifecycleMu.Unlock()
+	select {
+	case <-e.stopped:
+		return ErrStopped
+	default:
+	}
+	if e.started {
+		return nil
+	}
+	ctx, e.cancel = context.WithCancel(ctx)
+	e.started = true
+	e.cron.Start()
+	e.wg.Go(func() { e.dispatch(ctx) })
+	e.wg.Go(func() { e.cleanupLoop(ctx) })
+	e.wg.Go(func() { e.checkpointLoop(ctx) })
+	e.wg.Go(func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case id := <-e.scheduled:
+				if _, err := e.Enqueue(ctx, id, "schedule"); err != nil {
+					e.logger.Info("schedule_skipped", "source_id", id, "error", err)
+				}
+			}
+		}
+	})
+	e.requestCleanup()
+	return nil
+}
+
+// cleanupLoop reclaims finished work trees and expired generations
+// periodically and whenever a run leaves the reserved states.
+func (e *Engine) cleanupLoop(ctx context.Context) {
+	ticker := time.NewTicker(cleanupInterval)
+	defer ticker.Stop()
+	for {
+		var now time.Time
+		select {
+		case <-ctx.Done():
+			return
+		case now = <-ticker.C:
+		case <-e.cleanupWake:
+			now = e.now()
+		}
+		ctx, cancel := context.WithTimeout(ctx, cleanupTimeout)
+		if err := e.mirror.CleanupWork(ctx, e.workPolicy(now)); err != nil {
+			e.logger.Error("work_cleanup_failed", "error", err)
+		}
+		if err := e.mirror.Collect(ctx, now); err != nil {
+			e.logger.Error("generation_collect_failed", "error", err)
+		}
+		cancel()
+	}
+}
+
+// checkpointLoop persists the elapsed budget of running tasks and stops them
+// when the mirror filesystem drops below its safety margin.
+func (e *Engine) checkpointLoop(ctx context.Context) {
+	ticker := time.NewTicker(e.checkpointInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			e.checkpoint(ctx)
+		}
+	}
+}
+
+func (e *Engine) checkpoint(ctx context.Context) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	spaceErr := e.storageCheck()
+	lowSpace := errors.Is(spaceErr, mirrorfs.ErrLowSpace)
+	if spaceErr != nil && !lowSpace {
+		e.logger.Error("capacity_check_failed", "error", spaceErr)
+	}
+	for id, execution := range e.working {
+		r := e.current[id]
+		// Publication only renames the finished work tree on the same
+		// filesystem; stopping it would discard a completed sync.
+		if lowSpace && r.Progress.Phase != "publish" {
+			execution.cancel(spaceErr)
+		}
+		r.ElapsedMillis = execution.elapsed(e.now())
+		if err := e.save(ctx, r); err != nil {
+			e.logger.Error("progress_save_failed", "error", err)
+		}
+	}
+}
+
+// Shutdown stops scheduling, cancels execution and waits within ctx.
+func (e *Engine) Shutdown(ctx context.Context) error {
+	e.stopOnce.Do(func() {
+		e.lifecycleMu.Lock()
+		close(e.stopped)
+		if e.cancel != nil {
+			e.cancel()
+		}
+		e.lifecycleMu.Unlock()
+		cronDone := e.cron.Stop().Done()
+		e.mu.Lock()
+		for _, execution := range e.working {
+			if execution.intent == "" {
+				execution.intent = "interrupted"
+			}
+			execution.cancel(errors.New("service shutdown"))
+		}
+		e.mu.Unlock()
+		var finalizer sync.WaitGroup
+		finalizer.Go(func() {
+			<-cronDone
+			e.wg.Wait()
+			close(e.done)
+		})
+	})
+	select {
+	case <-e.done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (e *Engine) event(params eventOptions) {
+	r := params.r
+	code := params.code
+	message := params.message
+	details := params.details
+
+	r.Events = append(r.Events, Event{At: timefmt.From(e.now()), Code: code, Message: message, Details: details})
+}
+
+// errorEvent records the current run error in the history.
+func (e *Engine) errorEvent(r *Run) {
+	details := map[string]any{"error_code": r.ErrorCode}
+	for key, value := range r.ErrorDetails {
+		details[key] = value
+	}
+	e.event(eventOptions{r: r, code: eventRunError, message: r.Error, details: details})
+}
+
+func (e *Engine) save(ctx context.Context, r *Run) error {
+	return e.store.SaveRun(ctx, r.ID, r.State, r)
+}
+
+// wakeDispatcher nudges the idle dispatcher without blocking.
+func (e *Engine) wakeDispatcher() {
+	select {
+	case e.wake <- struct{}{}:
+	default:
+	}
+}
+
+func (e *Engine) busySource(id string) bool {
+	for _, r := range e.current {
+		if r.SourceID == id && reserved(r.State) {
+			return true
+		}
+	}
+	return false
+}
+
+func (e *Engine) validateChange(c config.Config) error {
+	for _, r := range e.current {
+		if !reserved(r.State) {
+			continue
+		}
+		index := slices.IndexFunc(c.Sources, func(s config.Source) bool { return s.ID == r.SourceID })
+		if index < 0 || c.Sources[index].Dest != r.Dest || c.Sources[index].Type != r.Type {
+			return ErrReservedSourceChange
+		}
+	}
+	return nil
+}
+
+// Source conflict codes describe why a reserved run no longer matches YAML.
+const (
+	sourceRemoved  = "source_removed"
+	sourceChanged  = "source_changed"
+	sourceDisabled = "source_disabled"
+)
+
+func sourceConflict(r *Run, sources []config.Source) string {
+	index := slices.IndexFunc(sources, func(s config.Source) bool { return s.ID == r.SourceID })
+	switch {
+	case index < 0:
+		return sourceRemoved
+	case sources[index].Type != r.Type || sources[index].Dest != r.Dest:
+		return sourceChanged
+	case !sources[index].Enabled:
+		return sourceDisabled
+	}
+	return ""
+}
+
+// stopForSource cancels runs whose source identity is gone. A disabled source
+// keeps its queued run resumable after it is enabled again.
+func (e *Engine) stopForSource(r *Run, conflict string) {
+	switch conflict {
+	case sourceRemoved, sourceChanged:
+		if conflict == sourceRemoved {
+			r.setError(conflict, "source removed from the configuration; run cancelled", nil)
+		} else {
+			r.setError(conflict, "source type or dest changed; run cancelled", nil)
+		}
+		r.State = "cancelled"
+		r.EndedAt = timefmt.From(e.now())
+	case sourceDisabled:
+		if r.State != "queued" {
+			return
+		}
+		r.State = "interrupted"
+		r.setError(conflict, "source disabled; enable it to resume, or cancel the run", nil)
+	default:
+		return
+	}
+	details := map[string]any{"error_code": r.ErrorCode}
+	r.Events = append(r.Events, Event{At: timefmt.From(e.now()), Code: eventRunError, Message: r.Error, Details: details})
+}
+
+func resumeConflict(conflict string) error {
+	switch conflict {
+	case sourceRemoved:
+		return ErrSourceRemoved
+	case sourceChanged:
+		return ErrSourceChanged
+	case sourceDisabled:
+		return ErrSourceDisabled
+	}
+	return nil
+}
+
+// ApplyConfig validates and saves configuration c if revision still matches,
+// then applies it to dispatch, publications and schedules. A failed follow-up
+// step returns *PartialApplyError.
+func (e *Engine) ApplyConfig(ctx context.Context, params ApplyConfigOptions) error {
+	c := params.Config
+	revision := params.Revision
+	token := params.Token
+	proxy := params.Proxy
+
+	e.configMu.Lock()
+	defer e.configMu.Unlock()
+	e.mu.Lock()
+	if err := e.validateChange(c); err != nil {
+		e.mu.Unlock()
+		return err
+	}
+	err := e.cfg.Save(config.SaveOptions{Config: c, Revision: revision, TokenUpdate: token, ProxyUpdate: proxy})
+	e.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	// A raised concurrency limit may admit queued runs immediately.
+	e.wakeDispatcher()
+	reconcileErr := e.mirror.Reconcile(ctx, e.cfg.Current().Sources)
+	if reconcileErr != nil {
+		reconcileErr = fmt.Errorf("configuration saved, but connecting publication directories failed: %w", reconcileErr)
+	}
+	return partialApply(errors.Join(reconcileErr, e.Schedules(ctx)))
+}
+
+// PartialApplyError means YAML was already saved or loaded, but a follow-up
+// step failed. Callers must adopt the new revision and show the warning.
+type PartialApplyError struct{ Err error }
+
+// Error implements error.
+func (e *PartialApplyError) Error() string { return e.Err.Error() }
+
+// Unwrap returns the underlying error.
+func (e *PartialApplyError) Unwrap() error { return e.Err }
+
+func partialApply(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &PartialApplyError{Err: err}
+}
+
+// Reload reads the configuration file again and applies it when the change is
+// valid.
+func (e *Engine) Reload(ctx context.Context) error {
+	e.configMu.Lock()
+	defer e.configMu.Unlock()
+	e.mu.Lock()
+	err := e.cfg.ReloadChecked(func(c config.Config) error {
+		if err := e.validateChange(c); err != nil {
+			return err
+		}
+		if e.ConfigValidator != nil {
+			return e.ConfigValidator(c)
+		}
+		return nil
+	})
+	var appliedErr error
+	if err == nil && e.ConfigApplied != nil {
+		appliedErr = e.ConfigApplied(ctx)
+	}
+	e.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	e.wakeDispatcher()
+	reconcileErr := e.mirror.Reconcile(ctx, e.cfg.Current().Sources)
+	if reconcileErr != nil {
+		reconcileErr = fmt.Errorf("configuration loaded, but connecting publication directories failed: %w", reconcileErr)
+	}
+	return partialApply(errors.Join(appliedErr, reconcileErr, e.Schedules(ctx)))
+}
+
+// Enqueue queues a new run of source sourceID for trigger.
+func (e *Engine) Enqueue(ctx context.Context, sourceID, trigger string, request ...database.RequestIdentity) (*Run, error) {
+	e.configMu.Lock()
+	defer e.configMu.Unlock()
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	select {
+	case <-e.stopped:
+		return nil, ErrStopped
+	default:
+	}
+	if e.cfg.View().RestartRequired {
+		return nil, ErrRestartRequired
+	}
+	c := e.cfg.Current()
+	index := slices.IndexFunc(c.Sources, func(s config.Source) bool { return s.ID == sourceID })
+	if index < 0 {
+		return nil, ErrSourceNotFound
+	}
+	source := c.Sources[index]
+	if !source.Enabled {
+		return nil, ErrSourceDisabled
+	}
+	if e.busySource(source.ID) {
+		return nil, ErrSourceBusy
+	}
+	budget, _ := time.ParseDuration(c.Settings.TaskTimeout)
+	// The snapshot is a durable run fact: credentials are read again at
+	// execution time and never stored with the run.
+	settings := c.Settings
+	settings.GitHub.Token = ""
+	settings.GitHub.Proxy = ""
+	settings.Rsync.Proxy = ""
+	settings.Notifications = nil
+	r := &Run{
+		SourceID:     source.ID,
+		Name:         source.Name,
+		Type:         source.Type,
+		Dest:         source.Dest,
+		State:        "queued",
+		Trigger:      trigger,
+		CreatedAt:    timefmt.From(e.now()),
+		BudgetMillis: budget.Milliseconds(),
+		Progress:     syncer.Progress{Phase: "prepare"},
+		Snapshot:     Snapshot{Source: publicSource(source), Settings: settings},
+	}
+	e.event(eventOptions{r: r, code: eventQueued, message: "run queued", details: nil})
+	id, err := e.store.CreateRun(ctx, database.CreateRunOptions{Source: source.ID, State: r.State, Created: r.CreatedAt.Time(), Value: r, Request: request})
+	if err != nil {
+		return nil, err
+	}
+	r.ID = id
+	e.current[id] = r
+	e.pending = append(e.pending, r)
+	e.wakeDispatcher()
+	return cloneRun(r), nil
+}
+
+func cloneRun(r *Run) *Run {
+	encoded, err := json.Marshal(r)
+	if err != nil {
+		panic(fmt.Errorf("clone run: %w", err))
+	}
+	var out Run
+	if err := json.Unmarshal(encoded, &out); err != nil {
+		panic(fmt.Errorf("decode cloned run: %w", err))
+	}
+	return &out
+}
+
+// Action applies pause, resume or cancel to run id.
+func (e *Engine) Action(ctx context.Context, id int64, action string) error {
+	for {
+		e.mu.Lock()
+		done := e.clearing[id]
+		if done == nil {
+			break
+		}
+		e.mu.Unlock()
+		select {
+		case <-done:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	defer e.mu.Unlock()
+	r := e.current[id]
+	if r == nil {
+		return ErrRunNotActive
+	}
+	switch action {
+	case "pause":
+		if r.State == "queued" {
+			r.State = "paused"
+		} else if r.State == "running" {
+			r.State = "pausing"
+			e.working[id].intent = "paused"
+			e.working[id].cancel(errors.New("paused"))
+		} else {
+			return ErrNotPausable
+		}
+	case "resume":
+		if e.working[id] != nil {
+			return ErrExecutorStopping
+		}
+		if r.State != "paused" && r.State != "interrupted" {
+			return ErrNotResumable
+		}
+		if r.ElapsedMillis >= r.BudgetMillis {
+			return ErrBudgetExhausted
+		}
+		if err := resumeConflict(sourceConflict(r, e.cfg.Current().Sources)); err != nil {
+			return err
+		}
+		r.State = "queued"
+		r.setError("", "", nil)
+	case "cancel":
+		if execution := e.working[id]; execution != nil {
+			execution.intent = "cancelled"
+			execution.cancel(errors.New("cancelled"))
+		} else {
+			r.State = "cancelled"
+			r.EndedAt = timefmt.From(e.now())
+		}
+	default:
+		return ErrUnknownAction
+	}
+	e.event(eventOptions{r: r, code: eventAction, message: "action: " + action, details: map[string]any{"action": action}})
+	if err := e.save(ctx, r); err != nil {
+		if e.working[id] == nil {
+			r.State = "interrupted"
+		}
+		r.setError(codePersistenceFailed, "saving the action result failed; the work directory is kept", nil)
+		return err
+	}
+	if action == "resume" {
+		e.pending = append(e.pending, r)
+		e.wakeDispatcher()
+	}
+	if !reserved(r.State) && e.working[id] == nil {
+		delete(e.current, id)
+		e.requestCleanup()
+	}
+	return nil
+}
+
+// stopQueued persists a source conflict found at dequeue time. Callers hold e.mu.
+func (e *Engine) stopQueued(ctx context.Context, r *Run, conflict string) {
+	previous := *r
+	e.stopForSource(r, conflict)
+	if err := e.save(ctx, r); err != nil {
+		e.logger.Error("source_conflict_save_failed", "run_id", r.ID, "error", err)
+		*r = previous
+		r.State = "interrupted"
+		r.setError(codePersistenceFailed, "saving the run state failed", nil)
+		return
+	}
+	if !reserved(r.State) {
+		delete(e.current, r.ID)
+		e.requestCleanup()
+	}
+}
+
+func (e *Engine) workPolicy(now time.Time) mirrorfs.WorkPolicy {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	policy := mirrorfs.WorkPolicy{Sources: e.cfg.Current().Sources, Now: now}
+	for _, r := range e.current {
+		if r.State == "queued" && r.Progress.Phase == "waiting_space" {
+			policy.Waiting = append(policy.Waiting, r.SourceID)
+		}
+	}
+	return policy
+}
+
+func (e *Engine) requestCleanup() {
+	select {
+	case e.cleanupWake <- struct{}{}:
+	default:
+	}
+}
+
+// liveCopy returns a copy of a reserved run with its current elapsed budget,
+// or nil when the run is not held in memory. Callers hold e.mu.
+func (e *Engine) liveCopy(id int64) *Run {
+	r := e.current[id]
+	if r == nil {
+		return nil
+	}
+	out := cloneRun(r)
+	if execution := e.working[id]; execution != nil {
+		out.ElapsedMillis = execution.elapsed(e.now())
+	}
+	return out
+}
+
+// Get returns run id.
+func (e *Engine) Get(ctx context.Context, id int64) (*Run, error) {
+	ctx, cancel := context.WithTimeout(ctx, queryTimeout)
+	defer cancel()
+	e.mu.Lock()
+	live := e.liveCopy(id)
+	e.mu.Unlock()
+	if live != nil {
+		return live, nil
+	}
+	var r Run
+	if err := e.store.Run(ctx, id, &r); err != nil {
+		return nil, err
+	}
+	return &r, nil
+}
+
+// List returns a page of runs matching the filters and the total count.
+func (e *Engine) List(ctx context.Context, params ListOptions) ([]*Run, int, error) {
+	state := params.State
+	source := params.Source
+	limit := params.Limit
+	offset := params.Offset
+	filters := params.Filters
+
+	ctx, cancel := context.WithTimeout(ctx, queryTimeout)
+	defer cancel()
+	records, total, err := e.store.ListRuns(ctx, database.ListRunsOptions{State: state, Source: source, Limit: limit, Offset: offset, Filters: filters})
+	if err != nil {
+		return nil, 0, err
+	}
+	out, err := e.projectRuns(records)
+	return out, total, err
+}
+
+// Latest includes old active tasks and quiet sources even after many newer runs.
+func (e *Engine) Latest(ctx context.Context) ([]*Run, error) {
+	ctx, cancel := context.WithTimeout(ctx, queryTimeout)
+	defer cancel()
+	sources := e.cfg.Current().Sources
+	ids := make([]string, len(sources))
+	for i, source := range sources {
+		ids[i] = source.ID
+	}
+	records, err := e.store.LatestRuns(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	out, err := e.projectRuns(records)
+	slices.SortFunc(out, func(a, b *Run) int { return cmp.Compare(b.ID, a.ID) })
+	return out, err
+}
+
+// projectRuns decodes stored runs and replaces reserved ones with their
+// newer in-memory state.
+func (e *Engine) projectRuns(records [][]byte) ([]*Run, error) {
+	out := []*Run{}
+	for _, document := range records {
+		r := &Run{}
+		if err := json.Unmarshal(document, r); err != nil {
+			return nil, err
+		}
+		e.mu.Lock()
+		if live := e.liveCopy(r.ID); live != nil {
+			r = live
+		}
+		e.mu.Unlock()
+		out = append(out, r)
+	}
+	return out, nil
+}
+
+// dispatch starts queued runs while their source type has a free slot. Each
+// started run executes in its own goroutine; types never share slots.
+func (e *Engine) dispatch(ctx context.Context) {
+	for ctx.Err() == nil {
+		if e.mirror.Busy() {
+			e.markWaitingForDownloads(ctx)
+			if !e.sleep(ctx, busyPollInterval) {
+				return
+			}
+			continue
+		}
+		e.mu.Lock()
+		// Close cancels the context before interrupting working runs under
+		// e.mu; never start a run it can no longer see.
+		if ctx.Err() != nil {
+			e.mu.Unlock()
+			return
+		}
+		r := e.dequeueLocked(ctx)
+		if r == nil {
+			e.mu.Unlock()
+			select {
+			case <-ctx.Done():
+				return
+			case <-e.wake:
+			case <-time.After(idlePollInterval):
+			}
+			continue
+		}
+		if admitErr := e.admitSync(r.ID); admitErr != nil {
+			e.waitForSpaceLocked(ctx, r, admitErr)
+			e.mu.Unlock()
+			e.requestCleanup()
+			if !e.sleep(ctx, busyPollInterval) {
+				return
+			}
+			continue
+		}
+		if r.BudgetMillis-r.ElapsedMillis <= 0 {
+			e.expireLocked(ctx, r)
+			e.mirror.EndSync(r.ID)
+			e.mu.Unlock()
+			continue
+		}
+		e.startLocked(ctx, r)
+		e.mu.Unlock()
+	}
+}
+
+// sleep waits for d and reports false when the engine is closing.
+func (e *Engine) sleep(ctx context.Context, d time.Duration) bool {
+	select {
+	case <-ctx.Done():
+		return false
+	case <-time.After(d):
+		return true
+	}
+}
+
+// markWaitingForDownloads keeps queued runs queued while public downloads
+// use most of the file capacity.
+func (e *Engine) markWaitingForDownloads(ctx context.Context) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	for _, r := range e.pending {
+		if r.State != "queued" || r.Progress.Phase == "waiting_downloads" {
+			continue
+		}
+		r.Progress.Phase = "waiting_downloads"
+		e.event(eventOptions{r: r, code: eventWaitingLoad, message: "public downloads busy; waiting in the queue", details: nil})
+		if err := e.save(ctx, r); err != nil {
+			e.logger.Error("download_wait_save_failed", "error", err)
+		}
+	}
+}
+
+// runningLocked counts executions per source type. Callers hold e.mu.
+func (e *Engine) runningLocked() map[string]int {
+	counts := map[string]int{}
+	for id := range e.working {
+		counts[e.current[id].Type]++
+	}
+	return counts
+}
+
+// dequeueLocked removes and returns the oldest runnable queued run. Runs
+// whose source changed in YAML are stopped instead. Callers hold e.mu.
+func (e *Engine) dequeueLocked(ctx context.Context) *Run {
+	if len(e.pending) == 0 {
+		return nil
+	}
+	current := e.cfg.Current()
+	running := e.runningLocked()
+	kept := e.pending[:0]
+	var chosen *Run
+	for i, candidate := range e.pending {
+		if chosen != nil {
+			kept = append(kept, e.pending[i:]...)
+			break
+		}
+		if candidate.State != "queued" || e.working[candidate.ID] != nil {
+			continue
+		}
+		if conflict := sourceConflict(candidate, current.Sources); conflict != "" {
+			e.stopQueued(ctx, candidate, conflict)
+			continue
+		}
+		if running[candidate.Type] >= current.Settings.Concurrency.Limit(candidate.Type) {
+			kept = append(kept, candidate)
+			continue
+		}
+		chosen = candidate
+	}
+	clear(e.pending[len(kept):])
+	e.pending = kept
+	return chosen
+}
+
+// waitForSpaceLocked requeues r when admission was refused. A failed
+// capacity probe blocks admission without consuming the task, like a
+// confirmed low-space condition. Callers hold e.mu.
+func (e *Engine) waitForSpaceLocked(ctx context.Context, r *Run, admitErr error) {
+	message, details := "mirror disk below its free-space reserve; waiting in the queue", map[string]any(nil)
+	if !errors.Is(admitErr, mirrorfs.ErrLowSpace) {
+		e.logger.Error("admission_capacity_check_failed", "run_id", r.ID, "error", admitErr)
+		message, details = "mirror disk capacity probe failed; waiting in the queue", map[string]any{"probe_failed": true}
+	}
+	if r.Progress.Phase != "waiting_space" {
+		r.Progress.Phase = "waiting_space"
+		e.event(eventOptions{r: r, code: eventWaitingDisk, message: message, details: details})
+		if err := e.save(ctx, r); err != nil {
+			e.logger.Error("space_wait_save_failed", "error", err)
+		}
+	}
+	e.pending = append(e.pending, r)
+}
+
+// expireLocked ends a queued run whose budget was spent before this
+// execution. Callers hold e.mu.
+func (e *Engine) expireLocked(ctx context.Context, r *Run) {
+	r.State = "timed_out"
+	r.EndedAt = timefmt.From(e.now())
+	r.setError(codeTaskTimeout, "total execution time reached the run budget", nil)
+	if err := e.save(ctx, r); err != nil {
+		r.State = "interrupted"
+		r.setError(codePersistenceFailed, "saving the run result failed; the work directory is kept", nil)
+		return
+	}
+	delete(e.current, r.ID)
+	e.requestCleanup()
+}
+
+// startLocked marks an admitted run as working and executes it in a new
+// goroutine within its remaining budget. Callers hold e.mu, so the slot is
+// taken before the dispatcher looks at the queue again.
+func (e *Engine) startLocked(ctx context.Context, r *Run) {
+	remaining := time.Duration(r.BudgetMillis-r.ElapsedMillis) * time.Millisecond
+	ctx, stopDeadline := context.WithTimeout(ctx, remaining)
+	ctx, cancel := context.WithCancelCause(ctx)
+	execution := &active{cancel: cancel, start: e.now(), base: r.ElapsedMillis}
+	e.working[r.ID] = execution
+	r.State = "running"
+	r.Progress.Phase = "prepare"
+	if r.StartedAt.IsZero() {
+		r.StartedAt = timefmt.From(e.now())
+	}
+	e.event(eventOptions{r: r, code: eventStarted, message: "execution started", details: nil})
+	if err := e.save(ctx, r); err != nil {
+		e.logger.Error("run_save_failed", "error", err)
+		cancel(err)
+	}
+	snapshot := r.Snapshot
+	e.wg.Go(func() {
+		err := e.execute(ctx, r.ID, snapshot)
+		if cause := context.Cause(ctx); cause != nil && err != nil {
+			err = cause
+		}
+		stopDeadline()
+		cancel(nil)
+		e.finish(ctx, r, execution, err)
+	})
+}
+
+// finish persists the outcome of an execution and frees its slot.
+func (e *Engine) finish(ctx context.Context, r *Run, execution *active, err error) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), queryTimeout)
+	defer cancel()
+	e.mirror.EndSync(r.ID)
+	defer e.wakeDispatcher()
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	r.ElapsedMillis = execution.elapsed(e.now())
+	e.applyOutcome(r, execution.intent, err)
+	if Terminal(r.State) {
+		r.EndedAt = timefmt.From(e.now())
+	}
+	e.event(eventOptions{r: r, code: eventState, message: "state: " + r.State, details: map[string]any{"state": r.State}})
+	if err := e.save(ctx, r); err != nil {
+		e.logger.Error("run_finalize_failed", "error", err)
+		// Keep the destination reserved and the failure visible when storage
+		// cannot persist a terminal result. Never silently drop the live run.
+		r.State = "interrupted"
+		r.setError(codePersistenceFailed, "saving the run result failed", nil)
+	}
+	delete(e.working, r.ID)
+	if !reserved(r.State) {
+		delete(e.current, r.ID)
+		e.requestCleanup()
+	}
+}
+
+// applyOutcome maps an execution result to the run state. A pause, cancel
+// or shutdown request (intent) takes precedence over the executor error.
+func (e *Engine) applyOutcome(r *Run, intent string, err error) {
+	switch {
+	case err == nil:
+		r.State = "succeeded"
+		r.Progress.Phase = "complete"
+		r.Progress.Percent = new(float64(100))
+	case intent != "":
+		r.State = intent
+		if intent == "interrupted" {
+			r.setError(codeServiceInterrupted, "service stopped; resume with the remaining budget", nil)
+		}
+	case errors.Is(err, context.DeadlineExceeded):
+		r.State = "timed_out"
+		r.setError(codeTaskTimeout, "total execution time reached the run budget", nil)
+	case errors.Is(err, mirrorfs.ErrLowSpace):
+		r.State = "failed"
+		r.setError(codeDiskSpace, "mirror disk below its free-space reserve; the previous publication stays available", nil)
+	case e.isStopped():
+		r.State = "interrupted"
+		r.setError(codeServiceInterrupted, "service stopped", nil)
+	default:
+		failure := syncer.AsFailure(err)
+		r.State = "failed"
+		r.setError(failure.Code, failure.Message, failure.Details)
+	}
+}
+
+// execute prepares the work tree and tries the source's candidates in
+// rounds, publishing after the first successful attempt. Transient failures
+// retry the whole round with exponential delay until RetryCount is spent.
+func (e *Engine) execute(ctx context.Context, id int64, snapshot Snapshot) error {
+	source := snapshot.Source
+	if err := e.mirror.Collect(ctx, e.now()); err != nil {
+		return err
+	}
+	work, reused, err := e.mirror.PrepareReuse(ctx, source, id)
+	if err != nil {
+		return err
+	}
+	if reused > 0 {
+		e.mu.Lock()
+		e.event(eventOptions{r: e.current[id], code: eventReusedWork, message: fmt.Sprintf("reusing the unfinished work directory kept by run #%d", reused), details: map[string]any{"run": reused}})
+		err = e.save(ctx, e.current[id])
+		e.mu.Unlock()
+		if err != nil {
+			return err
+		}
+	}
+	candidates := source.Candidates()
+	if source.Type == "github_release" {
+		candidates = []string{source.GitHubRelease.Repository}
+	}
+	if len(candidates) == 0 {
+		return &syncer.Failure{Code: "no_candidates", Message: "no upstream candidates"}
+	}
+	e.mu.Lock()
+	first := e.current[id].CandidateIndex
+	e.mu.Unlock()
+	if first >= len(candidates) {
+		first = 0
+	}
+	// Any transient candidate failure in a round justifies retrying the round,
+	// even when the last mirror reported a permanent source-local error.
+	roundRetryable := false
+	for index := first; ; index++ {
+		if err := e.waitRetry(ctx, id); err != nil {
+			return err
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		attemptErr, secrets, err := e.attempt(ctx, attemptOptions{id: id, snapshot: snapshot, work: work, index: index, candidate: candidates[index]})
+		if err != nil {
+			return err
+		}
+		if attemptErr == nil {
+			return nil
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		failure := syncer.AsFailure(attemptErr)
+		failure.Message = redact(failure.Message, secrets...)
+		failure.Details = redactDetails(failure.Details, secrets...)
+		roundRetryable = roundRetryable || failure.Retryable
+		rsync := source.Type == "rsync"
+		// Source-local permanent failures can still use another mirror; a
+		// failed proxy would fail the same way for every other mirror.
+		nextMirror := rsync && !failure.ProxyFailure && (failure.Retryable || failure.SourceFailure)
+		if nextMirror && index+1 < len(candidates) {
+			continue
+		}
+		if !failure.Retryable && !(rsync && failure.SourceFailure && roundRetryable) {
+			return failure
+		}
+		if err := e.scheduleRetry(ctx, scheduleRetryOptions{id: id, snapshot: snapshot, failure: failure, candidates: len(candidates)}); err != nil {
+			return err
+		}
+		roundRetryable = false
+		index = -1
+	}
+}
+
+// attempt runs the executor once against candidate and publishes the work
+// tree on success. attemptErr is the executor or publication failure; err
+// reports a local persistence failure that ends the run.
+func (e *Engine) attempt(ctx context.Context, params attemptOptions) (attemptErr error, secrets []string, err error) {
+	id := params.id
+	snapshot := params.snapshot
+	work := params.work
+	index := params.index
+	candidate := params.candidate
+
+	source := snapshot.Source
+	e.mu.Lock()
+	r := e.current[id]
+	r.CandidateIndex = index
+	r.Progress.Phase = "scan"
+	r.Progress.Percent = nil
+	r.Progress.ETA = nil
+	attempt := Attempt{Number: len(r.Attempts) + 1, Candidate: candidate, StartedAt: timefmt.From(e.now())}
+	r.Attempts = append(r.Attempts, attempt)
+	r.Progress.ReceivedBytes, r.Progress.ReceivedIncomplete = receivedBytes(r.Attempts)
+	e.event(eventOptions{r: r, code: eventCandidate, message: "trying upstream " + candidate, details: map[string]any{"candidate": candidate}})
+	err = e.save(ctx, r)
+	e.mu.Unlock()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	log, err := e.openAttemptLog(id, attempt.Number)
+	if err != nil {
+		return nil, nil, err
+	}
+	// Credentials and proxies are read at execution time; snapshots never
+	// contain them.
+	current := e.cfg.Current()
+	github := current.Settings.GitHub
+	settings := snapshot.Settings
+	settings.GitHub.Proxy = github.Proxy
+	task := syncer.Task{Source: source, Settings: settings, Directory: work, Candidate: candidate, Token: github.Token}
+	if source.Type == "rsync" {
+		task.Proxy = rsyncProxy(current, source.ID)
+	}
+	secrets = slices.Concat([]string{github.Token}, proxySecrets(github.Proxy), proxySecrets(task.Proxy))
+	writer := &redactedWriter{writer: log, secrets: secrets}
+	attemptErr = e.runner.Run(ctx, task, e.progressReporter(id), writer)
+	closeErr := errors.Join(writer.Flush(), log.Close())
+	if attemptErr == nil {
+		attemptErr = closeErr
+	}
+	if attemptErr == nil {
+		attemptErr = e.publish(ctx, source, id)
+	}
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	r = e.current[id]
+	last := &r.Attempts[len(r.Attempts)-1]
+	last.EndedAt = timefmt.From(e.now())
+	if attemptErr != nil {
+		failure := syncer.AsFailure(attemptErr)
+		last.ErrorCode = failure.Code
+		last.Error = redact(failure.Message, secrets...)
+		last.ErrorDetails = redactDetails(failure.Details, secrets...)
+		last.ExitCode = failure.ExitCode
+		if execution := e.working[id]; execution != nil && execution.intent != "" {
+			last.ErrorCode = execution.intent
+			last.Error = "execution stopped: " + execution.intent
+			last.ErrorDetails = nil
+		}
+	}
+	return attemptErr, secrets, e.save(ctx, r)
+}
+
+// logDir is the directory holding the attempt logs of run id.
+func (e *Engine) logDir(id int64) string {
+	return filepath.Join(e.dataDir, "logs", fmt.Sprint(id))
+}
+
+// logPath is the log file of one attempt, numbered from 1.
+func (e *Engine) logPath(id int64, attempt int) string {
+	return filepath.Join(e.logDir(id), fmt.Sprint(attempt)+".log")
+}
+
+func (e *Engine) openAttemptLog(id int64, attempt int) (*os.File, error) {
+	if err := os.MkdirAll(e.logDir(id), 0o700); err != nil {
+		return nil, err
+	}
+	return os.OpenFile(e.logPath(id, attempt), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+}
+
+// progressReporter stores executor progress on the live run. Percent and
+// ETA are only meaningful while transferring.
+func (e *Engine) progressReporter(id int64) func(syncer.Progress) {
+	return func(progress syncer.Progress) {
+		if progress.Phase != "transfer" && progress.Phase != "complete" {
+			progress.Percent = nil
+			progress.ETA = nil
+		}
+		e.mu.Lock()
+		defer e.mu.Unlock()
+		r := e.current[id]
+		if r == nil {
+			return
+		}
+		if progress.ReceivedBytes != nil {
+			r.Attempts[len(r.Attempts)-1].ReceivedBytes = new(*progress.ReceivedBytes)
+		}
+		progress.ReceivedBytes, progress.ReceivedIncomplete = receivedBytes(r.Attempts)
+		r.Progress = progress
+	}
+}
+
+// publish swaps the finished work tree in. Inconsistent repository data is an
+// upstream failure that may succeed on retry or from another mirror.
+func (e *Engine) publish(ctx context.Context, source config.Source, id int64) error {
+	e.mu.Lock()
+	r := e.current[id]
+	r.Progress.Phase = "publish"
+	r.Progress.Percent, r.Progress.ETA = nil, nil
+	e.mu.Unlock()
+	_, err := e.mirror.Publish(ctx, source, id)
+	if invalid, inconsistent := errors.AsType[*mirrorfs.ValidationError](err); inconsistent {
+		return &syncer.Failure{
+			Code:          "upstream_inconsistent",
+			Message:       err.Error(),
+			Details:       map[string]any{"reason": invalid.Reason, "detail": invalid.Err.Error()},
+			Retryable:     true,
+			SourceFailure: true,
+		}
+	}
+	return err
+}
+
+// scheduleRetry records the next retry round or returns the final failure
+// when the retry allowance is spent.
+func (e *Engine) scheduleRetry(ctx context.Context, params scheduleRetryOptions) error {
+	id := params.id
+	snapshot := params.snapshot
+	failure := params.failure
+	candidates := params.candidates
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	r := e.current[id]
+	allowed := int(snapshot.Settings.RetryCount)
+	if r.RetryCount >= allowed {
+		if failure.ProxyFailure {
+			return &syncer.Failure{
+				Code:    failure.Code,
+				Message: "proxy unavailable and retries exhausted; last error: " + failure.Message,
+				Details: withDetail(failure.Details, "retries_exhausted", true),
+			}
+		}
+		if snapshot.Source.Type == "rsync" {
+			details := map[string]any{"candidates": candidates, "last_code": failure.Code}
+			for key, value := range failure.Details {
+				details["last_"+key] = value
+			}
+			return &syncer.Failure{
+				Code:    codeSourceExhausted,
+				Message: fmt.Sprintf("all %d upstreams failed and retries are exhausted; last error: %s", candidates, failure.Message),
+				Details: details,
+			}
+		}
+		return failure
+	}
+	r.RetryCount++
+	// 5, 10, 20, 40 and then at most 80 seconds with the default base delay.
+	delay := e.retryDelay * time.Duration(1<<min(r.RetryCount-1, maxRetryDoublings))
+	r.RetryAt = timefmt.From(e.now().Add(delay))
+	if failure.RetryAt.After(r.RetryAt.Time()) {
+		// An upstream rate limit names its own reset time.
+		r.RetryAt = timefmt.From(failure.RetryAt)
+		delay = r.RetryAt.Time().Sub(e.now())
+	}
+	r.CandidateIndex = 0
+	received, incomplete := receivedBytes(r.Attempts)
+	r.Progress = syncer.Progress{Phase: "retry", ReceivedBytes: received, ReceivedIncomplete: incomplete}
+	e.event(eventOptions{r: r, code: eventRetry, message: fmt.Sprintf("temporary network or upstream failure; retry %d/%d in %s", r.RetryCount, allowed, delay), details: map[string]any{"delay_ms": delay.Milliseconds(), "retry": r.RetryCount, "allowed": allowed}})
+	return e.save(ctx, r)
+}
+
+func (e *Engine) waitRetry(ctx context.Context, id int64) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	e.mu.Lock()
+	at := e.current[id].RetryAt
+	e.mu.Unlock()
+	if at.IsZero() {
+		return nil
+	}
+	timer := time.NewTimer(max(0, at.Time().Sub(e.now())))
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.current[id].RetryAt = timefmt.Time{}
+	return e.save(ctx, e.current[id])
+}
+
+// rsyncProxy is the proxy of the source in the current configuration. The
+// worker checks that the source still exists before it runs; were it gone,
+// the global proxy is used rather than falling back to a direct connection.
+func rsyncProxy(c config.Config, sourceID string) string {
+	index := slices.IndexFunc(c.Sources, func(s config.Source) bool { return s.ID == sourceID })
+	if index < 0 {
+		return c.Settings.Rsync.Proxy
+	}
+	return c.Sources[index].RsyncProxy(c.Settings.Rsync)
+}
+
+// proxySecrets lists the proxy URL and its credentials for log redaction.
+func proxySecrets(proxy string) []string {
+	secrets := []string{proxy}
+	if proxyURL, err := config.ParseProxyURL(proxy); err == nil && proxyURL != nil && proxyURL.User != nil {
+		password, _ := proxyURL.User.Password()
+		secrets = append(secrets, proxyURL.User.String(), password)
+	}
+	return secrets
+}
+
+// redactDetails returns a copy of details with secrets removed from its text
+// values.
+func redactDetails(details map[string]any, secrets ...string) map[string]any {
+	if details == nil {
+		return nil
+	}
+	out := make(map[string]any, len(details))
+	for key, value := range details {
+		if text, ok := value.(string); ok {
+			value = redact(text, secrets...)
+		}
+		out[key] = value
+	}
+	return out
+}
+
+// withDetail returns a copy of details with one more entry.
+func withDetail(details map[string]any, key string, value any) map[string]any {
+	out := make(map[string]any, len(details)+1)
+	for k, v := range details {
+		out[k] = v
+	}
+	out[key] = value
+	return out
+}
+
+// redact replaces every secret in text and strips control characters.
+func redact(text string, secrets ...string) string {
+	for _, secret := range secrets {
+		if secret != "" {
+			text = strings.ReplaceAll(text, secret, "[REDACTED]")
+		}
+	}
+	return syncer.CleanLog(text)
+}
+
+// Keep possible secret prefixes between writes, even when the producer splits
+// a credential across chunks. Pending storage is bounded by the longest secret.
+type redactedWriter struct {
+	writer  io.Writer
+	secrets []string
+	pending []byte
+}
+
+func (w *redactedWriter) Write(p []byte) (int, error) {
+	w.pending = append(w.pending, p...)
+	return len(p), w.flush(false)
+}
+
+func (w *redactedWriter) Flush() error { return w.flush(true) }
+
+func (w *redactedWriter) flush(final bool) error {
+	var out strings.Builder
+	i := 0
+	text := string(w.pending)
+	for i < len(w.pending) {
+		rest := text[i:]
+		matched, partial := "", false
+		for _, secret := range w.secrets {
+			if secret == "" {
+				continue
+			}
+			if strings.HasPrefix(rest, secret) && len(secret) > len(matched) {
+				matched = secret
+			}
+			if !final && len(rest) < len(secret) && strings.HasPrefix(secret, rest) {
+				partial = true
+			}
+		}
+		if partial {
+			break
+		}
+		if matched != "" {
+			out.WriteString("[REDACTED]")
+			i += len(matched)
+			continue
+		}
+		if !final && !utf8.FullRune(w.pending[i:]) {
+			break
+		}
+		_, n := utf8.DecodeRune(w.pending[i:])
+		out.Write(w.pending[i : i+n])
+		i += n
+	}
+	if _, err := io.WriteString(w.writer, syncer.CleanLog(out.String())); err != nil {
+		return err
+	}
+	w.pending = append(w.pending[:0], w.pending[i:]...)
+	return nil
+}
+
+// Schedules replaces the cron entries with those of the enabled source
+// schedules.
+func (e *Engine) Schedules(ctx context.Context) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	for _, id := range e.scheduleIDs {
+		e.cron.Remove(id)
+	}
+	clear(e.scheduleIDs)
+	for _, s := range e.cfg.Current().Sources {
+		if !s.Enabled || !s.Schedule.Enabled {
+			continue
+		}
+		entry, err := e.cron.AddFunc(s.Schedule.Cron, func() {
+			select {
+			case e.scheduled <- s.ID:
+			case <-e.stopped:
+			default:
+				e.logger.Warn("schedule_queue_full", "source_id", s.ID)
+			}
+		})
+		if err != nil {
+			return err
+		}
+		e.scheduleIDs[s.ID] = entry
+	}
+	return nil
+}
+
+// ScheduleInfo returns the next scheduled time of each source.
+func (e *Engine) ScheduleInfo() map[string]time.Time {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	out := map[string]time.Time{}
+	for id, entry := range e.scheduleIDs {
+		out[id] = e.cron.Entry(entry).Next
+	}
+	return out
+}
+
+// Log reads at most logReadLimit bytes of an attempt log from offset and
+// returns the text with the offset of the next read.
+func (e *Engine) Log(ctx context.Context, id int64, attempt int, offset int64) (string, int64, error) {
+	if offset < 0 {
+		return "", 0, ErrNegativeOffset
+	}
+	file, size, err := e.LogSnapshot(ctx, id, attempt)
+	if errors.Is(err, ErrLogCleared) {
+		return "", offset, ErrLogCleared
+	}
+	if err != nil {
+		return "", 0, err
+	}
+	defer file.Close() // Read-only descriptor; closing cannot discard buffered writes.
+	if _, err = file.Seek(offset, io.SeekStart); err != nil {
+		return "", 0, err
+	}
+	chunk, err := io.ReadAll(io.LimitReader(file, min(logReadLimit, max(0, size-offset))))
+	// Do not consume a partial UTF-8 rune at the byte budget or a live append.
+	if len(chunk) > 0 {
+		start := len(chunk) - 1
+		for start > 0 && !utf8.RuneStart(chunk[start]) {
+			start--
+		}
+		if !utf8.FullRune(chunk[start:]) {
+			chunk = chunk[:start]
+		}
+	}
+	return syncer.CleanLog(string(chunk)), offset + int64(len(chunk)), err
+}
+
+// ErrLogCleared reports that the log of an attempt was cleared; its state and
+// error summary are kept.
+var ErrLogCleared = errors.New("log cleared; the state and error summary are kept")
+
+// LogSnapshot opens the selected attempt and fixes its download length before
+// releasing the cleanup lock. Logs are already sanitized by redactedWriter.
+// The caller owns the file and must limit reads to size to exclude later writes.
+func (e *Engine) LogSnapshot(ctx context.Context, id int64, attempt int) (file *os.File, size int64, err error) {
+	e.logMu.RLock()
+	defer e.logMu.RUnlock()
+	var r Run
+	if err = e.store.Run(ctx, id, &r); err != nil {
+		return nil, 0, err
+	}
+	if attempt < 1 || attempt > len(r.Attempts) {
+		return nil, 0, ErrAttemptNotFound
+	}
+	if r.Attempts[attempt-1].LogCleared {
+		return nil, 0, ErrLogCleared
+	}
+	file, err = os.Open(e.logPath(id, attempt))
+	if err != nil {
+		return nil, 0, err
+	}
+	info, err := file.Stat()
+	if err != nil {
+		file.Close()
+		return nil, 0, err
+	}
+	return file, info.Size(), nil
+}
+
+// ClearLogs removes the logs of finished runs and returns how many were
+// cleared. Only one cleanup runs at a time.
+func (e *Engine) ClearLogs(ctx context.Context) (int, error) {
+	if !e.clearMu.TryLock() {
+		return 0, ErrLogCleanupRunning
+	}
+	defer e.clearMu.Unlock()
+	cleared := 0
+	through, err := e.store.LastRunID(ctx)
+	if err != nil {
+		return 0, err
+	}
+	var after int64
+	for {
+		records, err := e.store.LogCleanupPage(ctx, after, through)
+		if err != nil {
+			return cleared, err
+		}
+		for _, document := range records {
+			var r Run
+			if err = json.Unmarshal(document, &r); err != nil {
+				return cleared, err
+			}
+			if r.ID <= after || r.ID > through {
+				return cleared, ErrInvalidHistory
+			}
+			after = r.ID
+			removed, err := e.clearRunLogs(ctx, r)
+			cleared += removed
+			if err != nil {
+				return cleared, err
+			}
+		}
+		if len(records) < database.PageSize {
+			break
+		}
+	}
+	return cleared, nil
+}
+
+func (e *Engine) clearRunLogs(ctx context.Context, r Run) (cleared int, err error) {
+	if e.isStopped() {
+		return 0, context.Canceled
+	}
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	e.logMu.Lock()
+	defer e.logMu.Unlock()
+	e.mu.Lock()
+	if current := e.current[r.ID]; current != nil {
+		r = *cloneRun(current)
+	}
+	if !Terminal(r.State) || e.working[r.ID] != nil {
+		e.mu.Unlock()
+		return 0, nil
+	}
+	done := make(chan struct{})
+	e.clearing[r.ID] = done
+	e.mu.Unlock()
+	defer func() {
+		e.mu.Lock()
+		if err == nil {
+			if current := e.current[r.ID]; current != nil {
+				current.Attempts = r.Attempts
+			}
+		}
+		delete(e.clearing, r.ID)
+		close(done)
+		e.mu.Unlock()
+	}()
+	for i := range r.Attempts {
+		if e.isStopped() {
+			err = context.Canceled
+			break
+		}
+		if err = ctx.Err(); err != nil {
+			break
+		}
+		if r.Attempts[i].LogCleared {
+			continue
+		}
+		if err = e.removeLog(e.logPath(r.ID, i+1)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			break
+		}
+		err = nil
+		r.Attempts[i].LogCleared = true
+		cleared++
+	}
+	if cleared != 0 {
+		// Persist completed removals even when cancellation or a later removal
+		// fails. Missing files can be marked again after a persistence failure.
+		persistCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), queryTimeout)
+		saveErr := e.save(persistCtx, &r)
+		cancel()
+		if saveErr != nil {
+			return cleared, errors.Join(err, saveErr)
+		}
+		e.mu.Lock()
+		if current := e.current[r.ID]; current != nil {
+			current.Attempts = r.Attempts
+		}
+		e.mu.Unlock()
+	}
+	return cleared, err
+}
+
+// NotificationChange serializes activation with new task creation and YAML edits.
+func (e *Engine) NotificationChange(operation func() error) error {
+	e.configMu.Lock()
+	defer e.configMu.Unlock()
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return operation()
+}
+
+// receivedBytes totals only explicitly reported attempt counters. An unknown
+// attempt must remain visible as incomplete, including after pause or restart.
+func receivedBytes(attempts []Attempt) (*int64, bool) {
+	var total *int64
+	incomplete := false
+	for _, attempt := range attempts {
+		if attempt.ReceivedBytes == nil {
+			incomplete = true
+			continue
+		}
+		if total == nil {
+			total = new(int64(0))
+		}
+		*total += *attempt.ReceivedBytes
+	}
+	return total, incomplete
+}
+
+func (e *Engine) isStopped() bool {
+	select {
+	case <-e.stopped:
+		return true
+	default:
+		return false
+	}
+}
+
+// NewOptions groups the inputs to New.
+type NewOptions struct {
+	Config   *config.Manager
+	Store    *database.Store
+	Mirror   *mirrorfs.Manager
+	Runner   syncer.Runner
+	Location *time.Location
+	Logger   *slog.Logger
+}
+
+// eventOptions groups the inputs to event.
+type eventOptions struct {
+	r       *Run
+	code    string
+	message string
+	details map[string]any
+}
+
+// ApplyConfigOptions groups the inputs to ApplyConfig.
+type ApplyConfigOptions struct {
+	Config   config.Config
+	Revision string
+	Token    *string
+	Proxy    *string
+}
+
+// ListOptions groups the inputs to List.
+type ListOptions struct {
+	State   string
+	Source  string
+	Limit   int
+	Offset  int
+	Filters []database.RunFilter
+}
+
+// attemptOptions groups the inputs to attempt.
+type attemptOptions struct {
+	id        int64
+	snapshot  Snapshot
+	work      string
+	index     int
+	candidate string
+}
+
+// scheduleRetryOptions groups the inputs to scheduleRetry.
+type scheduleRetryOptions struct {
+	id         int64
+	snapshot   Snapshot
+	failure    *syncer.Failure
+	candidates int
+}

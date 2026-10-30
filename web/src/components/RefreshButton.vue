@@ -4,17 +4,15 @@ import { RefreshCw } from '@lucide/vue'
 
 // The icon spins while the clicked action (or an external busy state) is pending. It always
 // completes at least one turn and stops on a turn boundary, so fast refreshes still read as feedback.
-const props = withDefaults(
-  defineProps<{ action: () => unknown; spinning?: boolean; size?: number }>(),
-  {
-    spinning: false,
-    size: 16,
-  },
-)
+const {
+  action,
+  spinning,
+  size = 16,
+} = defineProps<{ action: () => unknown; spinning?: boolean; size?: number }>()
 // Every click runs the action, as a plain button would; a retry can supersede a stalled request.
 const pending = ref(0)
 const turning = ref(false)
-const busy = computed(() => pending.value > 0 || props.spinning)
+const busy = computed(() => pending.value > 0 || spinning)
 const reducedMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches
 watch(
   busy,
@@ -31,7 +29,7 @@ function iteration() {
 async function run() {
   pending.value++
   try {
-    await props.action()
+    await action()
   } finally {
     pending.value--
   }
@@ -59,7 +57,7 @@ async function run() {
   display: inline-flex;
 }
 .refresh-icon.turning {
-  animation: refresh-turn 0.7s linear infinite;
+  animation: refresh-turn var(--motion-0d7s) linear infinite;
 }
 @keyframes refresh-turn {
   to {

@@ -1,6 +1,7 @@
-import { ref, watch, onBeforeUnmount, type Ref } from 'vue'
+import { errorText } from '../../app/errors'
+import { ref, watch, onScopeDispose, type Ref } from 'vue'
 import { api } from '../../app/api'
-import { state, notify } from '../../app/state'
+import { state } from '../../app/state'
 import type { Run } from '../../app/types'
 
 export function useRunPage(filters: {
@@ -13,7 +14,8 @@ export function useRunPage(filters: {
     pageSize = ref(50),
     total = ref(0),
     records = ref<Run[]>([]),
-    loading = ref(false)
+    loading = ref(false),
+    loadError = ref('')
   let revision = 0
   let controller: AbortController | undefined
   async function load() {
@@ -22,6 +24,7 @@ export function useRunPage(filters: {
     controller = current
     const request = ++revision
     loading.value = true
+    loadError.value = ''
     const query = new URLSearchParams({
       state: filters.state.value,
       source: filters.source.value,
@@ -31,12 +34,10 @@ export function useRunPage(filters: {
     if (filters.age.value) query.set('range', filters.age.value)
     if (filters.trigger?.value) query.set('trigger', filters.trigger.value)
     try {
-      const payload = await api<{ items: Run[]; total: number }>(
-        `/runs?${query}`,
-        'GET',
-        undefined,
-        current.signal,
-      )
+      const payload = await api<{ items: Run[]; total: number }>({
+        path: `/runs?${query}`,
+        signal: current.signal,
+      })
       if (request !== revision) return
       total.value = payload.total
       const last = Math.max(1, Math.ceil(payload.total / pageSize.value))
@@ -46,8 +47,7 @@ export function useRunPage(filters: {
       }
       records.value = payload.items
     } catch (error) {
-      if (request === revision && !current.signal.aborted)
-        notify(error instanceof Error ? error.message : String(error), 'error')
+      if (request === revision && !current.signal.aborted) loadError.value = errorText(error)
     } finally {
       if (request === revision) loading.value = false
     }
@@ -56,8 +56,6 @@ export function useRunPage(filters: {
     [...Object.values(filters), pageSize],
     () => {
       page.value = 1
-      records.value = []
-      total.value = 0
     },
     { flush: 'sync' },
   )
@@ -71,9 +69,9 @@ export function useRunPage(filters: {
     },
     { immediate: true },
   )
-  onBeforeUnmount(() => {
+  onScopeDispose(() => {
     revision++
     controller?.abort()
   })
-  return { page, pageSize, total, records, loading, load }
+  return { page, pageSize, total, records, loading, loadError, load }
 }

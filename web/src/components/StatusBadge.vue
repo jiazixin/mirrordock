@@ -1,5 +1,5 @@
 <script setup lang="ts">
-defineProps<{ state: string }>()
+const { state } = defineProps<{ state: string }>()
 const labels: Record<string, string> = {
   idle: '尚未运行',
   queued: '排队中',

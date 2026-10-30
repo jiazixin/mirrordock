@@ -1,68 +1,37 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, useId } from 'vue'
+import { computed, useId } from 'vue'
+import ModalDialog from './ModalDialog.vue'
 import { CircleHelp, CircleAlert, TriangleAlert } from '@lucide/vue'
 
-const props = withDefaults(
-  defineProps<{
-    title: string
-    message: string
-    confirmLabel: string
-    cancelLabel?: string
-    tone?: 'primary' | 'amber' | 'red'
-  }>(),
-  { cancelLabel: '取消', tone: 'primary' },
-)
+const {
+  title,
+  message,
+  confirmLabel,
+  cancelLabel = '取消',
+  tone = 'primary',
+} = defineProps<{
+  title: string
+  message: string
+  confirmLabel: string
+  cancelLabel?: string
+  tone?: 'primary' | 'amber' | 'red'
+}>()
 const emit = defineEmits<{ settle: [accepted: boolean] }>()
 const id = useId()
-const cancelButton = ref<HTMLButtonElement>()
-const confirmButton = ref<HTMLButtonElement>()
-const icon = computed(() =>
-  props.tone === 'red' ? TriangleAlert : props.tone === 'amber' ? CircleAlert : CircleHelp,
-)
-let previous: HTMLElement | null = null
-let previousOverflow = ''
-
-// Capture phase so Escape/Tab never reach an underlying Modal or the shell menu.
-function key(event: KeyboardEvent) {
-  if (event.key === 'Escape') {
-    event.preventDefault()
-    event.stopPropagation()
-    emit('settle', false)
-  } else if (event.key === 'Tab') {
-    event.preventDefault()
-    event.stopPropagation()
-    const next = document.activeElement === cancelButton.value ? confirmButton : cancelButton
-    next.value?.focus()
-  }
-}
-onMounted(() => {
-  previous = document.activeElement as HTMLElement | null
-  previousOverflow = document.body.style.overflow
-  document.body.style.overflow = 'hidden'
-  document.addEventListener('keydown', key, true)
-  // Destructive actions start on the safe choice; others accept with Enter.
-  ;(props.tone === 'red' ? cancelButton : confirmButton).value?.focus()
-})
-onBeforeUnmount(() => {
-  document.removeEventListener('keydown', key, true)
-  document.body.style.overflow = previousOverflow
-  previous?.focus()
-})
+const icon = computed(() => ({ red: TriangleAlert, amber: CircleAlert, primary: CircleHelp })[tone])
 </script>
 
 <template>
-  <div
-    class="confirm-backdrop"
-    @click.self="emit('settle', false)"
+  <ModalDialog
+    :title="title"
+    role="alertdialog"
+    :hide-header="true"
+    :description-id="`${id}-message`"
+    class="confirm-overlay"
+    :class="tone"
+    @close="emit('settle', false)"
   >
-    <section
-      role="alertdialog"
-      aria-modal="true"
-      :aria-labelledby="`${id}-title`"
-      :aria-describedby="`${id}-message`"
-      class="confirm-dialog"
-      :class="tone"
-    >
+    <div class="confirm-dialog">
       <span
         class="confirm-icon"
         aria-hidden="true"
@@ -76,14 +45,14 @@ onBeforeUnmount(() => {
       </div>
       <footer class="confirm-actions">
         <button
-          ref="cancelButton"
+          :data-dialog-focus="tone === 'red' ? '' : undefined"
           type="button"
           class="button"
           @click="emit('settle', false)"
         >
           {{ cancelLabel }}</button
         ><button
-          ref="confirmButton"
+          :data-dialog-focus="tone !== 'red' ? '' : undefined"
           type="button"
           class="button"
           :class="tone === 'primary' ? 'primary' : `tone-${tone}`"
@@ -92,42 +61,34 @@ onBeforeUnmount(() => {
           {{ confirmLabel }}
         </button>
       </footer>
-    </section>
-  </div>
+    </div>
+  </ModalDialog>
 </template>
 
 <style scoped>
-.confirm-backdrop {
-  position: fixed;
-  inset: 0;
+.confirm-overlay {
   z-index: 150;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 32px;
-  background: var(--scrim);
-}
-.confirm-dialog {
   --confirm-color: var(--ok);
   --confirm-soft: var(--ok-bg);
+}
+.confirm-overlay :deep(.modal) {
+  width: 440px;
+}
+.confirm-dialog {
   display: grid;
   grid-template-columns: auto 1fr;
-  gap: 4px 16px;
+  gap: var(--space-4px) var(--space-16px);
   width: 440px;
   max-width: 100%;
   max-height: calc(100vh - 64px);
   overflow: auto;
-  padding: 26px 26px 22px;
-  border: 1px solid var(--line);
-  border-radius: 14px;
-  background: var(--raised);
-  box-shadow: var(--shadow);
+  padding: var(--space-26px) var(--space-26px) var(--space-22px);
 }
-.confirm-dialog.amber {
+.confirm-overlay.amber {
   --confirm-color: var(--amb);
   --confirm-soft: var(--amb-soft);
 }
-.confirm-dialog.red {
+.confirm-overlay.red {
   --confirm-color: var(--red);
   --confirm-soft: var(--red-soft);
 }
@@ -142,19 +103,19 @@ onBeforeUnmount(() => {
 }
 .confirm-body {
   min-width: 0;
-  padding-top: 2px;
+  padding-top: var(--space-2px);
 }
 .confirm-body h2 {
   margin: 0;
   color: var(--t1);
-  font-size: 17px;
+  font-size: var(--font-17px);
   font-weight: 650;
   line-height: 1.5;
 }
 .confirm-body p {
-  margin: 6px 0 0;
+  margin: var(--space-6px) 0 0;
   color: var(--t2);
-  font-size: 14px;
+  font-size: var(--font-14px);
   line-height: 1.7;
   overflow-wrap: anywhere;
 }
@@ -162,8 +123,8 @@ onBeforeUnmount(() => {
   grid-column: 1 / -1;
   display: flex;
   justify-content: flex-end;
-  gap: 10px;
-  margin-top: 22px;
+  gap: var(--space-10px);
+  margin-top: var(--space-22px);
 }
 .confirm-actions .button {
   min-width: 88px;
@@ -173,12 +134,12 @@ onBeforeUnmount(() => {
   outline-offset: 2px;
 }
 @media (max-width: 600px) {
-  .confirm-backdrop {
-    padding: 16px;
+  .confirm-overlay {
+    padding: var(--space-16px);
   }
   .confirm-dialog {
-    padding: 22px 20px 18px;
-    gap: 4px 14px;
+    padding: var(--space-22px) var(--space-20px) var(--space-18px);
+    gap: var(--space-4px) var(--space-14px);
   }
   .confirm-actions .button {
     flex: 1;

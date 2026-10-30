@@ -3,7 +3,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, useAttrs, useId, w
 import { ChevronDown } from '@lucide/vue'
 
 defineOptions({ inheritAttrs: false })
-const props = defineProps<{
+const { options, disabled } = defineProps<{
   options: readonly { value: T; label: string; disabled?: boolean }[]
   disabled?: boolean
 }>()
@@ -15,7 +15,7 @@ const menu = ref<HTMLElement>()
 const open = ref(false)
 const active = ref(-1)
 const position = ref({ left: '0px', top: '0px', minWidth: '0px', maxHeight: '280px' })
-const selected = computed(() => props.options.find((option) => option.value === model.value))
+const selected = computed(() => options.find((option) => option.value === model.value))
 let typed = ''
 let typedAt = 0
 
@@ -26,7 +26,7 @@ function place() {
   const width = Math.min(Math.max(rect.width, menu.value?.offsetWidth ?? 0), window.innerWidth - 16)
   const below = window.innerHeight - rect.bottom - 12
   const above = rect.top - 12
-  const height = Math.min(props.options.length * 42 + 12 || 54, 280)
+  const height = Math.min(options.length * 42 + 12 || 54, 280)
   const upwards = below < height && above > below
   const maxHeight = Math.max(42, Math.min(height, upwards ? above : below))
   position.value = {
@@ -38,11 +38,9 @@ function place() {
 }
 
 async function reveal() {
-  if (props.disabled) return
-  active.value = props.options.findIndex(
-    (option) => option.value === model.value && !option.disabled,
-  )
-  if (active.value < 0) active.value = props.options.findIndex((option) => !option.disabled)
+  if (disabled) return
+  active.value = options.findIndex((option) => option.value === model.value && !option.disabled)
+  if (active.value < 0) active.value = options.findIndex((option) => !option.disabled)
   place()
   open.value = true
   await nextTick()
@@ -68,26 +66,26 @@ function scrollActive() {
 }
 
 function choose(index: number) {
-  const option = props.options[index]
+  const option = options[index]
   if (!option || option.disabled) return
   model.value = option.value
   close(true)
 }
 
 function move(step: number) {
-  const length = props.options.length
+  const length = options.length
   for (let distance = 1; distance <= length; distance++) {
     const index = (active.value + step * distance + length) % length
-    if (!props.options[index]?.disabled) {
+    if (!options[index]?.disabled) {
       active.value = index
       break
     }
   }
-  nextTick(scrollActive)
+  void nextTick(scrollActive)
 }
 
 async function key(event: KeyboardEvent) {
-  if (props.disabled) return
+  if (disabled) return
   if (event.key === 'Tab') {
     close()
     return
@@ -121,12 +119,12 @@ async function key(event: KeyboardEvent) {
     if (!open.value) await reveal()
     typed = (Date.now() - typedAt > 700 ? '' : typed) + event.key.toLocaleLowerCase()
     typedAt = Date.now()
-    const index = props.options.findIndex(
+    const index = options.findIndex(
       (option) => !option.disabled && option.label.toLocaleLowerCase().startsWith(typed),
     )
     if (index >= 0) {
       active.value = index
-      nextTick(scrollActive)
+      void nextTick(scrollActive)
     }
   }
 }
@@ -143,13 +141,13 @@ function scroll(event: Event) {
   else place()
 }
 watch(
-  () => props.disabled,
+  () => disabled,
   (value) => {
     if (value) close()
   },
 )
 watch(
-  () => props.options,
+  () => options,
   (options, before) => {
     if (
       open.value &&
@@ -157,8 +155,8 @@ watch(
         options.some(
           (option, index) =>
             option.value !== before[index]?.value ||
-            option.label !== before[index]?.label ||
-            option.disabled !== before[index]?.disabled,
+            option.label !== before[index].label ||
+            option.disabled !== before[index].disabled,
         ))
     )
       close()
@@ -174,6 +172,13 @@ onBeforeUnmount(() => {
   document.removeEventListener('scroll', scroll, true)
   window.removeEventListener('resize', place)
 })
+function optionClasses(option: { value: T; disabled?: boolean }, index: number) {
+  return {
+    selected: option.value === model.value,
+    active: index === active.value,
+    disabled: option.disabled,
+  }
+}
 </script>
 
 <template>
@@ -182,9 +187,9 @@ onBeforeUnmount(() => {
     :class="{ 'is-open': open }"
   >
     <button
-      ref="trigger"
       v-bind="attrs"
       :id="String(attrs.id ?? id)"
+      ref="trigger"
       type="button"
       class="select-trigger"
       role="combobox"
@@ -224,11 +229,7 @@ onBeforeUnmount(() => {
           role="option"
           :aria-selected="option.value === model"
           :aria-disabled="option.disabled || undefined"
-          :class="{
-            selected: option.value === model,
-            active: index === active,
-            disabled: option.disabled,
-          }"
+          :class="optionClasses(option, index)"
           @pointermove="!option.disabled && (active = index)"
           @click="choose(index)"
         >
@@ -244,3 +245,101 @@ onBeforeUnmount(() => {
     </Teleport>
   </div>
 </template>
+
+<style scoped>
+.select-field {
+  position: relative;
+  min-width: 0;
+  width: 100%;
+}
+.select-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-10px);
+  width: 100%;
+  min-height: 42px;
+  padding: var(--space-9px) var(--space-12px) var(--space-9px) var(--space-14px);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-9px);
+  background: var(--panel);
+  color: var(--t1);
+  text-align: left;
+  font-size: var(--font-14px);
+  font-weight: 400;
+  line-height: 20px;
+  transition: border-color var(--motion-0d15s);
+}
+.select-trigger > :deep(span) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.select-trigger > :deep(svg) {
+  flex-shrink: 0;
+  color: var(--t3);
+  transition: transform var(--motion-0d15s);
+}
+.select-trigger:hover:not(:disabled) {
+  border-color: var(--line-hover);
+}
+.is-open > :deep(.select-trigger) {
+  border-color: var(--brand);
+  box-shadow: 0 0 0 3px var(--brand-soft);
+}
+.is-open > :deep(.select-trigger > svg) {
+  transform: rotate(180deg);
+}
+.select-menu {
+  position: fixed;
+  z-index: 300;
+  list-style: none;
+  margin: 0;
+  padding: var(--space-5px);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-11px);
+  background: var(--raised);
+  box-shadow: var(--shadow);
+  width: max-content;
+  max-width: min(calc(100vw - 16px), 420px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  font-size: var(--font-13px);
+  line-height: 1.5;
+}
+.select-menu > :deep(li) {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-10px);
+  min-height: 36px;
+  padding: var(--space-8px) var(--space-11px);
+  border-radius: var(--radius-8px);
+  color: var(--t1);
+  cursor: pointer;
+}
+.select-menu > :deep(li > span) {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.select-menu > :deep(li.active) {
+  background: var(--hover);
+}
+.select-menu > :deep(li.selected) {
+  color: var(--brand);
+  font-weight: 600;
+  background: var(--brand-soft);
+}
+.select-menu > :deep(li.disabled) {
+  color: var(--t3);
+  cursor: not-allowed;
+}
+.select-menu > :deep(.select-empty) {
+  color: var(--t3);
+  cursor: default;
+}
+</style>

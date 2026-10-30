@@ -2,11 +2,12 @@ package app
 
 import (
 	"context"
-	"log/slog"
-	"mirrordock/internal/runs"
 	"net/http"
 	"strconv"
 	"time"
+
+	"mirrordock/internal/config"
+	"mirrordock/internal/database"
 )
 
 func (a *App) analytics(w http.ResponseWriter, r *http.Request) {
@@ -17,23 +18,23 @@ func (a *App) analytics(w http.ResponseWriter, r *http.Request) {
 		var err error
 		days, err = strconv.Atoi(q.Get("days"))
 		if err != nil {
-			respond(w, 400, map[string]string{"error": "时间范围须为 7、30 或 90 天"})
+			writeError(w, r, &config.FieldError{Path: "days", Code: "invalid_days", Reason: "must be 7, 30 or 90"})
 			return
 		}
 	}
 	validKind := kind == "rsync" || kind == "reposync" || kind == "github_release"
 	validDays := days == 7 || days == 30 || days == 90
 	if !validKind || !validDays || len(q.Get("source")) > 128 {
-		respond(w, 400, map[string]string{"error": "分析类型或范围无效"})
+		writeError(w, r, &config.FieldError{Path: "type", Code: "invalid_value", Reason: "invalid analytics type, days or source"})
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
-	result, err := runs.Analyze(ctx, a.Store, kind, q.Get("source"), days, time.Now(), a.location)
+	result, err := a.Store.Analyze(ctx, database.AnalyzeOptions{Kind: kind, Source: q.Get("source"), Days: days, Now: time.Now(), Location: a.location})
 	if err != nil {
-		slog.Error("query analytics", "error", err)
-		respond(w, 503, map[string]string{"error": "分析暂时不可用，请稍后重试"})
+		requestLogger(r).Error("analytics_query_failed", "error", err)
+		writeError(w, r, newFailure(http.StatusServiceUnavailable, "unavailable", "analytics temporarily unavailable"))
 		return
 	}
-	respond(w, 200, result)
+	respond(w, http.StatusOK, result)
 }

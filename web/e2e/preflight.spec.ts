@@ -1,3 +1,4 @@
+import { defined } from './support'
 import { test, expect, type Page, type APIRequestContext } from '@playwright/test'
 import { spawn } from 'node:child_process'
 import { mkdtemp, writeFile, rm } from 'node:fs/promises'
@@ -12,7 +13,9 @@ async function fixture(page: Page, request: APIRequestContext) {
     server.on('error', reject)
     server.listen(0, '127.0.0.1', () => {
       const value = (server.address() as net.AddressInfo).port
-      server.close(() => resolve(value))
+      server.close(() => {
+        resolve(value)
+      })
     })
   })
   const base = `http://127.0.0.1:${port}`
@@ -23,7 +26,7 @@ async function fixture(page: Page, request: APIRequestContext) {
   )
   const app = spawn(
     process.env.MIRRORDOCK_TEST_BINARY ?? path.resolve(import.meta.dirname, '../../bin/mirrordock'),
-    ['-f', configFile],
+    ['-c', configFile],
     { stdio: 'ignore' },
   )
   const close = async () => {
@@ -43,7 +46,7 @@ async function fixture(page: Page, request: APIRequestContext) {
     await expect
       .poll(async () => {
         try {
-          return (await request.get(`${base}/api/auth/status`)).status()
+          return (await request.get(`${base}/healthz`)).status()
         } catch {
           return 0
         }
@@ -77,9 +80,9 @@ test('live detail follows new attempts, keeps historical selection and stops req
       state: 'queued',
       trigger: 'manual',
       created_at: now,
-      elapsed_seconds: 0,
-      budget_seconds: 30,
-      progress: { phase: 'prepare', bytes: 0, success: 0, failed: 0, skipped: 0 },
+      elapsed_ms: 0,
+      budget_ms: 30000,
+      progress: { phase: 'prepare', transferred_bytes: 0, success: 0, failed: 0, skipped: 0 },
       attempts: [] as {
         number: number
         candidate: string
@@ -97,7 +100,7 @@ test('live detail follows new attempts, keeps historical selection and stops req
       route.fulfill({
         json: {
           text: `日志尝试 ${new URL(route.request().url()).searchParams.get('attempt')}`,
-          next_offset: 0,
+          next_offset_bytes: 0,
         },
       }),
     )
@@ -131,6 +134,7 @@ test('live detail follows new attempts, keeps historical selection and stops req
     })
     await page.getByRole('button', { name: '关闭', exact: true }).click()
     const stopped = requests
+    // Measures that no poll runs during one 3 s polling interval.
     await page.waitForTimeout(3300)
     expect(requests).toBe(stopped)
   } finally {
@@ -183,8 +187,9 @@ test('logout cannot be undone by a delayed config refresh', async ({ page, reque
     await page.getByRole('button', { name: '刷新', exact: true }).click()
     await expect.poll(() => !!release).toBe(true)
     await page.getByRole('button', { name: '退出登录' }).click()
-    release!()
+    defined(release)()
     await expect(page.getByLabel('管理员密码')).toBeVisible()
+    // Measures that the late response does not change the page once it settles.
     await page.waitForTimeout(300)
     await expect(page.locator('.page-heading')).toHaveCount(0)
     await page.unroute('**/api/config')
@@ -208,11 +213,11 @@ function detailRun(state: string) {
     trigger: 'manual',
     created_at: now,
     started_at: now,
-    elapsed_seconds: 10,
-    budget_seconds: 60,
+    elapsed_ms: 10000,
+    budget_ms: 60000,
     progress: {
       phase: 'transfer',
-      bytes: 100,
+      transferred_bytes: 100,
       received_bytes: null,
       success: 0,
       failed: 0,
@@ -246,10 +251,10 @@ test('terminal detail drains a bounded log backlog then stops and preserves disc
     )
     await page.route('**/api/runs/1/logs?*', (route) => {
       logReads++
-      const offset = Number(new URL(route.request().url()).searchParams.get('offset'))
+      const offset = Number(new URL(route.request().url()).searchParams.get('offset_bytes'))
       const next = Math.min(content.length, offset + 128 * 1024)
       return route.fulfill({
-        json: { text: content.subarray(offset, next).toString(), next_offset: next },
+        json: { text: content.subarray(offset, next).toString(), next_offset_bytes: next },
       })
     })
     await server.login()
@@ -262,6 +267,7 @@ test('terminal detail drains a bounded log backlog then stops and preserves disc
     await page.keyboard.press('Enter')
     await expect(page.locator('.log-view')).toContainText('终态日志尾部', { timeout: 12000 })
     expect(logReads).toBe(18)
+    // Measures that no poll runs during one 3 s polling interval.
     await page.waitForTimeout(3300)
     expect(logReads).toBe(18)
     expect(detailReads).toBe(1)
@@ -308,7 +314,7 @@ test('detail pauses hidden and folded reads, resumes, and reads after in-flight 
         release = undefined
       }
       return route.fulfill({
-        json: { text: terminal ? '最终收尾日志' : '活动日志', next_offset: 0 },
+        json: { text: terminal ? '最终收尾日志' : '活动日志', next_offset_bytes: 0 },
       })
     })
     await server.login()
@@ -319,6 +325,7 @@ test('detail pauses hidden and folded reads, resumes, and reads after in-flight 
     await expect(page.locator('.log-view')).toContainText('活动日志')
     await logs.click()
     const foldedReads = logReads
+    // Measures that no poll runs during one 3 s polling interval.
     await page.waitForTimeout(3300)
     expect(logReads).toBe(foldedReads)
     await logs.click()
@@ -327,7 +334,8 @@ test('detail pauses hidden and folded reads, resumes, and reads after in-flight 
       Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' })
       document.dispatchEvent(new Event('visibilitychange'))
     })
-    const hiddenReads = [detailReads, logReads]
+    const hiddenReads = [detailReads, logReads] as const
+    // Measures that no poll runs during one 3 s polling interval.
     await page.waitForTimeout(3300)
     expect([detailReads, logReads]).toEqual(hiddenReads)
     await page.evaluate(() => {
@@ -342,9 +350,10 @@ test('detail pauses hidden and folded reads, resumes, and reads after in-flight 
     run.state = 'succeeded'
     await page.getByRole('button', { name: '刷新运行详情' }).click()
     await expect(page.getByRole('dialog').locator('.badge')).toHaveText('成功')
-    release!()
+    defined(release)()
     await expect(page.locator('.log-view')).toContainText('最终收尾日志', { timeout: 12000 })
     const finalReads = [detailReads, logReads]
+    // Measures that no poll runs during one 3 s polling interval.
     await page.waitForTimeout(3300)
     expect([detailReads, logReads]).toEqual(finalReads)
   } finally {
@@ -376,7 +385,8 @@ test('old session requests cannot expire a new login', async ({ page, request })
     await page.getByRole('button', { name: '登录管理台' }).click()
     await expect(page.locator('.page-heading')).toBeVisible()
     await page.unroute('**/api/system/checks')
-    release!()
+    defined(release)()
+    // Measures that the late response does not change the page once it settles.
     await page.waitForTimeout(300)
     await expect(page.locator('.page-heading')).toBeVisible()
     await expect(page.getByLabel('管理员密码')).toHaveCount(0)
@@ -397,11 +407,11 @@ test('batch run controls ask before pausing, resuming, cancelling or rerunning',
       type: 'rsync',
       trigger: 'manual',
       created_at: now,
-      elapsed_seconds: 0,
-      budget_seconds: 30,
+      elapsed_ms: 0,
+      budget_ms: 30000,
       progress: {
         phase: 'transfer',
-        bytes: 0,
+        transferred_bytes: 0,
         percent: null,
         success: 0,
         failed: 0,
@@ -420,7 +430,7 @@ test('batch run controls ask before pausing, resuming, cancelling or rerunning',
     await page.route('**/api/runs?*', (route) =>
       route.fulfill({ json: { items: runs, total: runs.length } }),
     )
-    await page.route(/\/api\/(runs\/\d+\/\w+|sources\/[^/]+\/run)$/, (route) => {
+    await page.route(/\/api\/(runs\/\d+\/\w+|sources\/[^/]+\/runs)$/, (route) => {
       posted.push(new URL(route.request().url()).pathname)
       return route.fulfill({ json: {} })
     })
@@ -438,7 +448,7 @@ test('batch run controls ask before pausing, resuming, cancelling or rerunning',
     const controls = [
       ['暂停任务', '暂停“运行任务”', '暂停', '/api/runs/1/pause'],
       ['继续任务', '继续“暂停任务源”', '继续', '/api/runs/2/resume'],
-      ['重新同步', '重新同步“失败任务”', '重新同步', '/api/sources/done/run'],
+      ['重新同步', '重新同步“失败任务”', '重新同步', '/api/sources/done/runs'],
     ] as const
     for (const [name, prompt, label, endpoint] of controls) {
       for (const accept of [false, true]) {
@@ -467,9 +477,10 @@ test('batch run controls ask before pausing, resuming, cancelling or rerunning',
     await cancel.click()
     await page.mouse.click(5, 5)
     await expect(confirm).toHaveCount(0)
+    // Measures that the late response does not change the page once it settles.
     await page.waitForTimeout(300)
     expect(posted.filter((path) => path.endsWith('/cancel'))).toEqual([])
-    expect(posted).toEqual(['/api/runs/1/pause', '/api/runs/2/resume', '/api/sources/done/run'])
+    expect(posted).toEqual(['/api/runs/1/pause', '/api/runs/2/resume', '/api/sources/done/runs'])
     expect(native).toEqual([])
   } finally {
     await server.close()

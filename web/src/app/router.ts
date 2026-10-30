@@ -1,14 +1,15 @@
+import { cancelPageRequests } from './api'
 import { createRouter, createWebHistory } from 'vue-router'
-const Overview = () => import('../features/overview/Overview.vue')
-const Sources = () => import('../features/sources/Sources.vue')
-const Batches = () => import('../features/runs/Batches.vue')
-const Records = () => import('../features/runs/Records.vue')
-const Schedules = () => import('../features/schedules/Schedules.vue')
-const Analytics = () => import('../features/analytics/Analytics.vue')
-const Settings = () => import('../features/settings/Settings.vue')
+const Overview = () => import('../features/overview/OverviewPage.vue')
+const Sources = () => import('../features/sources/SourcesPage.vue')
+const Batches = () => import('../features/runs/BatchesPage.vue')
+const Records = () => import('../features/runs/RecordsPage.vue')
+const Schedules = () => import('../features/schedules/SchedulesPage.vue')
+const Analytics = () => import('../features/analytics/AnalyticsPage.vue')
+const Settings = () => import('../features/settings/SettingsPage.vue')
 
 export const router = createRouter({
-  history: createWebHistory('/admin/'),
+  history: createWebHistory(import.meta.env.BASE_URL),
   routes: [
     { path: '/', redirect: '/overview' },
     { path: '/overview', component: Overview, meta: { title: '概览' } },
@@ -37,4 +38,8 @@ export const router = createRouter({
     { path: '/settings', component: Settings, meta: { title: '系统设置' } },
     { path: '/:pathMatch(.*)*', redirect: '/overview' },
   ],
+})
+
+router.beforeEach((to, from) => {
+  if (to.path !== from.path) cancelPageRequests()
 })

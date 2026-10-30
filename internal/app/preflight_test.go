@@ -2,41 +2,45 @@ package app
 
 import (
 	"bufio"
-	"context"
+	"crypto/sha256"
 	"encoding/json/v2"
 	"io"
-	"mirrordock/internal/runs"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"mirrordock/internal/database"
+	runengine "mirrordock/internal/run"
+	"mirrordock/internal/timefmt"
 )
 
 func TestLatestSourceStatusAndExpiredEventStream(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	file := filepath.Join(dir, "config.yaml")
 	text := "auth:\n  username: admin\n  password: fixture\npath: ./state\nmirror_root: ./mirror\nsources:\n  - id: quiet\n    name: Quiet\n    type: rsync\n    dest: quiet\n    src1: rsync://localhost/repo/\n  - id: noisy\n    name: Noisy\n    type: rsync\n    dest: noisy\n    src1: rsync://localhost/repo/\n"
-	if err := os.WriteFile(file, []byte(text), 0600); err != nil {
+	if err := os.WriteFile(file, []byte(text), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	a, err := openFile(file)
+	a, err := openFile(t.Context(), file)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer a.Close(context.Background())
+	defer closeTestApp(t, a)
 	for i := range 126 {
-		run := &runs.Run{SourceID: "noisy", State: "succeeded", CreatedAt: time.Now()}
+		run := &runengine.Run{SourceID: "noisy", State: "succeeded", CreatedAt: timefmt.From(time.Now())}
 		if i == 0 {
 			run.SourceID, run.State = "quiet", "paused"
 		}
-		if _, err := a.Store.CreateRun(run.SourceID, run.State, run.CreatedAt.Format(time.RFC3339Nano), run); err != nil {
+		if _, err := a.Store.CreateRun(t.Context(), database.CreateRunOptions{Source: run.SourceID, State: run.State, Created: run.CreatedAt.Time(), Value: run}); err != nil {
 			t.Fatal(err)
 		}
 	}
 	a.auth.mu.Lock()
-	a.auth.sessions["fixture"] = session{expires: time.Now().Add(time.Hour)}
+	a.auth.sessions[sha256.Sum256([]byte("fixture"))] = session{expires: time.Now().Add(time.Hour)}
 	a.auth.mu.Unlock()
 	server := httptest.NewServer(a.Handler())
 	defer server.Close()
@@ -58,10 +62,10 @@ func TestLatestSourceStatusAndExpiredEventStream(t *testing.T) {
 		}
 		return res
 	}
-	res := get("/api/runs?latest=1")
+	res := get("/api/runs?latest=true")
 	var result struct {
-		Items []runs.Run `json:"items"`
-		Total int        `json:"total"`
+		Items []runengine.Run `json:"items"`
+		Total int             `json:"total"`
 	}
 	err = json.UnmarshalRead(res.Body, &result)
 	res.Body.Close()
@@ -81,7 +85,7 @@ func TestLatestSourceStatusAndExpiredEventStream(t *testing.T) {
 		}
 	}
 	a.auth.mu.Lock()
-	a.auth.sessions["fixture"] = session{expires: time.Now().Add(-time.Second)}
+	a.auth.sessions[sha256.Sum256([]byte("fixture"))] = session{expires: time.Now().Add(-time.Second)}
 	a.auth.mu.Unlock()
 	rest, err := io.ReadAll(reader)
 	if err != nil || len(rest) != 0 {

@@ -1,14 +1,16 @@
 package config
 
 import (
-	"errors"
+	"fmt"
 	"slices"
 	"strings"
 )
 
+// NotificationChannels lists the supported notification channel kinds.
 var NotificationChannels = []string{"wecom", "dingtalk", "telegram", "bark", "webhook"}
 
-// Credentials are authenticated ciphertext, never included in configuration API/snapshots.
+// Notification configures one notification channel. Credentials are
+// authenticated ciphertext, never included in configuration API/snapshots.
 type Notification struct {
 	Enabled     bool   `yaml:"enabled"`
 	OnlyFailure bool   `yaml:"only_failure"`
@@ -18,15 +20,19 @@ type Notification struct {
 	ChatID      string `yaml:"chat_id,omitempty"`
 }
 
+// ValidateNotifications checks the kind and fields of every notification
+// channel.
 func ValidateNotifications(channels map[string]Notification) error {
 	for kind, c := range channels {
 		if !slices.Contains(NotificationChannels, kind) {
-			return errors.New("不支持的通知渠道")
+			return fieldError("settings.notifications", "unsupported_channel",
+				fmt.Sprintf("unsupported channel %q; use wecom, dingtalk, telegram, bark or webhook", kind))
 		}
+		p := "settings.notifications." + kind
 		for _, value := range []string{c.Endpoint, c.Token, c.Secret} {
 			encrypted := strings.HasPrefix(value, "enc:v1:") && len(value) <= 16384
 			if value != "" && !encrypted {
-				return errors.New("通知凭据必须通过通知设置加密保存")
+				return fieldError(p, "plaintext_credentials", "credentials must be saved encrypted through the notification settings")
 			}
 		}
 		fields := ChannelFields{
@@ -36,7 +42,7 @@ func ValidateNotifications(channels map[string]Notification) error {
 			Secret:   c.Secret != "",
 		}
 		if !fields.AllowedFor(kind) {
-			return errors.New("通知字段与渠道不匹配")
+			return fieldError(p, "channel_fields_mismatch", "fields do not match the channel")
 		}
 	}
 	return nil

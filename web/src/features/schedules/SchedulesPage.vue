@@ -1,0 +1,166 @@
+<script setup lang="ts">
+import { useQueryState } from '../../app/use-query-state'
+import type { DeepReadonly } from 'vue'
+import PaginationBar from '../../components/PaginationBar.vue'
+import RefreshButton from '../../components/RefreshButton.vue'
+import { usePagination } from '../../lib/pagination/usePagination'
+import { computed } from 'vue'
+import { Clock3, Play } from '@lucide/vue'
+import { clone, state, refresh, perform, runSource, saveConfiguration } from '../../app/state'
+import type { Source } from '../../app/types'
+import { sourceType } from '../../app/labels'
+import { time } from '../../app/server-time'
+import StackedTime from '../../components/StackedTime.vue'
+const sources = computed(() => state.config?.config.sources ?? [])
+const { page, pageSize, visible } = usePagination(sources)
+useQueryState({ page, pageSize })
+async function toggle(source: DeepReadonly<Source>) {
+  if (!state.config) return
+  const config = clone(state.config.config)
+  const item = config.sources.find((s) => s.id === source.id)
+  if (!item) return
+  item.schedule.enabled = !item.schedule.enabled
+  await saveConfiguration({ config })
+}
+async function cron(source: DeepReadonly<Source>, event: Event) {
+  const value = (event.target as HTMLInputElement).value
+  if (value === source.schedule.cron) return
+  if (!state.config) return
+  const config = clone(state.config.config)
+  const item = config.sources.find((s) => s.id === source.id)
+  if (!item) return
+  item.schedule.cron = value
+  await saveConfiguration({ config })
+}
+</script>
+<template>
+  <section>
+    <div class="page-heading">
+      <div>
+        <h1>
+          计划管理<span
+            class="title-dot"
+            aria-hidden="true"
+            >.</span
+          >
+        </h1>
+      </div>
+      <RefreshButton
+        class="button"
+        :action="() => perform(refresh)"
+        >刷新</RefreshButton
+      >
+    </div>
+    <div class="panel">
+      <div class="table-scroll">
+        <table class="schedule-table">
+          <thead>
+            <tr>
+              <th>同步源</th>
+              <th class="center">Cron 表达式</th>
+              <th class="center">下次运行</th>
+              <th class="center">自动计划</th>
+              <th class="center">操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr
+              v-for="source in visible"
+              :key="source.id"
+            >
+              <td>
+                <strong>{{ source.name }}</strong
+                ><small>{{ sourceType(source.type) }}</small>
+              </td>
+              <td class="center">
+                <input
+                  class="cron-input"
+                  :value="source.schedule.cron"
+                  aria-label="Cron 表达式"
+                  @change="perform(() => cron(source, $event))"
+                />
+              </td>
+              <td class="schedule-timestamp center">
+                <StackedTime
+                  v-if="source.enabled && source.schedule.enabled"
+                  :value="time(state.info?.schedules[source.id])"
+                  :datetime="state.info?.schedules[source.id]"
+                /><span
+                  v-else
+                  class="muted"
+                  >未启用</span
+                >
+              </td>
+              <td class="center">
+                <button
+                  class="toggle"
+                  :class="{ on: source.schedule.enabled }"
+                  :aria-pressed="source.schedule.enabled"
+                  :aria-label="'自动计划 ' + source.name"
+                  @click="perform(() => toggle(source))"
+                >
+                  <span></span></button
+                ><small
+                  v-if="!source.enabled"
+                  class="error-text"
+                  >同步源已禁用</small
+                >
+              </td>
+              <td class="center">
+                <button
+                  class="icon-button outlined tone-green"
+                  :disabled="!source.enabled"
+                  :aria-label="'立即同步 ' + source.name"
+                  :title="source.enabled ? '立即同步' : '同步源已禁用'"
+                  @click="perform(() => runSource(source.id))"
+                >
+                  <Play :size="15" />
+                </button>
+              </td>
+            </tr>
+            <tr v-if="!state.config?.config.sources.length">
+              <td
+                colspan="5"
+                class="empty-state"
+              >
+                <Clock3 :size="32" />
+                <h3>暂无运行计划</h3>
+                <p>先在同步源页面新增来源。</p>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <PaginationBar
+        v-model:page="page"
+        v-model:page-size="pageSize"
+        :total="sources.length"
+        :count="visible.length"
+        noun="个计划"
+      />
+    </div>
+  </section>
+</template>
+
+<style scoped>
+.schedule-table {
+  min-width: 760px;
+}
+.schedule-table :deep(th:nth-child(2)) {
+  width: 240px;
+}
+.schedule-table :deep(th:nth-child(3)) {
+  width: 200px;
+}
+.schedule-table :deep(th:nth-child(4)) {
+  width: 160px;
+}
+.schedule-table :deep(th:last-child) {
+  width: 120px;
+}
+.cron-input {
+  width: 150px;
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  font-size: var(--font-12px);
+}
+</style>

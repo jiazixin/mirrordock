@@ -46,7 +46,7 @@ MirrorDock 是 Go 后端加内嵌 Vue 3 管理台的单二进制程序，用来�
 | 文件系统 | 镜像根需支持 reflink，且 work 与 published 位于同一文件系统 |
 | rsync | 3.1 及以上，并包含发行版的安全补丁（macOS 自带版本过旧） |
 | Reposync（可选） | DNF 4、`dnf-plugins-core`，开启 GPG 检查时还需要 `rpmkeys`；不承诺兼容 DNF5 |
-| 从源码构建 | Go 1.27.3、Node.js ≥ 22.12、npm |
+| 从源码构建 | Go 1.27.3、Node.js ≥ 26.12.1、npm |
 
 ## 快速开始
 
@@ -107,7 +107,8 @@ go build -trimpath -o bin/mirrordock ./cmd/mirrordock
 
 完整字段与注释见 [configs/config.example.yaml](configs/config.example.yaml)，行为细节见 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)。要点如下：
 
-- `-c <文件>` 与 `--config <文件>` 等价，同时指定不同文件报错。选择顺序为 `--config` > 环境变量 `CONFIG_FILE` > 工作目录下的 `configs/config.local.yaml`；文件不存在就报错，不会自动生成。
+- `-c <文件>` 与 `--config <文件>` 等价，同时指定不同文件报错。选择顺序为 `--config` > 环境变量 `CONFIG_FILE` > 工作目录下的 `configs/config.local.yaml`；`CONFIG_FILE` 设置为空或全空白时报错。文件不存在就报错，不会自动生成；默认文件缺失同样报错，因为内置默认值不含必填的 `auth.username` 与 `auth.password`。相对的 `CONFIG_FILE` / `-c` 路径以进程工作目录为基准。
+- 配置与校验错误为英文，并以字段路径开头，例如 `port: must be between 1 and 65535`、`sources.0.dest: must be a clean relative directory`（源按列表下标定位）。管理 API 的错误响应为 `{"error": {"code", "message", "details"}}`：配置字段错误为 `invalid_argument`，并在 `details.fields` 中给出 `path` 与 `reason` 原因码；`precondition_failed` 表示配置已被他人修改（412，`If-Match` 不是当前 revision）；`config_malformed` 表示 YAML 格式无效。完整约定见 [接口约定](docs/API.md)。管理台按错误码显示中文提示（`web/src/app/config-errors.ts`），未登记的原因码显示中文通用提示。
 - 相对路径以配置文件所在目录为基准。数据库为 `<path>/data.sqlite`，任务日志为 `<path>/logs/<run-id>/<attempt>.log`。
 - 除 `CONFIG_FILE` 选择文件外，不支持用环境变量覆盖配置项。调度、管理台和公开目录使用程序启动时的时区，可在启动环境设置 `TZ=Asia/Shanghai`。
 - `listen`、`port`、`path`、`mirror_root`、`tls`、`auth`、`log` 修改后需重启；同步源、计划、通知等可在页面修改，保存即生效。
@@ -162,7 +163,8 @@ E2E 测试与真实 rsync 测试需要现代 rsync 和测试二进制，命令�
 
 - 版本号来自 Git tag，格式为 `v主版本.次版本.修订版本`（预发布如 `v1.2.0-rc.1`）。Go 构建时自动写入模块版本，非 tag 提交显示伪版本，有未提交修改时带 `+dirty`。
 - 查询版本：`mirrordock --version`，输出形如 `mirrordock v1.2.0 (revision=0123456789ab)`（伪版本已含提交号，不再附 revision；有未提交修改时附 `modified`）。`--version` 与 `--help`（英文）输出到 stdout，不读取配置，也不启动服务。
-- 退出码：0 成功，2 参数错误，1 配置、启动或运行失败。日志就绪前的错误（参数、配置、日志初始化）以 `mirrordock: <错误>` 纯文本写入 stderr，参数错误另附 `Run 'mirrordock --help' for usage.`；之后的启动与运行错误仍写入程序日志。
+- 退出码：0 成功或收到 SIGINT / SIGTERM 后正常关闭，2 参数错误，1 配置、启动、运行或关闭失败。参数错误以 `mirrordock: <错误>` 写入 stderr 并另起一行附 `Run 'mirrordock --help' for usage.`；配置与日志初始化失败为一行 `mirrordock: config: <错误>` 或 `mirrordock: log: <错误>`。日志就绪后的失败只写入程序日志，不再另写 stderr。
+- 程序日志记录 `service_starting`（含 `version`）、监听成功后的 `service_listening`（含 `listen`）、开始关闭时的 `service_stopping` 和正常退出前的 `service_stopped`；失败为 `service_failed` / `service_shutdown_failed`。第一次信号开始正常关闭（HTTP 排空最多 30 秒，超时则强制关闭连接并记为关闭失败），第二次信号立即终止进程。
 - 源码包没有 `.git` 时，可显式注入与源码一致的版本：`go build -trimpath -ldflags='-X main.version=v1.0.0' -o bin/mirrordock ./cmd/mirrordock`。
 - 推送标准 tag 会触发 [Release 工作流](.github/workflows/release.yml)：先核对 `--version`，再由 GoReleaser 构建全部目标，并上传 tar.gz 与 `checksums.txt`。
 
@@ -175,6 +177,7 @@ E2E 测试与真实 rsync 测试需要现代 rsync 和测试二进制，命令�
 | [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | 部署与运维参考：配置协议、执行器、日志/TLS、通知、备份、下载与发布 |
 | [docs/DESIGN.md](docs/DESIGN.md) | 当前架构与设计决策（含 ADR-010 下载性能） |
 | [docs/IMPLEMENTATION.md](docs/IMPLEMENTATION.md) | 接口、源码定位、构建、发布、测试与 CI |
+| [docs/API.md](docs/API.md) | 错误响应、任务错误与事件代码、通知记录代码的契约 |
 | [docs/ACCEPTANCE.md](docs/ACCEPTANCE.md) | 验收记录、审查结果与未验证项 |
 | [configs/config.example.yaml](configs/config.example.yaml) | 带注释的完整配置示例 |
 
@@ -204,6 +207,18 @@ test-results/            忽略的 Go/OCR/构建报告
 | §4 `bin/` 只放可执行文件 | GoReleaser 输出（二进制、tar.gz、checksums、元数据）在 `bin/release/` | 默认根 `dist/` 未被忽略会让 Go 标记 dirty，且 `dist/` 保留给 Node/Web 产物 | 发布构建；更换发布工具时评估 |
 | §7.2 日志位置 | log.path 可为部署绝对路径或相对配置目录 | 已确认顶层 log 字段；验证与镜像/敏感路径隔离 | 程序日志；日志协议改变时评估 |
 
+## 代码例外
+
+本项目长期偏离 [代码规范.md](代码规范.md) 及 [Go代码规范.md](Go代码规范.md) 的做法（代码规范第 9 节）：
+
+| 规则 | 实际做法 | 原因与依据 | 适用范围 | 重新评估条件 |
+| --- | --- | --- | --- | --- |
+| Go代码规范 §7 配置为值类型，入口为 `Load(src Source) (Config, error)` | 运行期可编辑配置使用 `*Manager` 而非值类型 `Config`：入口为 `config.Open(src config.LoadSource) (*config.Manager, error)`，Manager 提供当前值、启动值、重载与写回 | 管理台修改配置后热加载并写回 YAML（保留注释、检查 revision、原子写入）；Go代码规范 §7 允许把运行期可编辑配置记录为项目例外 | `internal/config` 及持有 Manager 的 `cmd/mirrordock`、`app`、`runs`、`notifications` | 不再支持页面修改配置时 |
+| Go代码规范 §6 安全响应头 `Content-Security-Policy: default-src 'self'; …` | 管理台页面（`/admin/`）使用 `style-src 'self' 'unsafe-inline'`、`img-src 'self' data:` 等放宽后的策略；`/api/` 与 `/healthz` 使用规范默认值 | Vue 的样式绑定输出内联 style，图标使用 data URI；脚本仍只允许同源构建产物 | `internal/app/app.go` 的 `adminContentSecurityPolicy` | 管理台不再使用内联样式时 |
+| Go代码规范 §7 加载来源类型名 `Source` | 类型名为 `config.LoadSource`，字段与规范的 `Source` 相同（`Path`、`Explicit`、`WorkDir`、`LookupEnv`） | `config.Source` 已是镜像同步源的领域类型，被 20 个文件使用 | `internal/config` | 同步源类型改名时改回 `Source` |
+| Go代码规范 §7 `func (c Config) Validate() error` | `func (c Config) Validate(file string) error`，只校验、不修改，参数为配置文件路径 | 配置中的相对路径以配置文件目录为基准；校验要解析符号链接，检查镜像根与数据、日志、配置、TLS 文件隔离，并加载 TLS 证书 | `internal/config` | 配置不再含相对文件路径时 |
+| 代码规范 §3.1 用户文案由客户端按代码映射 | 通知正文（企业微信、钉钉、Telegram、Bark、Webhook 及测试通知）与公开镜像目录页（`internal/mirror/listing.*`）由服务端生成中文 | 通知发往外部渠道、目录页由服务端直接渲染给匿名用户，二者都没有可做映射的客户端；管理 API 与任务记录已按 [接口错误约定](docs/API.md) 只返回代码 | `internal/notification/message.go`、`service.go` 的测试通知、`internal/mirror/listing.*` | 通知或公开目录改为多语言或由前端渲染时 |
+
 ## 参与贡献
 
 欢迎提交 Issue 和 Pull Request。提交前请：
@@ -214,4 +229,4 @@ test-results/            忽略的 Go/OCR/构建报告
 
 ## 许可证
 
-本项目基于 [Apache License 2.0](LICENSE) 开源。公开目录内嵌的 Phosphor 图标遵循其自带的 MIT 许可（见 `internal/mirrors/listing-icons.html`）。
+本项目基于 [Apache License 2.0](LICENSE) 开源。公开目录内嵌的 Phosphor 图标遵循其自带的 MIT 许可（见 `internal/mirror/listing-icons.html`）。

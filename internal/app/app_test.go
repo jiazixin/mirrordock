@@ -2,7 +2,6 @@ package app
 
 import (
 	"bytes"
-	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -13,45 +12,52 @@ import (
 	"errors"
 	"io"
 	"math/big"
-	"mirrordock/internal/config"
 	"net"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"mirrordock/internal/config"
+	"mirrordock/internal/database"
+	runengine "mirrordock/internal/run"
 )
 
 func TestAdminAuthenticationWritebackAndPublicIsolation(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	file := filepath.Join(dir, "config.yaml")
 	text := "# preserve comment\nlisten: 127.0.0.1\nport: 8080\npath: ./data\nmirror_root: ./mirror\nauth:\n  username: operator\n  password: correct password 123\nsettings:\n  github:\n    token: secret-token\n    proxy: http://user:proxy-password@127.0.0.1:8081\nsources: []\n"
-	if err := os.WriteFile(file, []byte(text), 0600); err != nil {
+	if err := os.WriteFile(file, []byte(text), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	a, err := openFile(file)
+	a, err := openFile(t.Context(), file)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer a.Close(context.Background())
-	if other, err := openFile(file); err == nil {
-		other.Close(context.Background())
+	defer closeTestApp(t, a)
+	if other, err := openFile(t.Context(), file); err == nil {
+		closeTestApp(t, other)
 		t.Fatal("same data dir opened twice")
 	}
 	server := httptest.NewServer(a.Handler())
 	defer server.Close()
 	jar, _ := cookiejar.New(nil)
 	client := &http.Client{Jar: jar, Timeout: 5 * time.Second}
-	request := func(method, path, body, origin string) *http.Response {
+	request := func(method, path, body, origin string, headers ...string) *http.Response {
 		t.Helper()
-		req, _ := http.NewRequest(method, server.URL+path, strings.NewReader(body))
-		req.Header.Set("X-MirrorDock-Request", "1")
+		req, _ := http.NewRequestWithContext(t.Context(), method, server.URL+path, strings.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
 		if origin != "" {
 			req.Header.Set("Origin", origin)
+		}
+		for i := 0; i+1 < len(headers); i += 2 {
+			req.Header.Set(headers[i], headers[i+1])
 		}
 		res, err := client.Do(req)
 		if err != nil {
@@ -61,8 +67,32 @@ func TestAdminAuthenticationWritebackAndPublicIsolation(t *testing.T) {
 	}
 	res := request("GET", "/api/config", "", "")
 	res.Body.Close()
-	if res.StatusCode != 401 {
-		t.Fatal("anonymous admin access", res.StatusCode)
+	if res.StatusCode != 401 || res.Header.Get("X-Request-ID") == "" || res.Header.Get("Cache-Control") != "no-store" {
+		t.Fatal("anonymous admin access", res.StatusCode, res.Header)
+	}
+	res = request("GET", "/healthz", "", "", "X-Request-ID", "probe-1")
+	b, _ := io.ReadAll(res.Body)
+	res.Body.Close()
+	if res.StatusCode != http.StatusOK || string(b) != `{"status":"ok"}` || res.Header.Get("X-Request-ID") != "probe-1" {
+		t.Fatal("health check", res.StatusCode, string(b))
+	}
+	res = request("GET", "/api/info", "", "")
+	b, _ = io.ReadAll(res.Body)
+	res.Body.Close()
+	if res.StatusCode != http.StatusOK || !strings.Contains(string(b), `"capabilities":[`) {
+		t.Fatal("service info", res.StatusCode, string(b))
+	}
+	res = request("GET", "/api/auth/login", "", "")
+	b, _ = io.ReadAll(res.Body)
+	res.Body.Close()
+	if res.StatusCode != http.StatusMethodNotAllowed || res.Header.Get("Allow") != "POST" || !strings.Contains(string(b), `"code":"method_not_allowed"`) {
+		t.Fatal("wrong method", res.StatusCode, res.Header.Get("Allow"), string(b))
+	}
+	res = request("POST", "/api/auth/login", "username=a", server.URL, "Content-Type", "application/x-www-form-urlencoded")
+	b, _ = io.ReadAll(res.Body)
+	res.Body.Close()
+	if res.StatusCode != http.StatusUnsupportedMediaType || !strings.Contains(string(b), `"code":"unsupported_media_type"`) {
+		t.Fatal("form body accepted", res.StatusCode, string(b))
 	}
 	// Both public and admin pages must get the same real ICO before login.
 	var icon []byte
@@ -99,12 +129,12 @@ func TestAdminAuthenticationWritebackAndPublicIsolation(t *testing.T) {
 		res = request("POST", "/api/auth/login", invalid, server.URL)
 		b, _ := io.ReadAll(res.Body)
 		res.Body.Close()
-		if res.StatusCode != 401 || !strings.Contains(string(b), "用户名或密码错误") {
+		if res.StatusCode != 401 || !strings.Contains(string(b), `"code":"invalid_credentials"`) {
 			t.Fatal("invalid account accepted or exposed", res.StatusCode)
 		}
 	}
-	res = request("GET", "/api/auth/status", "", "")
-	b, _ := io.ReadAll(res.Body)
+	res = request("GET", "/api/auth/session", "", "")
+	b, _ = io.ReadAll(res.Body)
 	res.Body.Close()
 	if strings.Contains(string(b), "username") || strings.Contains(string(b), "initialized") {
 		t.Fatal("anonymous status exposed an account or obsolete setup state")
@@ -118,7 +148,7 @@ func TestAdminAuthenticationWritebackAndPublicIsolation(t *testing.T) {
 	if len(cookies) != 1 || !cookies[0].HttpOnly || cookies[0].SameSite != http.SameSiteStrictMode || cookies[0].Path != "/api/" {
 		t.Fatal("session cookie protections missing")
 	}
-	res = request("GET", "/api/auth/status", "", "")
+	res = request("GET", "/api/auth/session", "", "")
 	b, _ = io.ReadAll(res.Body)
 	res.Body.Close()
 	if !strings.Contains(string(b), `"username":"operator"`) {
@@ -144,6 +174,10 @@ func TestAdminAuthenticationWritebackAndPublicIsolation(t *testing.T) {
 	res = request("GET", "/api/config", "", "")
 	b, _ = io.ReadAll(res.Body)
 	res.Body.Close()
+	etag := res.Header.Get("ETag")
+	if etag != strconv.Quote(a.Config.View().Revision) || strings.Contains(string(b), `"revision"`) {
+		t.Fatal("configuration revision not sent as ETag", etag)
+	}
 	if strings.Contains(string(b), "secret-token") || strings.Contains(string(b), "correct password 123") || strings.Contains(string(b), `"password"`) {
 		t.Fatal("token leaked")
 	}
@@ -156,16 +190,22 @@ func TestAdminAuthenticationWritebackAndPublicIsolation(t *testing.T) {
 	}
 	view.Config.Settings.GitHub.ReleaseCount = 8
 	view.Config.Auth.Username = "browser-override"
-	payload, _ := json.Marshal(map[string]any{"config": view.Config, "revision": view.Revision, "proxy_update": "socks5://user:new-proxy-secret@127.0.0.1:1080"})
+	payload, _ := json.Marshal(map[string]any{"config": view.Config, "proxy_update": "socks5://user:new-proxy-secret@127.0.0.1:1080"})
 	res = request("PUT", "/api/config", string(payload), server.URL)
+	res.Body.Close()
+	if res.StatusCode != http.StatusPreconditionFailed {
+		t.Fatal("unconditional configuration write accepted", res.StatusCode)
+	}
+	res = request("PUT", "/api/config", string(payload), server.URL, "If-Match", etag)
 	b, _ = io.ReadAll(res.Body)
 	res.Body.Close()
-	if res.StatusCode != 200 {
+	if res.StatusCode != 200 || res.Header.Get("ETag") == etag {
 		t.Fatal(res.StatusCode, string(b))
 	}
-	res = request("PUT", "/api/config", string(payload), server.URL)
+	res = request("PUT", "/api/config", string(payload), server.URL, "If-Match", etag)
+	b, _ = io.ReadAll(res.Body)
 	res.Body.Close()
-	if res.StatusCode != 409 {
+	if res.StatusCode != http.StatusPreconditionFailed || !strings.Contains(string(b), `"code":"precondition_failed"`) {
 		t.Fatal("stale configuration accepted", res.StatusCode)
 	}
 	written, _ := os.ReadFile(file)
@@ -185,8 +225,11 @@ func TestAdminAuthenticationWritebackAndPublicIsolation(t *testing.T) {
 	if res.StatusCode != 200 || !strings.Contains(string(b), "/admin/assets/") {
 		t.Fatal("embedded Vue missing", res.StatusCode)
 	}
-	res = request("POST", "/api/auth/logout", "{}", server.URL)
+	res = request("POST", "/api/auth/logout", "", server.URL)
 	res.Body.Close()
+	if res.StatusCode != http.StatusNoContent {
+		t.Fatal("logout status", res.StatusCode)
+	}
 	res = request("GET", "/api/config", "", "")
 	res.Body.Close()
 	if res.StatusCode != 401 {
@@ -195,6 +238,7 @@ func TestAdminAuthenticationWritebackAndPublicIsolation(t *testing.T) {
 }
 
 func TestTLSHTTP2PublicDownload(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -211,21 +255,29 @@ func TestTLSHTTP2PublicDownload(t *testing.T) {
 	}
 	certFile := filepath.Join(dir, "cert.pem")
 	keyFile := filepath.Join(dir, "key.pem")
-	os.WriteFile(certFile, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0600)
-	os.WriteFile(keyFile, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER}), 0600)
+	if err := os.WriteFile(certFile, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(keyFile, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER}), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	file := filepath.Join(dir, "config.yaml")
-	os.WriteFile(file, []byte("listen: 127.0.0.1\nport: 8080\npath: ./data\nmirror_root: ./mirror\nauth:\n  username: operator\n  password: correct password 123\ntls:\n  cert: ./cert.pem\n  key: ./key.pem\nsources:\n  - id: repo\n    name: Repo\n    type: rsync\n    dest: repo\n    src1: rsync://localhost/repo/\n"), 0600)
-	a, err := openFile(file)
+	if err := os.WriteFile(file, []byte("listen: 127.0.0.1\nport: 8080\npath: ./data\nmirror_root: ./mirror\nauth:\n  username: operator\n  password: correct password 123\ntls:\n  cert: ./cert.pem\n  key: ./key.pem\nsources:\n  - id: repo\n    name: Repo\n    type: rsync\n    dest: repo\n    src1: rsync://localhost/repo/\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	a, err := openFile(t.Context(), file)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer a.Close(context.Background())
+	defer closeTestApp(t, a)
 	s := a.Config.Current().Sources[0]
 	work, err := a.Mirrors.Prepare(t.Context(), s, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	os.WriteFile(filepath.Join(work, "pkg.rpm"), []byte("package"), 0644)
+	if err := os.WriteFile(filepath.Join(work, "pkg.rpm"), []byte("package"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	if _, err = a.Mirrors.Publish(t.Context(), s, 1); err != nil {
 		t.Fatal(err)
 	}
@@ -249,7 +301,7 @@ func TestTLSHTTP2PublicDownload(t *testing.T) {
 	if err != nil || res.StatusCode != 200 || string(b) != "package" || res.ProtoMajor != 2 {
 		t.Fatal(res.StatusCode, res.Proto, string(b), err)
 	}
-	if err = a.Close(context.Background()); err != nil {
+	if err = closeTestApp(t, a); err != nil {
 		t.Fatal(err)
 	}
 	if err = <-done; !errors.Is(err, http.ErrServerClosed) {
@@ -258,12 +310,13 @@ func TestTLSHTTP2PublicDownload(t *testing.T) {
 }
 
 func TestTCPStallWatcherPreservesActiveProgress(t *testing.T) {
+	t.Parallel()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer listener.Close()
-	client, err := net.Dial("tcp", listener.Addr().String())
+	client, err := (&net.Dialer{Timeout: 5 * time.Second}).DialContext(t.Context(), "tcp", listener.Addr().String())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -297,26 +350,27 @@ func TestTCPStallWatcherPreservesActiveProgress(t *testing.T) {
 	monitor.check(now.Add(time.Second))
 	monitor.check(now.Add(6 * time.Minute))
 	client.SetReadDeadline(time.Now().Add(time.Second))
-	if _, err = client.Read(buf); err != io.EOF {
+	if _, err = client.Read(buf); !errors.Is(err, io.EOF) {
 		t.Fatal("stalled connection not closed", err)
 	}
 }
 
 func TestSystemInfoUsesStartupDeployment(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	file := filepath.Join(dir, "config.yaml")
 	original := "listen: 127.0.0.1\nport: 8080\npath: ./data\nmirror_root: ./mirror\nauth:\n  username: operator\n  password: startup-password\nsettings:\n  github:\n    token: startup-token\n    proxy: http://user:proxy-password@127.0.0.1:8081\nsources: []\n"
-	if err := os.WriteFile(file, []byte(original), 0600); err != nil {
+	if err := os.WriteFile(file, []byte(original), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	a, err := openFile(file)
+	a, err := openFile(t.Context(), file)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer a.Close(context.Background())
+	defer closeTestApp(t, a)
 	updated := strings.ReplaceAll(original, "8080", "8090")
 	updated = strings.ReplaceAll(updated, "./data", "./new-data")
-	if err := os.WriteFile(file, []byte(updated), 0600); err != nil {
+	if err := os.WriteFile(file, []byte(updated), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := reloadConfig(a.Config); err != nil {
@@ -326,7 +380,7 @@ func TestSystemInfoUsesStartupDeployment(t *testing.T) {
 		t.Fatal("deployment change did not require restart")
 	}
 	recorder := httptest.NewRecorder()
-	a.info(recorder, httptest.NewRequest("GET", "/api/system/info", nil))
+	a.systemInfo(recorder, httptest.NewRequest("GET", "/api/system/info", nil))
 	var info struct {
 		OS         string `json:"os"`
 		Arch       string `json:"arch"`
@@ -358,18 +412,19 @@ func TestSystemInfoUsesStartupDeployment(t *testing.T) {
 }
 
 func TestListenFailureLeavesQueuedTaskUntouched(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	file := filepath.Join(dir, "config.yaml")
-	if err := os.WriteFile(file, []byte("listen: 127.0.0.1\npath: ./data\nmirror_root: ./mirror\nauth:\n  username: admin\n  password: fixture\nsources:\n  - id: repo\n    name: Repo\n    type: rsync\n    enabled: true\n    dest: repo\n    src1: rsync://127.0.0.1:1/repo/\n"), 0600); err != nil {
+	if err := os.WriteFile(file, []byte("listen: 127.0.0.1\npath: ./data\nmirror_root: ./mirror\nauth:\n  username: admin\n  password: fixture\nsources:\n  - id: repo\n    name: Repo\n    type: rsync\n    enabled: true\n    dest: repo\n    src1: rsync://127.0.0.1:1/repo/\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	a, err := openFile(file)
+	a, err := openFile(t.Context(), file)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer a.Close(context.Background())
+	defer closeTestApp(t, a)
 	a.Version = "test-build-version"
-	run, err := a.Runs.Enqueue("repo", "manual")
+	run, err := a.Runs.Enqueue(t.Context(), "repo", "manual")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -379,19 +434,19 @@ func TestListenFailureLeavesQueuedTaskUntouched(t *testing.T) {
 	}
 	defer listener.Close()
 	a.Server.Addr = listener.Addr().String()
-	if err := a.Serve(); err == nil {
+	if err := a.Serve(t.Context()); err == nil {
 		t.Fatal("occupied port accepted")
 	}
-	got, err := a.Runs.GetContext(t.Context(), run.ID)
+	got, err := a.Runs.Get(t.Context(), run.ID)
 	if err != nil || got.State != "queued" || len(got.Attempts) != 0 {
 		t.Fatal(got, err)
 	}
 	w := httptest.NewRecorder()
-	a.info(w, httptest.NewRequest("GET", "/api/system/info", nil))
+	a.systemInfo(w, httptest.NewRequest("GET", "/api/system/info", nil))
 	if !strings.Contains(w.Body.String(), "test-build-version") {
 		t.Fatal(w.Body.String())
 	}
-	if err := a.Store.ReadDB.Close(); err != nil {
+	if err := a.Store.Close(); err != nil {
 		t.Fatal(err)
 	}
 	req := httptest.NewRequest("GET", "/api/runs/999999", nil)
@@ -400,5 +455,48 @@ func TestListenFailureLeavesQueuedTaskUntouched(t *testing.T) {
 	a.getRun(w, req)
 	if w.Code != 503 {
 		t.Fatal("database failure misreported", w.Code)
+	}
+}
+
+func TestIdempotentRunCreation(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	file := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(file, []byte("listen: 127.0.0.1\npath: ./data\nmirror_root: ./mirror\nauth:\n  username: admin\n  password: fixture\nsources:\n  - id: repo\n    name: Repo\n    type: rsync\n    enabled: true\n    dest: repo\n    src1: rsync://127.0.0.1:1/repo/\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	a, err := openFile(t.Context(), file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeTestApp(t, a)
+	token, err := a.auth.login("admin", "fixture")
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := a.Handler()
+	create := func(key, body string) *httptest.ResponseRecorder {
+		t.Helper()
+		req := httptest.NewRequest("POST", "/api/sources/repo/runs", strings.NewReader(body))
+		req.AddCookie(&http.Cookie{Name: "mirrordock_session", Value: token})
+		req.Header.Set("Idempotency-Key", key)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		return w
+	}
+	first := create("retry-1", "")
+	again := create("retry-1", "")
+	if first.Code != http.StatusCreated || again.Code != http.StatusCreated || first.Body.String() != again.Body.String() {
+		t.Fatal("retry did not replay the first result", first.Code, again.Code, again.Body.String())
+	}
+	rows, total, err := a.Runs.List(t.Context(), runengine.ListOptions{State: "", Source: "repo", Limit: 10, Offset: 0, Filters: []database.RunFilter{database.RunFilter{}}})
+	if err != nil || total != 1 || len(rows) != 1 {
+		t.Fatal("retry created another run", total, err)
+	}
+	if reused := create("retry-1", "{}"); reused.Code != http.StatusConflict || !strings.Contains(reused.Body.String(), `"code":"idempotency_key_reused"`) {
+		t.Fatal("reused key accepted", reused.Code, reused.Body.String())
+	}
+	if invalid := create("bad key", ""); invalid.Code != http.StatusBadRequest {
+		t.Fatal("invalid key accepted", invalid.Code)
 	}
 }

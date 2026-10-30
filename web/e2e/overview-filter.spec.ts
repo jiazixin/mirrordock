@@ -1,3 +1,4 @@
+import { defined } from './support'
 import { test, expect } from '@playwright/test'
 import { spawn } from 'node:child_process'
 import { mkdtemp, writeFile, rm } from 'node:fs/promises'
@@ -15,7 +16,9 @@ test('overview timeline filters lanes by sync type and remembers the choice', as
     server.on('error', reject)
     server.listen(0, '127.0.0.1', () => {
       const value = (server.address() as net.AddressInfo).port
-      server.close(() => resolve(value))
+      server.close(() => {
+        resolve(value)
+      })
     })
   })
   const base = `http://127.0.0.1:${port}`
@@ -26,7 +29,7 @@ test('overview timeline filters lanes by sync type and remembers the choice', as
   )
   const app = spawn(
     process.env.MIRRORDOCK_TEST_BINARY ?? path.resolve(import.meta.dirname, '../../bin/mirrordock'),
-    ['-f', config],
+    ['-c', config],
     { stdio: 'ignore' },
   )
   const errors: string[] = []
@@ -35,7 +38,7 @@ test('overview timeline filters lanes by sync type and remembers the choice', as
     await expect
       .poll(async () => {
         try {
-          return (await request.get(`${base}/api/auth/status`)).status()
+          return (await request.get(`${base}/healthz`)).status()
         } catch {
           return 0
         }
@@ -76,11 +79,11 @@ test('overview timeline filters lanes by sync type and remembers the choice', as
       state: 'running',
       trigger: 'manual',
       created_at: new Date().toISOString(),
-      elapsed_seconds: 195,
-      budget_seconds: 28800,
+      elapsed_ms: 195000,
+      budget_ms: 28800000,
       progress: {
         phase: 'transfer',
-        bytes: 0,
+        transferred_bytes: 0,
         received_bytes: 1023.9 * 1024 ** 3,
         percent: 3,
         success: 0,
@@ -109,7 +112,9 @@ test('overview timeline filters lanes by sync type and remembers the choice', as
         .evaluateAll((items) => items.map((item) => item.getBoundingClientRect().left))
     const stepXs = await lefts('.live-steps li')
     const figureXs = await lefts('.live-figures > div')
-    figureXs.forEach((x, index) => expect(Math.abs(x - stepXs[index]!)).toBeLessThan(1.5))
+    figureXs.forEach((x, index) => {
+      expect(Math.abs(x - defined(stepXs[index]))).toBeLessThan(1.5)
+    })
     await liveRun.screenshot({ path: testInfo.outputPath('live-run.png') })
     // A narrow card wraps to two columns so long values stay on one line.
     await page.setViewportSize({ width: 375, height: 1000 })
@@ -165,12 +170,11 @@ test('overview timeline filters lanes by sync type and remembers the choice', as
     await filter.click()
     await page.getByRole('option', { name: '全部类型 · 6' }).click()
     await expect(lanes).toHaveCount(6)
-    expect(await page.evaluate(() => localStorage.getItem('mirrordock.overview.type'))).toBeNull()
+    await expect(page).not.toHaveURL(/type=/)
 
-    // A single type needs no filter, and a stale remembered type falls back to all lanes.
-    await page.evaluate(() => localStorage.setItem('mirrordock.overview.type', 'reposync'))
+    // A single type needs no filter; an unavailable query selection falls back to all lanes.
     sources.splice(2, 4)
-    await page.reload()
+    await page.goto(`${base}/admin/overview?type=reposync`)
     await expect(lanes).toHaveCount(2)
     await expect(filter).toHaveCount(0)
     expect(errors).toEqual([])

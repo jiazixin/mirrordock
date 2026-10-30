@@ -12,7 +12,9 @@ async function freePort(): Promise<number> {
     server.on('error', reject)
     server.listen(0, '127.0.0.1', () => {
       const port = (server.address() as net.AddressInfo).port
-      server.close(() => resolve(port))
+      server.close(() => {
+        resolve(port)
+      })
     })
   })
 }
@@ -40,12 +42,13 @@ test('notification settings, saved tests, terminal queue and mobile/help interac
   const missingPort = await freePort()
   const base = `http://127.0.0.1:${port}`
   const received: { event: string; title: string; body: string }[] = []
-  const receiver = http.createServer(async (req, res) => {
+  const receiver = http.createServer((req, res) => void receive(req, res))
+  async function receive(req: http.IncomingMessage, res: http.ServerResponse) {
     let body = ''
     for await (const chunk of req) body += String(chunk)
     received.push(JSON.parse(body))
     res.writeHead(204).end()
-  })
+  }
   await new Promise<void>((resolve) => receiver.listen(0, '127.0.0.1', resolve))
   const endpoint = `http://127.0.0.1:${(receiver.address() as net.AddressInfo).port}/fixture-sensitive-key`
   const configFile = path.join(dir, 'config.yaml')
@@ -85,7 +88,7 @@ sources:
     await expect
       .poll(async () => {
         try {
-          return (await request.get(base + '/api/auth/status')).status()
+          return (await request.get(base + '/healthz')).status()
         } catch {
           return 0
         }
@@ -110,11 +113,12 @@ sources:
     await expect(webhook.getByLabel('推送地址')).toHaveValue('')
     await page.getByRole('tab', { name: 'Rsync', exact: true }).click()
     await expect(page.getByLabel('Rsync I/O 超时')).toHaveValue('9m')
-    const current = await (await page.request.get(base + '/api/config')).json()
+    const response = await page.request.get(base + '/api/config')
+    const current = await response.json()
     current.config.settings.rsync.io_timeout = '8m'
     const changed = await page.request.put(base + '/api/config', {
-      headers: { 'X-MirrorDock-Request': '1' },
-      data: { config: current.config, revision: current.revision },
+      data: { config: current.config },
+      headers: { 'If-Match': response.headers()['etag'] ?? '' },
     })
     expect(changed.status()).toBe(200)
     await page.getByRole('button', { name: '重新载入配置', exact: true }).click()
@@ -156,8 +160,7 @@ sources:
     expect(yaml).not.toContain('fixture-sensitive-key')
     expect(yaml).toContain('# notification e2e')
     // Saving blank preserves the address; enable only after this old task was created.
-    const headers = { 'X-MirrorDock-Request': '1' }
-    const old = await (await page.request.post(base + '/api/sources/local/run', { headers })).json()
+    const old = await (await page.request.post(base + '/api/sources/local/runs')).json()
     await expect
       .poll(async () => (await (await page.request.get(base + `/api/runs/${old.id}`)).json()).state)
       .toMatch(/failed|timed_out/)
@@ -165,11 +168,9 @@ sources:
     await webhook.getByLabel('仅失败时通知').check()
     await webhook.getByRole('button', { name: '保存设置' }).click()
     await expect(page.locator('.toast-card').last().getByRole('status')).toContainText('设置已保存')
-    const newRun = await (
-      await page.request.post(base + '/api/sources/local/run', { headers })
-    ).json()
+    const newRun = await (await page.request.post(base + '/api/sources/local/runs')).json()
     await expect
-      .poll(async () => received.filter((item) => item.event === 'batch.finished').length, {
+      .poll(() => received.filter((item) => item.event === 'batch.finished').length, {
         timeout: 15000,
       })
       .toBe(1)
@@ -225,12 +226,17 @@ sources:
     })
     await page.getByRole('tab', { name: '同步策略', exact: true }).click()
     const before = polls
+    // Measures that no poll runs during one 5 s polling interval.
     await page.waitForTimeout(5200)
     expect(polls).toBe(before)
     expect(errors).toEqual([])
   } finally {
     await stop(app)
-    await new Promise<void>((resolve) => receiver.close(() => resolve()))
+    await new Promise<void>((resolve) =>
+      receiver.close(() => {
+        resolve()
+      }),
+    )
     await rm(dir, { recursive: true, force: true })
   }
 })
