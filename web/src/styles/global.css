@@ -150,6 +150,13 @@ label {
   font-weight: 500;
   color: var(--t2);
   min-width: 0;
+  /* A label is wider and taller than its control (title, gaps, grid-stretched space below), and
+     clicks anywhere on it would activate the control. Only the control itself takes pointer
+     input; the label still provides the accessible name. */
+  pointer-events: none;
+}
+label :is(input, select, textarea, button, a) {
+  pointer-events: auto;
 }
 label small,
 small {

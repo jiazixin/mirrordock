@@ -1,5 +1,23 @@
 # 验收记录
 
+## 表单控件点击范围收紧到控件本身（2026-11-10）
+
+范围：修改 `web/src/styles/global.css`、`web/src/components/OptionCard.vue`，新增 `web/e2e/click-targets.spec.ts`。基线 `b50f46a`，开始时工作区干净。
+
+- 现象：新增同步源弹窗中，鼠标在下拉框、开关附近但不在其上时点击也会触发。原因是前端所有表单字段都用 `<label>` 包裹控件，label 比控件大，点击 label 任何位置都会转发给控件。实测：同步方式下拉的 label 为 372×96，框本身 372×42，标题文字、标题右侧空白、标题与框的间隙、框下方被网格拉伸出的约 26px 空白都会展开下拉；“启用此同步源”开关 36×20，label 156×50，开关上方 4px 内边距、开关下方空白、开关与文字的 12px 空隙都会切换。
+- 全量排查：label 包裹写法出现在登录、同步源编辑、GitHub 批量添加、系统设置、通知设置、批次与运行记录筛选、搜索框共 44 处；开关统一由 `OptionCard` 渲染（同步源编辑、设置、通知共 11 处）。`RunDetail` 的 `<details>` 折叠标题是带分隔线的整行，属于可见的点击区域，未改动。
+- 修复：全局 `label` 设为 `pointer-events: none`，其内的 `input` / `select` / `textarea` / `button` / `a` 恢复指针事件；label 仍提供可访问名称，键盘操作不受影响。`OptionCard` 的标题与说明文字恢复指针事件并收缩到文字宽度，点开关或其文字仍切换，空白不再触发。搜索框的放大镜图标叠在输入框上，点击穿透后仍聚焦输入框。
+- 取舍：字段标题与提示文字（如“镜像地址：/…/”）不能再用鼠标选中复制。
+
+| 检查 | 结果 |
+| --- | --- |
+| `npm --prefix web run format:check` / `lint` / `typecheck` / `test` / `build` | 通过（单测 11 文件 30 项） |
+| `click-targets.spec.ts` | 覆盖下拉标题/间隙/下方空白、文本框标题、开关内边距/空隙/下方空白/标题右侧均不触发，控件本身与开关文字仍生效；对改前代码运行失败、对新代码通过 |
+| 其他页面核对（临时探针，未提交） | 批次页筛选标题不再展开下拉、点击框正常展开；同步源页点击搜索图标仍聚焦输入框 |
+| Playwright E2E（按当前工作区重建 `bin/mirrordock`，`MIRRORDOCK_TEST_RSYNC=/opt/homebrew/bin/rsync`） | 全部 22 项通过 |
+| open-code-review | 托管模式，未调用外部 LLM；`ocr delegate preview/rule`（v1.13.6）选出 2/2 可审文件（通用组），由当前会话审查，覆盖率 100%；排除的 `click-targets.spec.ts`（default_path）已人工核对。无发现 |
+| 未执行 | 设置页与通知页的开关未逐个实测（与同步源编辑共用 `OptionCard`）；触屏设备未实机验证；Go 测试（无 Go 改动） |
+
 ## 非 HTTPS 访问时立即同步失败、运行记录筛选栏重叠、清理日志改红色（2026-11-09）
 
 范围：修改 `web/src/app/state.ts`、`web/src/components/SelectField.vue`、`web/src/features/runs/RecordsPage.vue`，新增 `web/src/app/state.test.ts`。基线 `0e0da4a`，开始时工作区干净。

@@ -32,7 +32,6 @@ const enabled = defineModel<boolean | undefined>({ required: true })
   flex-direction: row;
   align-items: flex-start;
   gap: var(--space-12px);
-  /* Borderless: keep the click target to the visible switch and text. */
   width: fit-content;
   max-width: 100%;
   min-width: 0;
@@ -47,9 +46,15 @@ const enabled = defineModel<boolean | undefined>({ required: true })
 .option-copy {
   display: flex;
   flex-direction: column;
+  /* Shrink each line to its text so the blank end of the shorter line stays inert. */
+  align-items: flex-start;
   gap: var(--space-2px);
   min-width: 0;
   overflow-wrap: anywhere;
+}
+/* The global label rule leaves the row inert; the switch's own text still toggles it. */
+.option-copy > * {
+  pointer-events: auto;
 }
 .option-copy strong {
   font-size: var(--font-14px);
