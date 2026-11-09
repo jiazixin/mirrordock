@@ -30,6 +30,11 @@ const (
 	ipv6SubscriberBits = 64
 )
 
+// passwordHashCost is bcryptCost in production. TestMain lowers it because a
+// cost-12 comparison takes seconds under the race detector, which made
+// parallel login tests exceed their HTTP client timeouts on CI.
+var passwordHashCost = bcryptCost
+
 type session struct{ expires time.Time }
 
 type loginWindow struct {
@@ -49,7 +54,7 @@ type auth struct {
 
 // newAuth keeps only a bcrypt hash of the YAML password in memory.
 func newAuth(credentials config.Auth) (*auth, error) {
-	hash, err := bcrypt.GenerateFromPassword([]byte(credentials.Password), bcryptCost)
+	hash, err := bcrypt.GenerateFromPassword([]byte(credentials.Password), passwordHashCost)
 	if err != nil {
 		return nil, err
 	}

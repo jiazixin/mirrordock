@@ -1,5 +1,22 @@
 # 验收记录
 
+## CI race 测试中登录请求超时（2026-11-10）
+
+范围：修改 `internal/app/auth.go`、`internal/app/helpers_test.go`。基线 `cc60198`，开始时工作区干净。
+
+- 现象：CI run 42651015197 的 `go test -race` 中 `TestAdminAuthenticationWritebackAndPublicIsolation` 失败，`app_test.go:129` 的 `POST /api/auth/login` 超过测试客户端 5 秒超时；同一代码在上一轮 CI 通过，属计时性偶发失败。
+- 原因：登录每次以 bcrypt cost 12 比对密码。本机实测单次比对普通模式约 0.23 秒、`-race` 下约 2.3 秒；`internal/app` 约 20 个并行测试启动时还各生成一次哈希，CI runner 核数少，单次请求可超过 5 秒。
+- 修复：新增包级 `passwordHashCost`（生产值为 `bcryptCost` = 12，不变），`newAuth` 用它生成哈希；包内 `TestMain` 将其设为 `bcrypt.MinCost`。认证行为与 cost 无关，测试不再依赖 CPU 速度。未调大客户端超时。
+
+| 检查 | 结果 |
+| --- | --- |
+| `gofmt` / `goimports@v0.50.0 -local mirrordock`（改动文件） | 通过 |
+| `go vet ./...` / `staticcheck@v0.8.2 ./...` | 通过 |
+| `CGO_ENABLED=1 go test -race -count=1 ./...` | 全部通过；`internal/app` 本机由 19.8 秒（改前）降至 3.5 秒 |
+| `-race -count=3` 重复运行失败测试与 `TestSessionStoresOnlyDigestAndExpires` | 均通过，失败测试单次约 0.2 秒 |
+| open-code-review | 托管模式，未调用外部 LLM；`ocr delegate preview/rule`（v1.13.6）选出 1/1 可审文件（`auth.go`，Go 组），由当前会话审查，覆盖率 100%；排除的 `helpers_test.go`（default_path）已人工核对：包内唯一 `TestMain`，在任何测试启动前写入，无并发访问。无发现 |
+| 未执行 | GitHub Actions 上的复跑（未推送）；`go vet` 各发布目标、`go test -tags integration`、govulncheck 未在本机运行（无依赖与平台代码变化） |
+
 ## 表单控件点击范围收紧到控件本身（2026-11-10）
 
 范围：修改 `web/src/styles/global.css`、`web/src/components/OptionCard.vue`，新增 `web/e2e/click-targets.spec.ts`。基线 `b50f46a`，开始时工作区干净。

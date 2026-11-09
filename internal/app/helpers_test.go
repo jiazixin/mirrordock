@@ -6,8 +6,17 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/crypto/bcrypt"
+
 	"mirrordock/internal/config"
 )
+
+// TestMain uses the cheapest bcrypt cost: authentication behavior does not
+// depend on the cost, and the production cost is slow under -race.
+func TestMain(m *testing.M) {
+	passwordHashCost = bcrypt.MinCost
+	m.Run()
+}
 
 // openFile loads a configuration file and opens the application on it, as
 // main does with its parsed flags.
