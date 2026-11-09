@@ -1,5 +1,22 @@
 # 验收记录
 
+## 非 HTTPS 访问时立即同步失败、运行记录筛选栏重叠、清理日志改红色（2026-11-09）
+
+范围：修改 `web/src/app/state.ts`、`web/src/components/SelectField.vue`、`web/src/features/runs/RecordsPage.vue`，新增 `web/src/app/state.test.ts`。基线 `0e0da4a`，开始时工作区干净。
+
+- 同步源“立即同步”只提示“操作失败，请重试”、日志与批次均无记录：`runSource` 用 `crypto.randomUUID()` 生成 `Idempotency-Key`，该 API 只在安全上下文（HTTPS 或 localhost）存在；通过 `http://<局域网地址>` 访问时抛 `TypeError`，请求未发出，服务端自然没有任何记录，前端又把非 `ApiError` 统一显示为通用文案。改为 `crypto.getRandomValues` 生成 32 位十六进制键（128 位随机，符合服务端 `^[\x21-\x7e]{1,255}$`）；`perform` 遇到非 `ApiError` 时 `console.error` 原始异常，便于以后在浏览器控制台定位。
+- 运行记录筛选栏重叠：`SelectField` 的 scoped `.select-field { width: 100% }` 与全局 `.filter-toolbar .select-field { width: 180px }` 特异性相同，组件 CSS 随懒加载 chunk 后注入而胜出；运行记录页两个下拉直接放在工具栏里，各被拉到约 1014px，搜索框被压成 0 宽（截图中双重左边框），时间下拉被挤出可视区。组件默认样式改为 `:where(.select-field)`（特异性 0），容器规则恒定生效；同步源、批次、分析、编辑弹窗、分页的下拉宽度逐一核对不变。
+- 清理日志按钮由 `tone-amber` 改为 `tone-red`，与确认弹窗的红色一致。
+
+| 检查 | 结果 |
+| --- | --- |
+| `npm --prefix web run format:check` / `lint` / `typecheck` / `test` / `build` | 通过（单测 11 文件 30 项） |
+| `state.test.ts` | 去掉 `crypto.randomUUID` 后仍发出 32 位十六进制 `Idempotency-Key`；对旧代码运行失败、对新代码通过 |
+| 浏览器核对 | scratchpad 临时配置、127.0.0.1 隔离端口启动临时二进制：1440px 与 375px 下运行记录筛选栏显示搜索框、两个下拉与计数，清理日志为红色；同步源、批次、分析、编辑弹窗、分页的下拉宽度与改前一致；点击立即同步成功入队 |
+| Playwright E2E（`MIRRORDOCK_TEST_BINARY` 指向按当前工作区新构建的 scratchpad 二进制，`MIRRORDOCK_TEST_RSYNC=/opt/homebrew/bin/rsync` 3.5.2） | 全部 21 项通过：无 rsync 时 19 通过、2 跳过，再以 rsync 运行 `mirrordock.spec.ts`、`public-directory.spec.ts` 3 项通过。注意：首次未设 `MIRRORDOCK_TEST_BINARY` 时默认使用 10-27 构建的旧 `bin/mirrordock`，`analytics.spec.ts` 耗时轴显示 `NaNhNaNm` 失败，未改动的 HEAD 用同一旧二进制同样失败；换新二进制后通过，属旧产物问题，`bin/` 未改动 |
+| open-code-review | 托管模式，未调用外部 LLM；`ocr delegate preview/rule`（v1.13.3）选出 3/3 可审文件（JS/TS 组 1、通用组 2），由当前会话审查，覆盖率 100%；排除的 `state.test.ts`（default_path）已人工核对。无发现 |
+| 未执行 | 未在真实局域网 HTTP 地址的浏览器中复现（本机验证均为安全上下文 127.0.0.1，非安全上下文由单测模拟）；用户部署实例需重新构建发布后生效 |
+
 ## 全仓规范对齐与最终交付（2026-10-30）
 
 本节是本轮交付依据，下方更早记录仅代表当时版本。审查基线为 `f6c1983208d17dbefe95951cc56cbb6d4af1c0ed`，包含开始工作时已有的相关未提交改动。按目录规范、通用代码规范、Go / Web / Vue 规范逐项核查；用户确认的 YAML 配置协议与 README 中已明确的产品例外优先，未改写规范以迁就实现。未创建子代理、调用外部 OCR LLM、推送或发布。

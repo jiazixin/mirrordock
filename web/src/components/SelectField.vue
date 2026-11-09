@@ -247,7 +247,9 @@ function optionClasses(option: { value: T; disabled?: boolean }, index: number) 
 </template>
 
 <style scoped>
-.select-field {
+/* Zero specificity: the component's CSS chunk loads after global.css, so a plain class rule
+   would override container widths such as .filter-toolbar .select-field. */
+:where(.select-field) {
   position: relative;
   min-width: 0;
   width: 100%;

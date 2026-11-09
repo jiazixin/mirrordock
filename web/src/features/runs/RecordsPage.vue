@@ -77,7 +77,7 @@ async function clear() {
       </div>
       <div class="heading-actions">
         <button
-          class="button tone-amber"
+          class="button tone-red"
           @click="perform(clear)"
         >
           <Trash2 :size="16" />清理日志</button

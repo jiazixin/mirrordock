@@ -1,6 +1,6 @@
 import { clientError, errorText } from './errors'
 import { reactive, readonly, toRaw } from 'vue'
-import { api, cancelSessionRequests, taggedApi, decodeProgress } from './api'
+import { api, ApiError, cancelSessionRequests, taggedApi, decodeProgress } from './api'
 import { warningText } from './error-text'
 import type { ConfigView, Configuration, Run, SystemInfo } from './types'
 
@@ -208,9 +208,17 @@ export async function perform<T>(operation: () => Promise<T>): Promise<T | undef
     return await operation()
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') return undefined
+    // Only ApiError has a console text; keep the cause of anything else for diagnosis.
+    if (!(error instanceof ApiError)) console.error(error)
     notify(errorText(error), 'error')
     return undefined
   }
+}
+// crypto.randomUUID exists only in secure contexts, and the console is often opened over
+// plain HTTP on a LAN address; getRandomValues is available there too.
+function idempotencyKey(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(16))
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('')
 }
 export async function runSource(id: string) {
   // One key per click: a retried request replays the first result instead
@@ -218,7 +226,7 @@ export async function runSource(id: string) {
   await api<Run>({
     path: `/sources/${encodeURIComponent(id)}/runs`,
     method: 'POST',
-    headers: { 'Idempotency-Key': crypto.randomUUID() },
+    headers: { 'Idempotency-Key': idempotencyKey() },
   })
   notify('同步任务已加入队列')
   await refresh()
