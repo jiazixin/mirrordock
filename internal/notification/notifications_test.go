@@ -828,3 +828,34 @@ type createRunOptions struct {
 	state  string
 	failed int
 }
+
+func TestScanAgesOutFinishedDeliveryRecords(t *testing.T) {
+	t.Parallel()
+	s, _, store := fixture(t)
+	now := s.now()
+	insert := func(run int, state string, updated time.Time) {
+		t.Helper()
+		draft := database.NotificationDraft{Channel: "webhook", RunID: int64(run), Event: "batch.finished", Title: "fixture", Body: "fixture", State: state, UpdatedAt: timefmt.From(updated)}
+		if err := store.EnqueueNotification(t.Context(), draft); err != nil {
+			t.Fatal(err)
+		}
+	}
+	insert(1, "sent", now.AddDate(0, 0, -120))
+	insert(2, "failed", now.AddDate(0, 0, -91))
+	insert(3, "sent", now.AddDate(0, 0, -30))
+	if err := s.Scan(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	records, total, err := s.RecordPage(t.Context(), 10, 0)
+	if err != nil || total != 1 || len(records) != 1 || records[0].RunID != 3 {
+		t.Fatalf("got %d records %v, %v, want only run 3 inside the default 90 days", total, records, err)
+	}
+	// A second scan within the hour does not look at the table again.
+	insert(4, "sent", now.AddDate(0, 0, -120))
+	if err := s.Scan(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if _, total, err := s.RecordPage(t.Context(), 10, 0); err != nil || total != 2 {
+		t.Fatalf("got %d records, %v, want 2 until the next hourly pass", total, err)
+	}
+}

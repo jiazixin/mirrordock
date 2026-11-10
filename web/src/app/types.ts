@@ -45,6 +45,7 @@ export type Configuration = {
   settings: {
     retry_count: number
     task_timeout: string
+    retention_days: number
     concurrency: { rsync: number; reposync: number; github_release: number }
     rsync: { io_timeout: string; connect_timeout: string; limit_mb: number; proxy: string }
     github: {

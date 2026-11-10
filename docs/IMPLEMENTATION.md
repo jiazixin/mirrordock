@@ -4,7 +4,7 @@
 
 ## 数据与接口
 
-数据库由 `internal/database` 启动建表/索引并写入结构版本 `PRAGMA user_version = 2`；未上线阶段不提供迁移或旧字段读取，非 0 且不等于当前版本的数据库拒绝打开。结构或持久化契约变化须提升 `schemaVersion`。运行数据以单条 JSON 聚合 attempts/events/脱敏快照；发布指针独立存储。历史保留，日志清理不删除事实。WAL/FULL 单写连接，分析走有界只读快照。`runs(source_id,id DESC)` 支持每源最新状态，不能用全局最近 50/100 条代替。
+数据库由 `internal/database` 启动建表/索引并写入结构版本 `PRAGMA user_version = 2`；未上线阶段不提供迁移或旧字段读取，非 0 且不等于当前版本的数据库拒绝打开。结构或持久化契约变化须提升 `schemaVersion`。运行数据以单条 JSON 聚合 attempts/events/脱敏快照；发布指针独立存储。终态运行记录、其 `run_results` 条目与任务日志目录在创建和结束都早于 `settings.retention_days` 后由运行引擎每小时清理（`internal/run/retention.go`、`internal/database/retention.go`，启动时先执行一次）；每个源的最新一次运行与最新一次成功不清理，工作目录尚存的运行等工作目录回收后再清理。通知发送记录由通知服务按自身更新时间同样清理，等待或发送中的不清理。页面手动日志清理只删除日志，不删除记录。WAL/FULL 单写连接，分析走有界只读快照。`runs(source_id,id DESC)` 支持每源最新状态，不能用全局最近 50/100 条代替。
 
 | 接口 | 用途 |
 | --- | --- |
@@ -30,7 +30,7 @@
 - 配置及路径：`internal/config/config.go`；所有 dest 同时检查逻辑路径和解析后目录重叠。
 - 任务与重试：`internal/run/run.go`；时间范围：`internal/app/location.go`；分析：`internal/database/analytics.go`。
 - Rsync/DNF 命令：`internal/syncer/runner.go`；子进程和进度：`process.go`；GitHub：`github.go`。
-- 文件与发布：`internal/mirror/{mirror,http,validate,summary}.go`；克隆/容量/无变化复用：`clone_{linux,darwin}.go`、`space_{linux,darwin}.go`、`storage.go`、`fingerprint.go`；公开目录：`listing.go` 与 listing HTML/CSS/JS/icons（模板按元素分行，行内内容保持单行以免引入可见空白）。
+- 文件与发布：`internal/mirror/{mirror,http,validate,summary}.go`；克隆/容量/无变化复用：`clone_{linux,darwin}.go`、`metadata.go`（克隆时保留属主与符号链接时间）、`space_{linux,darwin}.go`、`storage.go`、`fingerprint.go`；公开目录：`listing.go` 与 listing HTML/CSS/JS/icons（模板按元素分行，行内内容保持单行以免引入可见空白）。
 - 文件句柄：`internal/mirror/descriptors.go` 与 `internal/app/connections.go` 分配同一进程预算；代根按需打开，不按历史代常驻。文件流与请求引用保持至请求结束。
 - 凭据/发送队列：`internal/notification`；独立程序日志：`internal/observability`；认证/服务生命周期：`internal/app`。
 - Vue 请求与会话：`web/src/app`；业务页面：`features`；共享控件：`components`；所有页面共享格式化规则。
@@ -156,7 +156,7 @@ npm --prefix web audit
 
 ### 生命周期与接口实现
 
-构造函数只初始化资源；`App.Serve(ctx)` 绑定监听后再调用运行引擎和通知服务的 `Start(ctx)`。关闭先停止接收请求，再取消并等待 worker；若等待超时，不关闭 worker 仍可能访问的共享数据库和镜像根，可再次调用 Close 完成清理。后台 goroutine 由所属组件的 WaitGroup 管理。
+构造函数只初始化资源；`App.Serve(ctx)` 绑定监听后再调用运行引擎和通知服务的 `Start(ctx)`。运行引擎与通知服务不随 `Start` 的 ctx 取消而停止（入口传入的是信号 ctx），只由 `Shutdown` 停止，这样被信号打断的任务记为 `interrupted` 而不是失败。关闭先停止接收管理请求，随后在同一期限内并行排空 HTTP 与停止 worker：公开下载排空超时不会占用 worker 落库的时间；若 worker 等待超时，不关闭其仍可能访问的共享数据库和镜像根，可再次调用 Close 完成清理。后台 goroutine 由所属组件的 WaitGroup 管理。
 
 数据库连接仅在 database 包内使用：单写连接、最多四条只读连接，所有操作接收 ctx 并有 5 秒上限，写入统一经 Store.Write 事务。创建任务和 24 小时幂等首个成功结果在同一事务提交；响应丢失与进程重启不会重复创建任务。结构版本不匹配直接拒绝。运行耗时、预算和 ETA 的接口/JSON 存储字段为整数 `elapsed_ms`、`budget_ms`、`eta_ms`。
 

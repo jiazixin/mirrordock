@@ -619,6 +619,11 @@ func (m *Manager) PrepareReuse(ctx context.Context, s config.Source, id int64) (
 	return work, 0, nil
 }
 
+// copyTree clones the published tree src into the work tree dest. Every
+// attribute the synchronizer may reset is carried over, including the owner
+// and the modification time of symbolic links: rsync restores whatever
+// differs from the upstream, and a tree it had to touch no longer matches its
+// preparation fingerprint, so an unchanged mirror would be published again.
 func (m *Manager) copyTree(ctx context.Context, src, dest string) error {
 	links := map[string]string{}
 	err := filepath.WalkDir(src, func(p string, d fs.DirEntry, err error) error {
@@ -648,13 +653,18 @@ func (m *Manager) copyTree(ctx context.Context, src, dest string) error {
 			if err != nil {
 				return err
 			}
-			if current, err := os.Readlink(target); err == nil && current == link {
-				return nil
+			if current, err := os.Readlink(target); err != nil || current != link {
+				if err = os.Remove(target); err != nil && !errors.Is(err, os.ErrNotExist) {
+					return err
+				}
+				if err = os.Symlink(link, target); err != nil {
+					return err
+				}
 			}
-			if err = os.Remove(target); err != nil && !errors.Is(err, os.ErrNotExist) {
+			if err := preserveOwner(target, info); err != nil {
 				return err
 			}
-			return os.Symlink(link, target)
+			return setLinkTime(target, info.ModTime())
 		case info.Mode().IsRegular():
 			if _, err := os.Lstat(target); err == nil {
 				if err = os.Remove(target); err != nil {
@@ -681,6 +691,9 @@ func (m *Manager) copyTree(ctx context.Context, src, dest string) error {
 			}
 			if identity != "" {
 				links[identity] = target
+			}
+			if err := preserveOwner(target, info); err != nil {
+				return err
 			}
 			if err := os.Chmod(target, info.Mode().Perm()); err != nil {
 				return err
@@ -715,6 +728,9 @@ func (m *Manager) copyTree(ctx context.Context, src, dest string) error {
 			return err
 		}
 		target := filepath.Join(dest, rel)
+		if err := preserveOwner(target, info); err != nil {
+			return err
+		}
 		if err := os.Chmod(target, info.Mode().Perm()); err != nil {
 			return err
 		}

@@ -88,6 +88,20 @@ func (c *RetryCount) UnmarshalYAML(node *yaml.Node) error {
 	return err
 }
 
+// RetentionDays is how many days finished runs, their logs and delivered
+// notification records are kept; 0 keeps them forever.
+type RetentionDays int
+
+// MaxRetentionDays bounds RetentionDays.
+const MaxRetentionDays = 3650
+
+// UnmarshalYAML decodes an integer day count; the range is checked by Validate.
+func (d *RetentionDays) UnmarshalYAML(node *yaml.Node) error {
+	value, err := decodeInteger(node, fieldError("settings.retention_days", "retention_days_range", "must be an integer between 0 and 3650"))
+	*d = RetentionDays(value)
+	return err
+}
+
 // Slots is the number of runs of one source type that may execute at once.
 type Slots int
 
@@ -126,6 +140,7 @@ func (c Concurrency) Limit(sourceType string) int {
 type Settings struct {
 	RetryCount    RetryCount              `yaml:"retry_count" json:"retry_count"`
 	TaskTimeout   string                  `yaml:"task_timeout" json:"task_timeout"`
+	RetentionDays RetentionDays           `yaml:"retention_days" json:"retention_days"`
 	Concurrency   Concurrency             `yaml:"concurrency" json:"concurrency"`
 	Rsync         RsyncSettings           `yaml:"rsync" json:"rsync"`
 	GitHub        GitHubSettings          `yaml:"github" json:"github"`
@@ -276,11 +291,12 @@ func Defaults() Config {
 		MirrorRoot: "/srv/mirrors",
 		Log:        Log{Level: "info", Format: "json"},
 		Settings: Settings{
-			RetryCount:  3,
-			TaskTimeout: "8h",
-			Concurrency: Concurrency{Rsync: 4, RepoSync: 4, GitHubRelease: 4},
-			Rsync:       RsyncSettings{IOTimeout: "5m", ConnectTimeout: "30s"},
-			GitHub:      GitHubSettings{ReleaseCount: 5},
+			RetryCount:    3,
+			TaskTimeout:   "8h",
+			RetentionDays: 90,
+			Concurrency:   Concurrency{Rsync: 4, RepoSync: 4, GitHubRelease: 4},
+			Rsync:         RsyncSettings{IOTimeout: "5m", ConnectTimeout: "30s"},
+			GitHub:        GitHubSettings{ReleaseCount: 5},
 		},
 	}
 }
@@ -509,6 +525,9 @@ func (s Settings) validate() error {
 	}
 	if s.RetryCount < 0 || s.RetryCount > 10 {
 		return fieldError("settings.retry_count", "retry_count_range", "must be between 0 and 10")
+	}
+	if s.RetentionDays < 0 || s.RetentionDays > MaxRetentionDays {
+		return fieldError("settings.retention_days", "retention_days_range", "must be between 0 and 3650")
 	}
 	slots := []struct {
 		path  string
@@ -1087,6 +1106,16 @@ func restartRequired(current, startup Config) bool {
 		current.TLS != startup.TLS ||
 		current.Auth != startup.Auth ||
 		current.Log != startup.Log
+}
+
+// StorageChanged reports whether the state directory or the mirror root in
+// the current configuration differs from the one this process runs on. Until
+// the restart, sources are validated against a root that is not in use, so
+// nothing may be synchronized; other deployment fields do not affect runs.
+func (m *Manager) StorageChanged() bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.cfg.Path != m.startup.Path || m.cfg.MirrorRoot != m.startup.MirrorRoot
 }
 
 // View is the configuration as returned by the read API. The administrator

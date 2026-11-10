@@ -276,9 +276,10 @@ func (a *App) Serve(ctx context.Context) error {
 	return a.Server.Serve(listener)
 }
 
-// Close stops accepting requests, waits for background workers, shuts the
-// server down within ctx and closes every component. Only the first call has an
-// effect; a timed-out call can be retried to finish resource cleanup.
+// Close stops accepting requests, then drains the server and stops the
+// background workers together within ctx, and closes every component. Only the
+// first call has an effect; a timed-out call can be retried to finish resource
+// cleanup.
 func (a *App) Close(ctx context.Context) error {
 	a.closeOnce.Do(func() {
 		a.serveMu.Lock()
@@ -287,12 +288,20 @@ func (a *App) Close(ctx context.Context) error {
 	})
 	// The connection watcher exits immediately on closing and owns no I/O.
 	a.workers.Wait()
-	err := a.Server.Shutdown(ctx)
-	if err != nil {
-		err = errors.Join(err, a.Server.Close())
-	}
-	runErr := a.Runs.Shutdown(ctx)
-	notificationErr := a.Notifications.Shutdown(ctx)
+	// Draining public downloads may use the whole deadline. The executors and
+	// the notification worker stop at the same time, so they still record
+	// their final state within it; the admin API already refuses new writes.
+	var err, runErr, notificationErr error
+	var stopping sync.WaitGroup
+	stopping.Go(func() {
+		err = a.Server.Shutdown(ctx)
+		if err != nil {
+			err = errors.Join(err, a.Server.Close())
+		}
+	})
+	stopping.Go(func() { runErr = a.Runs.Shutdown(ctx) })
+	stopping.Go(func() { notificationErr = a.Notifications.Shutdown(ctx) })
+	stopping.Wait()
 	if runErr != nil || notificationErr != nil {
 		// A timed-out caller may retry Close. Never release storage underneath
 		// a worker still saving its final result.

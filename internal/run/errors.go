@@ -6,7 +6,7 @@ import "errors"
 var (
 	// ErrStopped rejects new work after shutdown begins.
 	ErrStopped              = errors.New("run engine is stopped")
-	ErrRestartRequired      = errors.New("listen or data directory changed; restart required")
+	ErrRestartRequired      = errors.New("data directory or mirror root changed; restart required")
 	ErrReservedSourceChange = errors.New("cannot remove, retype or move the dest of a source with an active, paused or interrupted run")
 	ErrSourceNotFound       = errors.New("source not found")
 	ErrSourceDisabled       = errors.New("source disabled")

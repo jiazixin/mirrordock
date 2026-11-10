@@ -366,6 +366,27 @@ test('real configuration, rsync failover, publication, records and responsive UI
       .toEqual({ rsync: 4, reposync: 4, github_release: 2 })
     expect(await readFile(configFile, 'utf8')).toContain('github_release: 2')
     await expect(page.getByRole('button', { name: '保存设置' })).toBeEnabled()
+    await expect(page.getByLabel('数据保留天数')).toHaveValue('90')
+    await page.getByLabel('数据保留天数').fill('4000')
+    await page.getByRole('button', { name: '保存设置' }).click()
+    await expect(
+      page.getByRole('alert').filter({ hasText: '必须为 0–3650 之间的整数' }).first(),
+    ).toBeVisible()
+    await page.getByLabel('数据保留天数').fill('30')
+    await page.getByRole('button', { name: '保存设置' }).click()
+    await expect
+      .poll(
+        async () =>
+          (await (await page.request.get(base + '/api/config')).json()).config.settings
+            .retention_days,
+      )
+      .toBe(30)
+    expect(await readFile(configFile, 'utf8')).toContain('retention_days: 30')
+    await expect(page.getByRole('button', { name: '保存设置' })).toBeEnabled()
+    // The rejected save leaves a toast for five seconds; later steps match a single alert.
+    await expect(
+      page.getByRole('alert').filter({ hasText: '必须为 0–3650 之间的整数' }),
+    ).toHaveCount(0, { timeout: 10_000 })
     await page.screenshot({ path: testInfo.outputPath('settings-retry.png'), fullPage: true })
     await page.getByRole('tab', { name: '同步策略', exact: true }).press('ArrowRight')
     await expect(page.getByRole('tab', { name: '系统配置', exact: true })).toBeFocused()

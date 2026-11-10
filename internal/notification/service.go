@@ -77,6 +77,7 @@ type Record struct {
 // Delivery limits of the background queue.
 const (
 	scanInterval      = 3 * time.Second
+	pruneInterval     = time.Hour
 	maxAttempts       = 3
 	retryStep         = 30 * time.Second
 	sendsPerScan      = 10
@@ -94,6 +95,8 @@ type Service struct {
 	now    func() time.Time
 	mu     sync.Mutex
 	scanMu sync.Mutex
+	// pruned is when delivery records were last aged out; guarded by scanMu.
+	pruned time.Time
 	// testsInFlight marks channels with a test message being sent; guarded
 	// by mu.
 	testsInFlight map[string]bool
@@ -160,8 +163,9 @@ func (s *Service) ValidateConfig(c config.Config) error {
 	return nil
 }
 
-// Start begins delivery after the HTTP listener has been bound.
-// Shutdown must finish before the shared store is closed.
+// Start begins delivery after the HTTP listener has been bound. Cancelling
+// ctx does not stop delivery; call Shutdown, which must finish before the
+// shared store is closed.
 func (s *Service) Start(ctx context.Context) error {
 	s.lifecycleMu.Lock()
 	defer s.lifecycleMu.Unlock()
@@ -171,7 +175,9 @@ func (s *Service) Start(ctx context.Context) error {
 	if s.started {
 		return nil
 	}
-	ctx, s.cancel = context.WithCancel(ctx)
+	// Like the run engine, delivery ends only through Shutdown: a send cut
+	// short by the service signal would spend one of its attempts.
+	ctx, s.cancel = context.WithCancel(context.WithoutCancel(ctx))
 	s.started = true
 	s.done = make(chan struct{})
 	s.wg.Go(func() {
@@ -482,6 +488,11 @@ func (s *Service) Scan(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	// Aging out old records is housekeeping; its failure must not hold back
+	// the deliveries of this pass.
+	if err := s.pruneRecords(ctx); err != nil && ctx.Err() == nil {
+		s.logger.Error("notification_retention_failed", "error", err)
+	}
 	// Bound each pass so shutdown/settings remain responsive even with a backlog.
 	for range sendsPerScan {
 		delivered, err := s.deliverNext(ctx)
@@ -490,6 +501,27 @@ func (s *Service) Scan(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// pruneRecords removes finished delivery records older than
+// settings.retention_days, at most once per pruneInterval. Callers hold scanMu.
+func (s *Service) pruneRecords(ctx context.Context) error {
+	now := s.now()
+	if !s.pruned.IsZero() && now.Sub(s.pruned) < pruneInterval {
+		return nil
+	}
+	s.pruned = now
+	days := int(s.cfg.Current().Settings.RetentionDays)
+	if days == 0 {
+		return nil
+	}
+	limit := now.AddDate(0, 0, -days)
+	for {
+		removed, err := s.store.DeleteNotificationsBefore(ctx, limit)
+		if err != nil || removed < database.PageSize {
+			return err
+		}
+	}
 }
 
 // deliverNext sends the oldest due message and records the outcome. It

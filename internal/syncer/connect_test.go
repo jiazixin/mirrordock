@@ -18,6 +18,7 @@ import (
 	"slices"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -339,6 +340,66 @@ func TestConnectCommandRelaysThroughProxy(t *testing.T) {
 	cmd.Stderr = &stderr
 	if err = cmd.Run(); err == nil || !strings.HasPrefix(stderr.String(), connectMarker+connectProxyUnreachable+": ") || strings.Contains(stderr.String(), "private-secret") {
 		t.Fatalf("helper failure diagnostic: %q %v", stderr.String(), err)
+	}
+}
+
+// rsync gives the helper one socket as both stdin and stdout and, while it
+// receives, only reads from it. When the tunnel closes, the helper must exit
+// so rsync sees the end of the stream instead of waiting for its I/O timeout.
+func TestConnectCommandExitsWhenTunnelCloses(t *testing.T) {
+	t.Parallel()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { listener.Close() })
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		// Greet like a daemon, then drop the connection.
+		_, _ = io.WriteString(conn, testGreeting)
+		conn.Close()
+	}()
+	target := listener.Addr().String()
+	var requests atomic.Int32
+	proxy, _ := testProxyURL(testProxyURLOptions{t: t, scheme: "http", target: target, requests: &requests})
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pair, err := syscall.Socketpair(syscall.AF_UNIX, syscall.SOCK_STREAM, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	helperEnd := os.NewFile(uintptr(pair[1]), "helper")
+	rsyncEnd := os.NewFile(uintptr(pair[0]), "rsync")
+	peer, err := net.FileConn(rsyncEnd)
+	if err = errors.Join(err, rsyncEnd.Close()); err != nil {
+		t.Fatal(err)
+	}
+	defer peer.Close()
+	cmd := exec.CommandContext(commandTestContext(t), executable, ConnectCommand)
+	cmd.Env = append(os.Environ(), connectProxyEnv+"="+proxy.String(), connectTargetEnv+"="+target, connectTimeoutEnv+"=5")
+	cmd.Stdin, cmd.Stdout = helperEnd, helperEnd
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	err = cmd.Start()
+	if err = errors.Join(err, helperEnd.Close()); err != nil {
+		t.Fatal(err)
+	}
+	// Nothing is written: the end of the stream must arrive on its own.
+	if err := peer.SetReadDeadline(time.Now().Add(10 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	got, readErr := io.ReadAll(peer)
+	if readErr != nil || string(got) != testGreeting {
+		t.Errorf("got %q, %v from the helper, want %q and the end of the stream", got, readErr, testGreeting)
+		_ = cmd.Process.Kill()
+	}
+	if err := cmd.Wait(); err != nil && readErr == nil {
+		t.Fatalf("helper exit: %v %q", err, stderr.String())
 	}
 }
 

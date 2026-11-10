@@ -26,23 +26,24 @@ flowchart LR
 | --- | --- |
 | config | 严格 YAML、路径/字段校验、注释与 revision、原子写回 |
 | database | WAL/FULL、单写连接、最多四条只读查询连接、内置 schema 与 `user_version` 结构版本 |
-| sync | 参数与进度解析、进程组控制、GitHub 身份/续传/校验 |
-| runs | 持久状态机、预算/重试、同源排他、cron、分析聚合 |
-| mirrors | 暂存/复制、完整性校验、发布代、受限文件根、公开目录/下载 |
-| notifications | 凭据密文、终态摘要、激活边界、去重与发送重试 |
+| syncer | 参数与进度解析、进程组控制、GitHub 身份/续传/校验 |
+| run | 持久状态机、预算/重试、同源排他、cron、分析聚合、保留期清理 |
+| mirror | 暂存/复制、完整性校验、发布代、受限文件根、公开目录/下载 |
+| notification | 凭据密文、终态摘要、激活边界、去重与发送重试 |
 | observability | slog 初始化、独立程序日志 |
+| timefmt | 接口与存储统一的 UTC 毫秒时间类型 |
 | app | 认证、同源写校验、API、SSE、TLS/连接生命周期 |
 | web | Vue 路由、领域页面、共享控件与请求生命周期 |
 
-启动顺序为配置校验 → 独立程序日志 → 数据目录锁 → SQLite → 发布恢复 → 构造引擎/认证/通知 → TLS 加载与监听绑定 → 启动 worker → HTTP Serve。监听失败不启动任务。退出先封闭管理写入口、停止 SSE/排空 HTTP，再停止后台执行器，最后关闭文件根、数据库和实例锁。只有一个进程能使用同一 state 目录。
+启动顺序为配置校验 → 独立程序日志 → 数据目录锁 → SQLite → 发布恢复 → 构造引擎/认证/通知 → TLS 加载与监听绑定 → 启动 worker → HTTP Serve。监听失败不启动任务。退出先封闭管理写入口并停止 SSE，随后在同一关闭期限内并行排空 HTTP 与停止后台执行器和通知 worker，最后关闭文件根、数据库和实例锁；公开下载排空超时不占用执行器落库的时间。执行器只由引擎的 Shutdown 取消，不随进程信号 ctx 直接取消，因此被停机打断的任务记为 interrupted 并在重启后续跑，不会记成失败。只有一个进程能使用同一 state 目录。
 
 ## 配置与管理边界
 
-配置文件按 `-c`/`--config` > `CONFIG_FILE` > cwd 下 `configs/config.local.yaml` 选择，文件必须存在。相对路径以配置目录为基准，数据库为 `<path>/data.sqlite`。不恢复已删除的配置字段。监听、数据/镜像路径、TLS、auth、log 使用启动值；页面保存保留部署字段，外部修改需重载并按提示重启。
+配置文件按 `-c`/`--config` > `CONFIG_FILE` > cwd 下 `configs/config.local.yaml` 选择，文件必须存在。相对路径以配置目录为基准，数据库为 `<path>/data.sqlite`。不恢复已删除的配置字段。监听、数据/镜像路径、TLS、auth、log 使用启动值；页面保存保留部署字段，外部修改需重载并按提示重启；重启前只有 `path` 或 `mirror_root` 的变化会拒绝新的同步（定时触发以 warn 级 `schedule_skipped` 记录），账号、日志、监听与 TLS 的变化不影响同步。
 
 保存通过 revision 同时检测其他管理员与磁盘编辑，保留 YAML 注释，临时文件写入/fsync/rename，文件权限 0600。源编辑器保存打开时的 revision，旧编辑不能覆盖新配置。Token 与通知凭据只返回存在标记，管理员密码不参与 JSON 序列化；**完整 GitHub 代理地址与 Rsync 全局/按源代理地址按已确认协议向登录管理员回填**。所有运行快照、审计与错误日志继续脱敏。
 
-账号来自 YAML，启动时内存 bcrypt，Cookie 会话 12h，HttpOnly/SameSite Strict，TLS 下 Secure。最多 32 会话，登录按连接 IP（IPv6 按 /64）每分钟最多 10 次，成功重置，最多 4096 桶且一分钟过期，满额淘汰最早窗口；不信任转发头，反代部署边界见 README。修改请求需要自定义头和匹配 Origin；管理 API no-store。SSE 最多 8 条、每秒推送，逐次校验会话，过期/退出终止流。各连接共用最多一秒的不可变序列化快照，查询与编码在缓存锁外进行；并发未命中合并为一次读取，等待读取可取消，失败不缓存，无客户端不主动查询。已登录的非 GET 请求结束后使快照失效并唤醒各连接立即推送；与写操作重叠的读取结果丢弃重读，客户端不会在写后收到写前快照。匿名登录不触发失效。前端连接 SSE 期间各源最新运行只取自事件流，刷新接口结果仅在未连接时使用。每客户端仍独立发送并验证会话。
+账号来自 YAML，启动时内存 bcrypt，Cookie 会话 12h，HttpOnly/SameSite Strict，TLS 下 Secure。最多 32 会话，登录按连接 IP（IPv6 按 /64）每分钟最多 10 次，成功重置，最多 4096 桶且一分钟过期，满额淘汰最早窗口；不信任转发头，局域网 HTTP、原生 HTTPS 与反代三种接入方式的边界见 [DEPLOYMENT.md](DEPLOYMENT.md)。修改请求由 `http.NewCrossOriginProtection()` 校验 `Sec-Fetch-Site`，浏览器在非安全上下文（局域网 HTTP）不发送该头时按 `Origin` 与 `Host` 比较，不使用自定义头或 CSRF 令牌；管理 API no-store。SSE 最多 8 条、每秒推送，逐次校验会话，过期/退出终止流。各连接共用最多一秒的不可变序列化快照，查询与编码在缓存锁外进行；并发未命中合并为一次读取，等待读取可取消，失败不缓存，无客户端不主动查询。已登录的非 GET 请求结束后使快照失效并唤醒各连接立即推送；与写操作重叠的读取结果丢弃重读，客户端不会在写后收到写前快照。匿名登录不触发失效。前端连接 SSE 期间各源最新运行只取自事件流，刷新接口结果仅在未连接时使用。每客户端仍独立发送并验证会话。
 
 源状态 API `/api/runs?latest=true` 将配置源作为参数传入 `json_each`，在一次 SQL 中按 `(source_id,id DESC)` 索引查找各源最新任务，不扫描无关历史、不逐源往返。管理运行列表、最新状态与持久详情使用只读池和请求上下文，数据库查询最多 5 秒；普通分页的计数与页内容属于同一只读事务。最多四条只读连接与单写连接隔离；外键、FULL 同步、busy_timeout 和只读限制通过 DSN 在每条新连接上启用。普通运行分页和统计保持完整历史查询。前端刷新取消旧请求，退出统一中止会话内全部 API 请求，防止旧 401 使新登录失效；页面/详情卸载取消请求与轮询，避免旧响应恢复已退出状态。
 
@@ -58,9 +59,11 @@ interrupted 是可恢复状态，不进入最终通知结果流、失败统计�
 
 手动日志清理用开始时的最大任务 ID 固定扫描上界，按 ID 游标读取每页最多 100 个终态任务，不做 OFFSET 或全量 count。独立清理互斥与日志打开锁协调删除；每个任务在短暂 Engine.mu 内取得清理租约，文件删除与保存发生在锁外。相同 ID 的动作等待租约完成，其他任务继续执行；重新检查当前状态/working，避免删除已恢复任务的日志。请求取消/服务关闭终止后续工作，部分删除落库，删除/保存失败可重试；事实、通知结果和已打开导出的长度不删除或修改。外部备份中的日志不受页面清理影响。
 
+保留期清理由 `settings.retention_days`（默认 90 天，0 关闭）控制：引擎启动时及此后每小时，以保留期前最新一条任务的 ID 为扫描上界，按主键每页 100 条删除创建和结束都早于保留期的终态任务，同一事务删除其 `run_results` 条目，随后删除任务日志目录。每个源的最新一次运行与最新一次成功不删除，公开目录的“上次同步”和源状态因此不受影响；仍在内存中的任务、工作目录尚存的任务跳过，等工作目录回收后再删除，避免工作目录失去判定依据。清理与手动日志清理互斥，并在删除记录与日志期间持有日志写锁，读者不会看到有记录无日志的中间状态。通知发送记录由通知服务每小时按自身更新时间清理，等待或发送中的不清理。
+
 Rsync 使用系统 PATH 中现代 rsync，数字 srcN 顺序失败切换，包括永久性来源错误；本地磁盘/权限错误停止，校验不一致可重试，rsync 23/24 仍不视为成功。模块内子目录 URL 必须带尾斜杠。不通过 shell 执行用户命令。默认递归并保留链接/时间/权限/硬链接；partial-dir 与默认单文件临时替换用于任务工作目录，不使用 delay-updates 或 inplace，整体发布由镜像模块保证。固定排除 `.mirrordock*`，避免上游和 --delete 改写内部准备标记。UID/GID 独立可选，0 有效，明确范围及权限，不自动 sudo。
 
-Rsync 代理在每次尝试时从当前 YAML 解析：源 `rsync.proxy_mode` 为 direct 时直连，custom 时用源的 `rsync.proxy`，否则用 `settings.rsync.proxy`；快照只保留模式，清除两处地址。设置代理时为 rsync 注入 `RSYNC_CONNECT_PROG='<可执行文件>' rsync-connect`（rsync 先展开 `%H`/`%%`，故路径中的 `%` 写为 `%%`，再由 `/bin/sh -c` 执行；字符串只含单引号转义的可执行文件路径，配置值不经 shell）。代理 URL、`host:port` 目标与连接超时经 `MIRRORDOCK_RSYNC_*` 环境变量传入，进程参数不含凭据。内部命令在连接超时内完成 HTTP CONNECT（https 代理先 TLS，系统根证书校验）或 SOCKS5（RFC 1928/1929，socks5 与 socks5h 均交由代理解析主机名，与 GitHub transport 一致），之后不设截止时间，stdin/stdout 与隧道双向转发，rsync 结束发送后半关闭写端；`--timeout` 仍约束 I/O 空闲，`--contimeout` 不作用于该路径。内部命令与 rsync 同属任务进程组，随取消/终止一起结束。失败时在 stderr 输出带 `mirrordock rsync-connect:` 前缀与分类的诊断，执行器据此映射 `rsync_proxy`：代理不可达可重试且 `ProxyFailure`，本轮不再切换备用来源；认证、协议或配置错误不可重试；代理拒绝目标（HTTP 403、SOCKS 规则拒绝）为不可重试的来源失败，其他目标连接失败为可重试的来源失败。rsync 环境始终移除继承的 `RSYNC_PROXY`、`RSYNC_CONNECT_PROG` 与 `MIRRORDOCK_RSYNC_*`，“直连”不受启动环境影响。
+Rsync 代理在每次尝试时从当前 YAML 解析：源 `rsync.proxy_mode` 为 direct 时直连，custom 时用源的 `rsync.proxy`，否则用 `settings.rsync.proxy`；快照只保留模式，清除两处地址。设置代理时为 rsync 注入 `RSYNC_CONNECT_PROG='<可执行文件>' rsync-connect`（rsync 先展开 `%H`/`%%`，故路径中的 `%` 写为 `%%`，再由 `/bin/sh -c` 执行；字符串只含单引号转义的可执行文件路径，配置值不经 shell）。代理 URL、`host:port` 目标与连接超时经 `MIRRORDOCK_RSYNC_*` 环境变量传入，进程参数不含凭据。内部命令在连接超时内完成 HTTP CONNECT（https 代理先 TLS，系统根证书校验）或 SOCKS5（RFC 1928/1929，socks5 与 socks5h 均交由代理解析主机名，与 GitHub transport 一致），之后不设截止时间，stdin/stdout 与隧道双向转发，rsync 结束发送后半关闭写端；隧道被代理或上游关闭时内部命令立即退出而不等待阻塞的 stdin，rsync 随即读到流结束，不必等到 `--timeout`；`--timeout` 仍约束 I/O 空闲，`--contimeout` 不作用于该路径。内部命令与 rsync 同属任务进程组，随取消/终止一起结束。失败时在 stderr 输出带 `mirrordock rsync-connect:` 前缀与分类的诊断，执行器据此映射 `rsync_proxy`：代理不可达可重试且 `ProxyFailure`，本轮不再切换备用来源；认证、协议或配置错误不可重试；代理拒绝目标（HTTP 403、SOCKS 规则拒绝）为不可重试的来源失败，其他目标连接失败为可重试的来源失败。rsync 环境始终移除继承的 `RSYNC_PROXY`、`RSYNC_CONNECT_PROG` 与 `MIRRORDOCK_RSYNC_*`，“直连”不受启动环境影响。
 
 Reposync 针对 DNF4，使用任务私有配置/缓存/RPM 密钥库，仅启用选定 repo；不修改宿主配置。开启 GPG 时先下载配置的公钥（每个最多 1 MiB、30 秒并受任务预算约束，拒绝 HTTPS 降级到 HTTP），用 rpmkeys 导入私有 installroot，再执行 reposync 包签名校验；不依赖插件自动导入。仅一个 src1，完整元数据与 newest_only 组合被拒绝；关闭元数据下载时按文件发布并移除旧 repodata，不承诺可安装仓库。私有 DNF 数据在任务 work 的隐藏子目录，执行结束清除，异常退出由重试/终态清理。GPG 仅声明包签名校验，不宣称元数据签名已验证。
 
@@ -76,7 +79,7 @@ GitHub 使用 go-github v88，按发布时间选 Release，仅 assets。tag 与�
 
 准备标记保存基础发布代 ID 与工作树元数据指纹。同步后先验证镜像，基础代仍一致且路径、类型、权限、所有者、大小/mtime、文件 inode/ctime 与符号链接均未变化才删除工作目录、复用当前发布。内部标记与根目录 mtime 排除，不读取包正文；无法解析的准备标记禁用此优化。文件被替换或内容写入，即使大小/mtime 相同也保守创建新代。
 
-克隆按 dev/inode 保留工作树内部硬链接组，组内首个文件原生 reflink，其他路径链接到该 work 文件，绝不链接到 published。GitHub 更新私有同步时间后恢复父目录 mtime；正文不变时仅持久化更新发布摘要，不改变当前代 ID 或公开文件，摘要保存失败保留旧事实和 work。
+克隆保留属主、属组和符号链接自身的修改时间：rsync 会把与上游不同的符号链接时间与 `rsync.uid`/`rsync.gid` 映射的属主改回去，克隆丢失它们会让未变化的镜像每轮都生成新代（无权设置原属主时仅放弃这项复用）。克隆按 dev/inode 保留工作树内部硬链接组，组内首个文件原生 reflink，其他路径链接到该 work 文件，绝不链接到 published。GitHub 更新私有同步时间后恢复父目录 mtime；正文不变时仅持久化更新发布摘要，不改变当前代 ID 或公开文件，摘要保存失败保留旧事实和 work。
 
 Linux statfs 使用 Frsize（缺失时回退 Bsize），Darwin 使用 Bsize。普通 statfs 故障仅记录错误、让新任务保持 queued/waiting_space；只有明确低容量才取消活动任务，且不取消已进入 publish 阶段的任务，Publish 本身不再检查余量。容量读取实际 work 文件系统的总量与可用量，不累加 reflink 目录逻辑大小。所有类型的任务共用准入锁：可用量需达到 max(1 GiB, 总量 1%) 加每个活动任务（含新任务）512 MiB。准入不足保持 queued/waiting_space，不消耗累计预算；运行中独立每 5 秒检查，低于安全余量取消执行器，持久化 disk_space 失败并保留旧发布。该机制不能保证上游增长或外部写入不触发 ENOSPC。
 

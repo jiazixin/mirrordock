@@ -21,6 +21,7 @@ export function isErrorField(value: unknown): value is ErrorField {
 const reasons: Record<string, string> = {
   required: '不能为空',
   retry_count_range: '必须为 0–10 之间的整数',
+  retention_days_range: '必须为 0–3650 之间的整数',
   concurrency_range: '每种类型必须为 1–16 之间的整数',
   invalid_log_level: '只支持 debug、info、warn、error',
   invalid_log_format: '只支持 json、text',

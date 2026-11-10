@@ -113,9 +113,11 @@ Every field is documented in [configs/config.example.yaml](configs/config.exampl
 - Configuration and validation errors are in English and start with the field path, e.g. `port: must be between 1 and 65535` or `sources.0.dest: must be a clean relative directory` (sources are addressed by list index). Admin API error responses are `{"error": {"code", "message", "details"}}`: field errors use `invalid_argument` with `details.fields` listing each `path` and `reason` code; `precondition_failed` means the file changed since it was loaded (412, the `If-Match` revision is stale); `config_malformed` means the YAML is invalid. See [API conventions](docs/API.md). The admin console shows Chinese text by code (`web/src/app/config-errors.ts`) and uses a generic Chinese message for unregistered reason codes.
 - Relative paths are resolved against the config file's directory. The database is `<path>/data.sqlite`, and task logs are `<path>/logs/<run-id>/<attempt>.log`.
 - Apart from `CONFIG_FILE` selecting the file, environment variables do not override config fields. Scheduling, the admin console and the public index use the time zone the process starts with; set e.g. `TZ=Asia/Shanghai` in the service environment.
-- Changes to `listen`, `port`, `path`, `mirror_root`, `tls`, `auth` and `log` need a restart. Sources, schedules and notifications can be edited in the console and take effect on save.
+- Changes to `listen`, `port`, `path`, `mirror_root`, `tls`, `auth` and `log` need a restart. Sources, schedules and notifications can be edited in the console and take effect on save. Until the restart, only a changed `path` or `mirror_root` pauses new synchronizations; the other fields do not affect them.
+- `settings.retention_days` (default 90, 0 keeps everything) is how long run records, task logs and notification delivery records are kept; expired ones are removed hourly. The latest run and the latest success of every source are always kept, and mirror files are never touched.
 - The admin password, GitHub token and notification credentials are never returned by read APIs. **Exception:** by the agreed protocol, full GitHub / rsync proxy URLs are echoed back to the signed-in console in plain text; their credentials still never reach run snapshots, audit records or logs.
-- Set both `tls.cert` and `tls.key` to serve HTTPS on the same port (HTTP/2 is supported; sendfile is not used over TLS).
+- Set both `tls.cert` and `tls.key` to serve HTTPS on the same port (HTTP/2 is supported; sendfile is not used over TLS); leave both empty for HTTP. The admin console works over plain HTTP on a LAN as well as over HTTPS; the only difference is that the session cookie is marked `Secure` under native HTTPS only. Over HTTP the account and session travel in clear text, so use it on trusted networks only.
+- Behind a reverse proxy, keep the external `Host` and disable buffering for `/api/events`. `X-Forwarded-*` is not trusted, so the login rate limit counts the proxy as one client; add rate limiting at the proxy. See the [deployment reference](docs/DEPLOYMENT.md).
 
 ## Deployment
 
@@ -166,7 +168,7 @@ E2E and real-rsync tests need a modern rsync and a test binary; see [docs/IMPLEM
 - Versions come from Git tags of the form `vMAJOR.MINOR.PATCH` (pre-releases such as `v1.2.0-rc.1`). Go stamps the module version at build time; untagged commits get a pseudo-version, and uncommitted changes add `+dirty`.
 - Check the version with `mirrordock --version`, which prints e.g. `mirrordock v1.2.0 (revision=0123456789ab)` (a pseudo-version already contains the commit, so no revision is appended; `modified` is added for uncommitted changes). `--version` and `--help` (in English) print to stdout and neither reads a config nor starts the service.
 - Exit codes: 0 success or a clean shutdown after SIGINT / SIGTERM, 2 usage error, 1 configuration, startup, runtime or shutdown failure. Usage errors are written to stderr as `mirrordock: <error>` followed by a `Run 'mirrordock --help' for usage.` line; configuration and log setup failures are one line, `mirrordock: config: <error>` or `mirrordock: log: <error>`. Once logging is ready, failures go only to the program log, not to stderr.
-- The program log records `service_starting` (with `version`), `service_listening` (with `listen`) once the port is bound, `service_stopping` when shutdown begins and `service_stopped` before a clean exit; failures are `service_failed` / `service_shutdown_failed`. The first signal starts a graceful shutdown (HTTP draining is limited to 30 seconds; on timeout connections are closed and the shutdown counts as failed); a second signal terminates the process immediately.
+- The program log records `service_starting` (with `version`), `service_listening` (with `listen`) once the port is bound, `service_stopping` when shutdown begins and `service_stopped` before a clean exit; failures are `service_failed` / `service_shutdown_failed`. The first signal starts a graceful shutdown: within 30 seconds HTTP is drained while running synchronizations are stopped in parallel; interrupted tasks are recorded as interrupted and resume after the next start. If downloads are still open at the deadline, their connections are closed and the shutdown counts as failed (exit code 1), with task states and the database already saved; a second signal terminates the process immediately.
 - For source archives without `.git`, inject the matching version explicitly: `go build -trimpath -ldflags='-X main.version=v1.0.0' -o bin/mirrordock ./cmd/mirrordock`.
 - Pushing a standard tag triggers the [release workflow](.github/workflows/release.yml). It checks `--version` first, then GoReleaser builds every target and uploads the tar.gz archives and `checksums.txt`.
 
@@ -189,7 +191,7 @@ The project docs are written in Chinese.
 
 ```text
 cmd/mirrordock/           CLI entry point
-internal/{config,observability,database,sync,runs,mirrors,notifications,app}/
+internal/{config,observability,timefmt,database,syncer,run,mirror,notification,app}/
 web/                      The only npm/Vite boundary: Vue app, E2E tests, embed.go
 configs/                  Annotated example; local instances are ignored
 deploy/                   systemd unit

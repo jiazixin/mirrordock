@@ -27,7 +27,7 @@
 | `PUT /api/config` | `{"config", "token_update", "proxy_update"}`，两个 update 省略时不变；返回新视图，后续步骤失败时另带 `warning` |
 | `POST /api/config/reload` | 重新读取 YAML，返回同上 |
 | `GET /api/runs` | 筛选参数 `state`、`source`、`trigger`、`from`（RFC 3339）、`range`（`1h`、`12h`、`24h`、`3d`、`7d`、`30d`、`yesterday`、`month`） |
-| `GET /api/runs/{id}` | 任务详情 |
+| `GET /api/runs/{id}` | 任务详情；超过 `settings.retention_days` 已被清理的任务返回 404 `not_found` |
 | `POST /api/sources/{id}/runs` | 手动创建任务，201 返回任务 |
 | `POST /api/runs/{id}/{action}` | `action` 为 `pause`、`resume`、`cancel` |
 | `GET /api/runs/{id}/logs` | `attempt`、`offset_bytes`；返回 `{"text", "next_offset_bytes", "cleared"}`；`download=true` 下载完整日志文本 |
@@ -63,7 +63,7 @@
 | 404 | `not_found` | 接口或记录不存在 | — |
 | 405 | `method_not_allowed` | 方法不支持，带 `Allow` | — |
 | 404 | `source_not_found`、`attempt_not_found` | 源或尝试编号不存在 | — |
-| 409 | `restart_required` | 监听或数据目录已修改，需要重启 | — |
+| 409 | `restart_required` | YAML 中的 `path` 或 `mirror_root` 已修改，重启前不接受新的同步任务（其他需重启字段不影响同步） | — |
 | 409 | `source_in_use` | 有保留任务的源不能删除、变更类型或 dest | — |
 | 409 | `source_disabled`、`source_busy`、`source_removed`、`source_changed` | 源当前状态不允许该操作 | — |
 | 409 | `run_not_active`、`run_not_pausable`、`run_not_resumable`、`executor_stopping`、`budget_exhausted` | 任务当前状态不允许该操作 | — |

@@ -40,7 +40,7 @@ const apiMessages: Record<string, string | ((details: Details) => string)> = {
   precondition_failed: '配置已被修改，请重新加载后再保存',
   idempotency_key_reused: '重复提交的请求与首次不同，请刷新后重试',
   config_malformed: '配置文件格式无效',
-  restart_required: '监听或数据目录配置已修改，请先重启',
+  restart_required: '数据目录或镜像根目录配置已修改，请先重启程序',
   source_in_use: '活动、暂停或中断任务的源不能删除或变更类型、dest，请先取消任务',
   source_not_found: '源不存在',
   source_disabled: '源已禁用，启用后再操作',

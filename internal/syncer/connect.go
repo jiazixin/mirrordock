@@ -16,7 +16,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"mirrordock/internal/config"
@@ -104,19 +103,22 @@ func connectProgram(executable string) string {
 
 // RunConnect is the rsync-connect command. It connects to the target named in
 // its environment through the proxy, then relays stdin and stdout to it until
-// the daemon closes the connection.
+// either side closes the connection. The caller exits the process with the
+// returned code: that exit is what closes stdout towards rsync.
 func RunConnect(ctx context.Context) int {
 	conn, err := connectFromEnv(ctx)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, connectMarker+err.Error())
 		return 1
 	}
-	// This helper exclusively owns process stdin. Closing both ends releases
-	// either relay when its peer exits or the parent cancels the process.
-	stop := context.AfterFunc(ctx, func() { conn.Close(); os.Stdin.Close() })
+	stop := context.AfterFunc(ctx, func() { conn.Close() })
 	defer stop()
-	var workers sync.WaitGroup
-	workers.Go(func() {
+	// The upstream relay is not awaited. Standard input is a blocking
+	// descriptor, so its read ends only when rsync closes its end, and rsync
+	// may itself be waiting for data from the daemon. Were the helper to wait
+	// here after the tunnel closed, rsync would see no end of stream until
+	// its I/O timeout. The relay ends with the process.
+	go func() {
 		_, _ = io.Copy(conn, os.Stdin)
 		// rsync closes its end only once it is finished or gone. Pass the EOF
 		// on and give the daemon a short grace to close, so the helper never
@@ -125,14 +127,12 @@ func RunConnect(ctx context.Context) int {
 			_ = half.CloseWrite()
 		}
 		_ = conn.SetReadDeadline(time.Now().Add(connectLinger))
-	})
+	}()
 	// Relay errors are left unclassified: rsync reports a broken connection
 	// itself, and its diagnosis must not be replaced by the helper's.
 	_, _ = io.Copy(os.Stdout, conn)
 	// Shutdown errors cannot change rsync's own protocol result.
 	_ = conn.Close()
-	_ = os.Stdin.Close()
-	workers.Wait()
 	return 0
 }
 

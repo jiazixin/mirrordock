@@ -306,7 +306,8 @@ func (e *Engine) recoverRun(r *Run, sources []config.Source) {
 }
 
 // Start starts dispatch and scheduling after the application has bound its listener.
-// Shutdown must finish before the database or mirror manager is closed.
+// Cancelling ctx does not stop the engine; call Shutdown, which must finish
+// before the database or mirror manager is closed.
 func (e *Engine) Start(ctx context.Context) error {
 	e.lifecycleMu.Lock()
 	defer e.lifecycleMu.Unlock()
@@ -318,12 +319,17 @@ func (e *Engine) Start(ctx context.Context) error {
 	if e.started {
 		return nil
 	}
-	ctx, e.cancel = context.WithCancel(ctx)
+	// Executions outlive the start context: the service passes its signal
+	// context here, and a run cancelled by it would end before Shutdown has
+	// recorded the interruption, so it would be stored as failed. Only
+	// Shutdown stops the engine.
+	ctx, e.cancel = context.WithCancel(context.WithoutCancel(ctx))
 	e.started = true
 	e.cron.Start()
 	e.wg.Go(func() { e.dispatch(ctx) })
 	e.wg.Go(func() { e.cleanupLoop(ctx) })
 	e.wg.Go(func() { e.checkpointLoop(ctx) })
+	e.wg.Go(func() { e.retentionLoop(ctx) })
 	e.wg.Go(func() {
 		for {
 			select {
@@ -331,7 +337,13 @@ func (e *Engine) Start(ctx context.Context) error {
 				return
 			case id := <-e.scheduled:
 				if _, err := e.Enqueue(ctx, id, "schedule"); err != nil {
-					e.logger.Info("schedule_skipped", "source_id", id, "error", err)
+					// An overlapping run is routine; a pending restart stops
+					// every schedule and must stand out in the program log.
+					level := slog.LevelInfo
+					if errors.Is(err, ErrRestartRequired) {
+						level = slog.LevelWarn
+					}
+					e.logger.Log(ctx, level, "schedule_skipped", "source_id", id, "error", err)
 				}
 			}
 		}
@@ -633,7 +645,7 @@ func (e *Engine) Enqueue(ctx context.Context, sourceID, trigger string, request 
 		return nil, ErrStopped
 	default:
 	}
-	if e.cfg.View().RestartRequired {
+	if e.cfg.StorageChanged() {
 		return nil, ErrRestartRequired
 	}
 	c := e.cfg.Current()

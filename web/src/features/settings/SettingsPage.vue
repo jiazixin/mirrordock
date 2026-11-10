@@ -205,9 +205,11 @@ const tokenPlaceholder = computed(() =>
           <label
             >任务累计超时<input
               v-model="draft.settings.task_timeout"
-              placeholder="8h"
-            /><small>支持 30m、8h 等时间长度，默认 8h。</small></label
-          >
+              placeholder="8h" /><small>支持 30m、8h 等时间长度，默认 8h。</small
+            ><FieldIssue
+              :error="validationError"
+              field="settings.task_timeout"
+          /></label>
         </div>
       </article>
       <article class="panel setting-row">
@@ -227,9 +229,11 @@ const tokenPlaceholder = computed(() =>
               type="number"
               min="0"
               max="10"
-              step="1"
-            /><small>0–10 次，默认额外重试 3 次；0 关闭。修改对新任务生效。</small></label
-          >
+              step="1" /><small>0–10 次，默认额外重试 3 次；0 关闭。修改对新任务生效。</small
+            ><FieldIssue
+              :error="validationError"
+              field="settings.retry_count"
+          /></label>
         </div>
       </article>
       <article class="panel setting-row">
@@ -250,7 +254,7 @@ const tokenPlaceholder = computed(() =>
               max="16"
               step="1" /><FieldIssue
               :error="validationError"
-              field="settings.task_timeout"
+              field="settings.concurrency.rsync"
           /></label>
           <label
             >Reposync 并发数<input
@@ -268,9 +272,34 @@ const tokenPlaceholder = computed(() =>
               type="number"
               min="1"
               max="16"
-              step="1"
-            /><small>每种类型可填 1–16，默认 4。</small></label
-          >
+              step="1" /><small>每种类型可填 1–16，默认 4。</small
+            ><FieldIssue
+              :error="validationError"
+              field="settings.concurrency.github_release"
+          /></label>
+        </div>
+      </article>
+      <article class="panel setting-row">
+        <div class="setting-description">
+          <span class="setting-index">04 · 数据保留</span>
+          <h3>运行记录保留时间</h3>
+          <p>自动清理早于保留期的运行记录、任务日志和通知发送记录。</p>
+          <small>每个同步源的最近一次运行和最近一次成功始终保留。</small>
+          <small>启动时及此后每小时清理一次；已发布的镜像文件不受影响。</small>
+          <small>保留期短于 90 天时，运行分析的 90 天视图只包含保留期内的数据。</small>
+        </div>
+        <div class="setting-controls">
+          <label
+            >数据保留天数<input
+              v-model.number="draft.settings.retention_days"
+              type="number"
+              min="0"
+              max="3650"
+              step="1" /><small>0–3650 天，默认 90 天；0 表示不自动清理。</small
+            ><FieldIssue
+              :error="validationError"
+              field="settings.retention_days"
+          /></label>
         </div>
       </article>
     </div>
@@ -293,14 +322,18 @@ const tokenPlaceholder = computed(() =>
           <label
             >Rsync I/O 超时<input
               v-model="draft.settings.rsync.io_timeout"
-              placeholder="5m"
-            /><small>默认 5m。</small></label
+              placeholder="5m" /><small>默认 5m。</small
+            ><FieldIssue
+              :error="validationError"
+              field="settings.rsync.io_timeout" /></label
           ><label
             >Rsync 连接超时<input
               v-model="draft.settings.rsync.connect_timeout"
-              placeholder="30s"
-            /><small>默认 30s。</small></label
-          >
+              placeholder="30s" /><small>默认 30s。</small
+            ><FieldIssue
+              :error="validationError"
+              field="settings.rsync.connect_timeout"
+          /></label>
         </div>
       </article>
       <article class="panel setting-row">
@@ -316,9 +349,11 @@ const tokenPlaceholder = computed(() =>
               v-model.number="draft.settings.rsync.limit_mb"
               type="number"
               min="0"
-              step="any"
-            /><small>十进制 MB/s，可填小数；0 不限速。</small></label
-          >
+              step="any" /><small>十进制 MB/s，可填小数；0 不限速。</small
+            ><FieldIssue
+              :error="validationError"
+              field="settings.rsync.limit_mb"
+          /></label>
         </div>
       </article>
       <article class="panel setting-row">
@@ -337,9 +372,12 @@ const tokenPlaceholder = computed(() =>
               type="text"
               autocomplete="off"
               spellcheck="false"
-              placeholder="socks5://127.0.0.1:1080"
-            /><small>支持 http、https、socks5、socks5h，可带账号密码。</small></label
-          >
+              placeholder="socks5://127.0.0.1:1080" /><small
+              >支持 http、https、socks5、socks5h，可带账号密码。</small
+            ><FieldIssue
+              :error="validationError"
+              field="settings.rsync.proxy"
+          /></label>
         </div>
       </article>
     </div>
@@ -364,9 +402,11 @@ const tokenPlaceholder = computed(() =>
               v-model.number="draft.settings.github.release_count"
               type="number"
               min="1"
-              max="100"
-            /><small>1–100 个，默认 5 个。</small></label
-          >
+              max="100" /><small>1–100 个，默认 5 个。</small
+            ><FieldIssue
+              :error="validationError"
+              field="settings.github.release_count"
+          /></label>
           <div class="setting-option-grid">
             <OptionCard
               v-model="draft.settings.github.include_prereleases"
@@ -401,7 +441,7 @@ const tokenPlaceholder = computed(() =>
               :disabled="clearToken"
               :placeholder="tokenPlaceholder" /><FieldIssue
               :error="validationError"
-              field="settings.concurrency.github_release"
+              field="settings.github.token"
           /></label>
           <div class="setting-option-grid">
             <OptionCard
@@ -425,11 +465,12 @@ const tokenPlaceholder = computed(() =>
               type="text"
               autocomplete="off"
               spellcheck="false"
-              placeholder="http://127.0.0.1:8081"
-            /><small
+              placeholder="http://127.0.0.1:8081" /><small
               >显示当前代理地址，可直接修改；留空并保存即直连。保存后对下一次执行生效。</small
-            ></label
-          >
+            ><FieldIssue
+              :error="validationError"
+              field="settings.github.proxy"
+          /></label>
         </div>
       </article>
     </div>

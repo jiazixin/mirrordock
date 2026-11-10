@@ -111,9 +111,11 @@ go build -trimpath -o bin/mirrordock ./cmd/mirrordock
 - 配置与校验错误为英文，并以字段路径开头，例如 `port: must be between 1 and 65535`、`sources.0.dest: must be a clean relative directory`（源按列表下标定位）。管理 API 的错误响应为 `{"error": {"code", "message", "details"}}`：配置字段错误为 `invalid_argument`，并在 `details.fields` 中给出 `path` 与 `reason` 原因码；`precondition_failed` 表示配置已被他人修改（412，`If-Match` 不是当前 revision）；`config_malformed` 表示 YAML 格式无效。完整约定见 [接口约定](docs/API.md)。管理台按错误码显示中文提示（`web/src/app/config-errors.ts`），未登记的原因码显示中文通用提示。
 - 相对路径以配置文件所在目录为基准。数据库为 `<path>/data.sqlite`，任务日志为 `<path>/logs/<run-id>/<attempt>.log`。
 - 除 `CONFIG_FILE` 选择文件外，不支持用环境变量覆盖配置项。调度、管理台和公开目录使用程序启动时的时区，可在启动环境设置 `TZ=Asia/Shanghai`。
-- `listen`、`port`、`path`、`mirror_root`、`tls`、`auth`、`log` 修改后需重启；同步源、计划、通知等可在页面修改，保存即生效。
+- `listen`、`port`、`path`、`mirror_root`、`tls`、`auth`、`log` 修改后需重启；同步源、计划、通知等可在页面修改，保存即生效。重启前只有 `path` 或 `mirror_root` 的修改会暂停新的同步，其余字段不影响同步。
+- `settings.retention_days`（默认 90，0 为不清理）控制运行记录、任务日志和通知发送记录的保留天数，到期后每小时自动清理；每个源的最近一次运行与最近一次成功始终保留，镜像文件不受影响。
 - 管理员密码、GitHub Token 和通知凭据不会出现在读取 API 中。**例外**：按已确认的协议，GitHub / Rsync 的完整代理 URL 会在登录后的页面上明文回填，但其中的认证信息不进入运行快照、审计或日志。
-- 填写 `tls.cert` 与 `tls.key` 后在同一端口提供 HTTPS（支持 HTTP/2，但不走 sendfile）。
+- 填写 `tls.cert` 与 `tls.key` 后在同一端口提供 HTTPS（支持 HTTP/2，但不走 sendfile）；两项留空即为 HTTP。管理台在局域网 HTTP 与 HTTPS 下都可正常使用，区别只是会话 Cookie 仅在原生 HTTPS 下带 `Secure`；HTTP 下账号与会话明文传输，只宜用于可信内网。
+- 置于反向代理之后时须保留外部 `Host` 并对 `/api/events` 关闭缓冲；程序不信任 `X-Forwarded-*`，登录限流按代理 IP 合并计数，需在代理侧另行限流，详见 [部署参考](docs/DEPLOYMENT.md)。
 
 ## 部署
 
@@ -164,7 +166,7 @@ E2E 测试与真实 rsync 测试需要现代 rsync 和测试二进制，命令�
 - 版本号来自 Git tag，格式为 `v主版本.次版本.修订版本`（预发布如 `v1.2.0-rc.1`）。Go 构建时自动写入模块版本，非 tag 提交显示伪版本，有未提交修改时带 `+dirty`。
 - 查询版本：`mirrordock --version`，输出形如 `mirrordock v1.2.0 (revision=0123456789ab)`（伪版本已含提交号，不再附 revision；有未提交修改时附 `modified`）。`--version` 与 `--help`（英文）输出到 stdout，不读取配置，也不启动服务。
 - 退出码：0 成功或收到 SIGINT / SIGTERM 后正常关闭，2 参数错误，1 配置、启动、运行或关闭失败。参数错误以 `mirrordock: <错误>` 写入 stderr 并另起一行附 `Run 'mirrordock --help' for usage.`；配置与日志初始化失败为一行 `mirrordock: config: <错误>` 或 `mirrordock: log: <错误>`。日志就绪后的失败只写入程序日志，不再另写 stderr。
-- 程序日志记录 `service_starting`（含 `version`）、监听成功后的 `service_listening`（含 `listen`）、开始关闭时的 `service_stopping` 和正常退出前的 `service_stopped`；失败为 `service_failed` / `service_shutdown_failed`。第一次信号开始正常关闭（HTTP 排空最多 30 秒，超时则强制关闭连接并记为关闭失败），第二次信号立即终止进程。
+- 程序日志记录 `service_starting`（含 `version`）、监听成功后的 `service_listening`（含 `listen`）、开始关闭时的 `service_stopping` 和正常退出前的 `service_stopped`；失败为 `service_failed` / `service_shutdown_failed`。第一次信号开始正常关闭：30 秒内并行排空 HTTP 与停止同步任务，被打断的任务记为中断并在下次启动后续跑；仍有下载未结束时到期强制关闭连接并记为关闭失败（退出码 1），此时任务状态与数据库仍已正常落盘。第二次信号立即终止进程。
 - 源码包没有 `.git` 时，可显式注入与源码一致的版本：`go build -trimpath -ldflags='-X main.version=v1.0.0' -o bin/mirrordock ./cmd/mirrordock`。
 - 推送标准 tag 会触发 [Release 工作流](.github/workflows/release.yml)：先核对 `--version`，再由 GoReleaser 构建全部目标，并上传 tar.gz 与 `checksums.txt`。
 
@@ -185,7 +187,7 @@ E2E 测试与真实 rsync 测试需要现代 rsync 和测试二进制，命令�
 
 ```text
 cmd/mirrordock/           CLI 入口
-internal/{config,observability,database,sync,runs,mirrors,notifications,app}/
+internal/{config,observability,timefmt,database,syncer,run,mirror,notification,app}/
 web/                     唯一 npm/Vite 边界；Vue、E2E、embed.go
 configs/                 注释案例；本地实例忽略
 deploy/                  systemd 定义

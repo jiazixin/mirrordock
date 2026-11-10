@@ -1,5 +1,34 @@
 # 验收记录
 
+## 全仓缺陷审查的修复与数据保留期（2026-11-10）
+
+范围：修改 `internal/{app,config,database,mirror,notification,run,syncer}`、`web/src`（设置页、类型、错误文案）、`web/e2e`、`configs/config.example.yaml`、`AGENTS.md`、README（中英）与 `docs/`；新增 `internal/run/retention.go`、`internal/database/retention.go`、`internal/mirror/metadata.go` 及对应测试、`web/e2e/transport.spec.ts`。基线 `912e8c5`，开始时工作区干净。未创建子代理、未调用外部 OCR LLM、未推送或发布。
+
+- 关停时运行中的同步被记成失败：信号上下文原先直接传给运行引擎与通知服务，执行器在 `Shutdown` 标记中断之前就被取消；HTTP 排空又与引擎、通知的关停串行共用 30 秒期限，有下载未结束时后两步立即超时，数据库与实例锁也未正常关闭。现在 `Engine.Start` / 通知 `Start` 以 `context.WithoutCancel` 脱离信号上下文，只由各自的 `Shutdown` 停止；`App.Close` 并行排空 HTTP、停止引擎与通知，再关闭存储。HTTP 排空到期仍返回关闭失败（退出码 1）的既有约定保留，但任务状态与数据库此时已落盘。
+- 含符号链接或配置了 uid/gid 的 rsync 源每轮都新建发布代：克隆工作树时不保留符号链接 mtime 与属主，而指纹包含两者。`copyTree` 现在对文件、目录、符号链接保留属主（无权限时忽略），并以 `UtimesNanoAt(AT_SYMLINK_NOFOLLOW)` 保留链接时间。
+- 走代理的 rsync 在上游断开后要等 `io_timeout`：`rsync-connect` 在隧道关闭后仍阻塞读 stdin。现在下行复制结束即关闭连接并退出，上行转发协程不再等待（阻塞中的 stdin 读取无法可靠打断，进程退出即回收）。
+- “需要重启”状态下所有同步静默停止：现在只有 `path` 或 `mirror_root` 的未生效修改才拒绝入队（`restart_required`，文案同步改为“数据目录或镜像根目录”），定时触发被拒时以 warn 级 `schedule_skipped` 记录；`listen`、`port`、`tls`、`auth`、`log` 的修改不再影响同步。
+- 数据库结构版本：按“项目未上线、不保留兼容代码、以最新版本为准”，未增加迁移；仅统一文档（当前版本 2，版本不一致拒绝打开，删除 `data.sqlite*` 后重新同步及其后果）。
+- 数据保留期：新增 `settings.retention_days`（默认 90，范围 0–3650，0 不清理），配置文件与设置页“数据保留”卡片均可修改。启动时及此后每小时清理创建与结束都早于保留期的终态运行、其 `run_results` 行与日志目录；每个源的最近一次运行与最近一次成功始终保留，仍在执行或仍有保留工作目录的运行跳过。通知发送记录按自身 `updated_at` 清理（`waiting` / `sending` 除外），清理失败只记 `notification_retention_failed`，不阻断当轮投递。未改表结构，`schemaVersion` 仍为 2。
+- HTTP / HTTPS：未改认证代码，新增服务端与真实浏览器用例固定行为——局域网 HTTP（非安全上下文，按 `Origin` 与 `Host` 校验）与原生 HTTPS（Cookie 带 `Secure`）在真实浏览器中完成登录、事件流、保存设置、立即同步；代理终止 TLS 的接入由服务端用例覆盖登录与同源写请求；三种接入下跨站写请求均为 403。README 与部署参考补充反向代理边界（保留 `Host`、`/api/events` 关闭缓冲、限流按代理 IP 合并）。
+- 顺带修正：设置页多个 `FieldIssue` 指向了错误的字段路径（如任务超时的错误显示在 Rsync 并发数下），已逐项对应；README 目录树、DESIGN 中“修改请求需要自定义头”的过期描述已按代码更正。
+
+| 检查 | 结果 |
+| --- | --- |
+| `gofmt` / `goimports@v0.50.0 -local mirrordock` / `go mod tidy -diff` | 通过 |
+| `go vet ./...`、`go vet -tags integration,scale ./...`、8 个发布目标交叉 `go vet`、staticcheck | 通过 |
+| `CGO_ENABLED=1 go test -race -count=1 ./...`（`MIRRORDOCK_TEST_RSYNC=/opt/homebrew/bin/rsync` 3.5.2） | 全部通过；通知清理改为不阻断投递后重跑 `internal/{notification,run,database}` 通过 |
+| `go test -tags integration ./cmd/mirrordock` | 通过 |
+| 回归测试（修复前失败、修复后通过） | `TestCloseStopsWorkersWhileDownloadsDrain`、`TestStartContextCancellationLeavesRunsToShutdown`、`TestRealRsyncUnchangedPublication`（加符号链接与属组后三轮同一代）、`TestCloneKeepsOwnerAndLinkTime`、`TestConnectCommandExitsWhenTunnelCloses`、`TestPendingRestartBlocksRunsOnlyForStorageChanges` |
+| 保留期测试 | `TestRetentionDaysDefaultAndRange`、`TestExpiredRunsKeepLatestStateOfEverySource`、`TestExpiredNotificationsSpareUnfinishedDeliveries`、`TestRetentionRemovesExpiredRunsAndLogs`、`TestScanAgesOutFinishedDeliveryRecords` 通过 |
+| 关停实测（scratchpad 临时配置、127.0.0.1 隔离端口、本地可控 rsync 上游，限速同步 + 停滞下载时发 SIGTERM） | 修复前任务落库 `failed` / `local_error` 并写入 `run_results`；修复后为 `interrupted` / `service_interrupted`，`run_results` 0 行，30 秒后因下载未结束以退出码 1 结束（符合文档约定） |
+| `npm --prefix web run format:check` / `lint` / `typecheck` / `test` / `build` | 通过（单测 11 文件 30 项） |
+| Playwright E2E（`MIRRORDOCK_TEST_BINARY` 指向按当前工作区构建的 scratchpad 二进制，真实 rsync） | 全部 24 项通过。首轮为 23/24：`mirrordock.spec.ts` 新增的保留天数步骤留下的 5 秒错误提示条，使后面按单个 `alert` 匹配的环境检查断言命中两个元素；属用例问题，已在该步骤末尾等待提示条消失，重建二进制后整套重跑通过 |
+| `transport.spec.ts` | Chromium 以 `--host-resolver-rules` 把局域网主机名映射到本机：HTTP 下 `isSecureContext` 为 false、HTTPS（openssl 临时自签证书）为 true；两者均完成登录、`/api/events` 200、保存设置、立即同步入队、打开公开目录，Cookie 的 `Secure` 仅在 HTTPS 下出现 |
+| govulncheck | 代码未调用任何漏洞符号；依赖模块 `golang.org/x/crypto` 有 1 条 openpgp 公告（GO-2026-5932），已是最新带标签版本 v0.58.0 且未调用该包，未升级 |
+| open-code-review | 托管模式，未调用外部 LLM；`ocr delegate preview/rule`（v1.13.6，workspace）在 33 个改动文件中选出 15 个可审文件（Go、TS/Vue、YAML 规则组），由当前会话审查，覆盖率 15/15。排除的 Markdown（unsupported_ext）与 `*_test.go`、`web/e2e/*`（default_path）已人工核对。发现 1 项并已修复：通知记录清理失败会中止整轮 `Scan`，改为记日志后继续投递 |
+| 未执行 | Linux / EL 实机（XFS reflink 下的属主与链接时间、systemd 关停）、Docker 构建、`dnf reposync`、真实 GitHub 同步、GoReleaser 快照、真实代理下的 rsync 全流程（`rsync-connect` 仅以 socketpair 与本地目标验证）、真实反向代理（nginx 等）与真实局域网设备访问；以上验证均在 macOS 本机完成。保留期清理未做大数据量性能测试 |
+
 ## CI race 测试中登录请求超时（2026-11-10）
 
 范围：修改 `internal/app/auth.go`、`internal/app/helpers_test.go`。基线 `cc60198`，开始时工作区干净。

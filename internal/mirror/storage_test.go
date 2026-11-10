@@ -240,8 +240,20 @@ func TestRealRsyncUnchangedPublication(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(upstream, "package.rpm"), []byte("fixture"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	// rsync restores the upstream time of a symbolic link and the mapped group
+	// of every entry; a clone that loses either is published again each run.
+	link := filepath.Join(upstream, "latest.rpm")
+	if err := os.Symlink("package.rpm", link); err != nil {
+		t.Fatal(err)
+	}
+	if err := setLinkTime(link, time.Date(2020, 1, 2, 3, 4, 5, 0, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
+	if group, ok := otherGroup(t, upstream); ok {
+		s.Rsync.GID = &group
+	}
 	var old Publication
-	for id := range int64(2) {
+	for id := range int64(3) {
 		work, err := m.Prepare(t.Context(), s, id+1)
 		if err != nil {
 			t.Fatal(err)
@@ -261,9 +273,87 @@ func TestRealRsyncUnchangedPublication(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if id == 1 && next.Current.ID != old.Current.ID {
-			t.Fatal("unchanged rsync created a new generation")
+		if id > 0 && next.Current.ID != old.Current.ID {
+			t.Fatalf("run %d: unchanged rsync created a new generation", id+1)
 		}
 		old = next
+	}
+}
+
+// otherGroup returns a supplementary group of this process that differs from
+// the group new entries of dir receive, so changing to it is observable.
+func otherGroup(t *testing.T, dir string) (int, bool) {
+	t.Helper()
+	probe := filepath.Join(dir, ".mirrordock-group-probe")
+	if err := os.WriteFile(probe, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Lstat(probe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(probe); err != nil {
+		t.Fatal(err)
+	}
+	groups, err := os.Getgroups()
+	if err != nil {
+		t.Fatal(err)
+	}
+	inherited := int(info.Sys().(*syscall.Stat_t).Gid)
+	for _, group := range groups {
+		if group != inherited {
+			return group, true
+		}
+	}
+	return 0, false
+}
+
+func TestCloneKeepsOwnerAndLinkTime(t *testing.T) {
+	t.Parallel()
+	m, s := testManager(t)
+	work, err := m.Prepare(t.Context(), s, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := []string{".", "packages", "packages/package.rpm", "latest.rpm"}
+	if err := os.Mkdir(filepath.Join(work, "packages"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(work, "packages", "package.rpm"), []byte("fixture"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("packages/package.rpm", filepath.Join(work, "latest.rpm")); err != nil {
+		t.Fatal(err)
+	}
+	linked := time.Date(2020, 1, 2, 3, 4, 5, 0, time.UTC)
+	if err := setLinkTime(filepath.Join(work, "latest.rpm"), linked); err != nil {
+		t.Fatal(err)
+	}
+	group, regroup := otherGroup(t, work)
+	if regroup {
+		for _, name := range names {
+			if err := os.Lchown(filepath.Join(work, name), -1, group); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if _, err := m.Publish(t.Context(), s, 1); err != nil {
+		t.Fatal(err)
+	}
+	work, err = m.Prepare(t.Context(), s, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range names {
+		info, err := os.Lstat(filepath.Join(work, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := int(info.Sys().(*syscall.Stat_t).Gid); regroup && got != group {
+			t.Errorf("%s: got group %d, want %d", name, got, group)
+		}
+		if name == "latest.rpm" && !info.ModTime().Equal(linked) {
+			t.Errorf("%s: got link time %v, want %v", name, info.ModTime(), linked)
+		}
 	}
 }

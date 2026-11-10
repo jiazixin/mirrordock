@@ -568,6 +568,33 @@ func TestValidationErrorsNameFields(t *testing.T) {
 	}
 }
 
+func TestRetentionDaysDefaultAndRange(t *testing.T) {
+	t.Parallel()
+	file := filepath.Join(t.TempDir(), "config.yaml")
+	base := "listen: 127.0.0.1\npath: ./data\nmirror_root: ./mirror\nauth:\n  username: operator\n  password: test-secret\nsources: []\n"
+	for _, tc := range []struct {
+		section string
+		want    RetentionDays
+	}{
+		{"", 90},
+		{"settings: {}\n", 90},
+		{"settings:\n  retention_days: 0\n", 0},
+		{"settings:\n  retention_days: 3650\n", MaxRetentionDays},
+	} {
+		c, err := Parse([]byte(base+tc.section), file)
+		if err != nil || c.Settings.RetentionDays != tc.want {
+			t.Fatalf("%q: got %d, %v, want %d", tc.section, c.Settings.RetentionDays, err, tc.want)
+		}
+	}
+	for _, value := range []string{"-1", "3651", "1.5", "forever"} {
+		_, err := Parse([]byte(base+"settings:\n  retention_days: "+value+"\n"), file)
+		field, ok := errors.AsType[*FieldError](err)
+		if !ok || field.Path != "settings.retention_days" || field.Code != "retention_days_range" {
+			t.Fatalf("%s: got %v, want a settings.retention_days range error", value, err)
+		}
+	}
+}
+
 func TestDecodeErrorsAreEnglish(t *testing.T) {
 	t.Parallel()
 	file := filepath.Join(t.TempDir(), "config.yaml")
