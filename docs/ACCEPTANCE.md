@@ -1,5 +1,26 @@
 # 验收记录
 
+## Go 1.27.4 升级与前后端依赖审计修复（2026-11-21）
+
+范围：Go 工具链 `1.27.3` → `1.27.4`（`go.mod`、`Dockerfile`、`AGENTS.md`、中英文 README、`docs/IMPLEMENTATION.md`、`configs/config.example.yaml`；CI 与 Release 工作流已通过 `go-version-file: go.mod` 自动读取）；后端与前端依赖漏洞修复（`go.mod`、`go.sum`、`web/package.json`、`web/package-lock.json`）。基线 `9415ebf`，开始时工作区干净。未创建子代理、未调用外部 OCR LLM、未推送或发布。
+
+- Go 工具链与基础镜像：`go.mod` 更新为 `go 1.27.4`；`Dockerfile` 的构建阶段镜像更新为 `golang:1.27.4-bookworm@sha256:4fa7c968ba93f1635670522dbb01a2c78150443e1385746924566079f36570ea`（经 Docker Hub Registry API 解析并核对的多架构 OCI 镜像索引，含 `linux/amd64`、`linux/arm64v8`、`linux/ppc64le` 等）。`Go代码规范.md` 中的示例版本号按规范不私自修改。
+- 后端依赖审计：`govulncheck@v1.9.0 -show verbose ./...` 此前在模块级报告 1 条 `GO-2026-5932`（`golang.org/x/crypto@v0.58.0` 的 `openpgp` 包，代码未调用）。现已发布 `v0.59.0`，将 `golang.org/x/crypto` 升级至 `v0.59.0`（同步升级 `golang.org/x/sys` `v0.49.0` → `v0.50.0`），升级后符号级、包级与模块级漏洞均为 0。
+- 前端依赖审计：`npm --prefix web audit --omit=dev` 生产依赖原本为 0 漏洞；全量 `npm --prefix web audit` 报告 13 个中危开发依赖漏洞，来源为 `minimatch`（GHSA-g3hv-75wg-m249，经 `eslint`、`typescript-eslint`、`@eslint/config-array`、`editorconfig` 引入）和 `glob`（GHSA-3g3m-2fjr-6pw4，经 `@vue/test-utils` → `js-beautify` 引入）。将 `eslint` 升至 `^10.15.0`（10.15.0）、`typescript-eslint` 升至 `^8.73.0`（8.73.0），并在 `web/package.json` 中为 `js-beautify` 配置局部 `overrides`（`editorconfig: ^4.0.1`、`glob: ^14.0.6`，避免 `npm audit fix` 回退 `@vue/test-utils`），重锁 `web/package-lock.json` 后全量与生产 `npm audit` 均为 0 漏洞。
+
+| 检查 | 结果 |
+| --- | --- |
+| `go mod verify` / `go mod tidy -diff` / `gofmt` / `goimports@v0.50.0 -local mirrordock` | 通过 |
+| `go vet`（全部 8 个发布目标交叉 vet + `go vet -tags integration,scale ./...`） / `staticcheck@v0.8.2 ./...` | 通过 |
+| `govulncheck@v1.9.0 -show verbose ./...` | 通过；扫描 18 个模块与 `go1.27.4` 标准库，符号/包/模块级漏洞均为 0 |
+| `CGO_ENABLED=1 go test -race -count=1 -timeout=120s ./...`（`MIRRORDOCK_TEST_RSYNC=/opt/homebrew/bin/rsync` 3.5.2） | 全部 10 个测试包通过（`internal/run` 8.939s）；首次 10 包并行 `-race` 运行曾因磁盘 fsync 竞争触发 `internal/run/runs_test.go` 400ms 预算时序抖动（`TestFailoverSharesTimeoutAndLocalErrorsDoNotSwitch/false` 超时、`TestPausePreservesBudgetAndReservesDestination` 阻塞于 `<-started`），单独跑 `internal/run`（8.023s）及随后整套重跑均通过 |
+| `go test -tags integration -count=1 ./cmd/mirrordock` | 通过（2.458s） |
+| `npm --prefix web ci --ignore-scripts` / `audit` / `audit --omit=dev` / `audit signatures` | 通过；全量与生产均为 0 漏洞，411 个包注册表签名校验通过（121 个含 attestation） |
+| `npm --prefix web run format:check` / `lint` / `typecheck` / `test` / `build` | 通过（Vitest 11 文件 30 项全部通过） |
+| Playwright E2E（`MIRRORDOCK_TEST_BINARY` 指向按 Go 1.27.4 与当前工作区构建的临时二进制，真实 rsync 3.5.2） | 全部 24 项通过（2.5 分钟） |
+| open-code-review | 托管模式，未调用外部 LLM；`ocr delegate preview/rule --format json`（v1.13.13，workspace）在 10 个改动文件中选出 3 个可审文件（`Dockerfile`、`configs/config.example.yaml`、`web/package.json`，分别命中 default、YAML、package.json 规则组），由当前会话逐一审查，覆盖率 3/3（100%），无发现。排除的 `AGENTS.md`、中英文 README、`docs/IMPLEMENTATION.md`、`go.mod`、`go.sum`（unsupported_ext）及 `web/package-lock.json`（default_path）与本记录均已人工核对 |
+| 未执行 | Docker 镜像构建（本机无 `docker buildx`，仅通过 Docker Hub Registry API 校验多架构索引摘要）；`goreleaser check` 与快照构建（本机未安装）；`actionlint`（本机未安装，且未修改工作流文件）；远端 CI 运行（未推送）；Linux / EL 实机验收 |
+
 ## 全仓缺陷审查的修复与数据保留期（2026-11-10）
 
 范围：修改 `internal/{app,config,database,mirror,notification,run,syncer}`、`web/src`（设置页、类型、错误文案）、`web/e2e`、`configs/config.example.yaml`、`AGENTS.md`、README（中英）与 `docs/`；新增 `internal/run/retention.go`、`internal/database/retention.go`、`internal/mirror/metadata.go` 及对应测试、`web/e2e/transport.spec.ts`。基线 `912e8c5`，开始时工作区干净。未创建子代理、未调用外部 OCR LLM、未推送或发布。
